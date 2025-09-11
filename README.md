@@ -21,6 +21,30 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 > Project currently in development. Kick-off: April 2025  
 > Alpha prototype planned for deployment at SBMAL in October 2025.
 
+***
+
+## Setup
+
+This repository uses **Git submodules** for the `frontend` and `backend` code.  
+When cloning, make sure to fetch submodules as well:
+
+```bash
+# Clone with submodules
+git clone --recurse-submodules git@github.com:UCSB-AMPLab/digitization-toolkit.git
+```
+
+If you already cloned without `--recurse-submodules`, you can initialize and update submodules manually:
+
+```bash
+git submodule update --init --recursive
+```
+
+To pull the latest changes for submodules after updates:
+
+```bash
+git submodule update --remote --merge
+```
+
 ## License
 
 MIT
