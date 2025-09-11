@@ -1,0 +1,6 @@
+[submodule "frontend"]
+	path = frontend
+	url = git@github.com:UCSB-AMPLab/digitization-toolkit-frontend.git
+[submodule "backend"]
+	path = backend
+	url = git@github.com:UCSB-AMPLab/digitization-toolkit-backend.git
