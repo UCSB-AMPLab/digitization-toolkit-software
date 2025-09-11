@@ -11,15 +11,15 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 
 ## Tech Stack
 
-- **Hardware**: Raspberry Pi CM4 + CM4IO, 2x 64MP ArduCam autofocus cameras
+- **Hardware**: Raspberry Pi CM4 + CM4IO, Raspberry Pi 5 (dual camera embedded), 2x 64MP ArduCam autofocus cameras, 2 x Cannon EOS Rebel T7 (GPhoto compatible cameras)
 - **Backend**: Python, FastAPI
 - **Frontend**: Svelte
 - **Database**: SQLite
 
 ## Status
 
-> Project currently in development. Kick-off: April 2025  
-> Alpha prototype planned for deployment at SBMAL in October 2025.
+> Project currently in development. Kick-off: September 2025
+> Alpha prototype planned for deployment at SBMAL in June 2025.
 
 ***
 
@@ -44,6 +44,8 @@ To pull the latest changes for submodules after updates:
 ```bash
 git submodule update --remote --merge
 ```
+
+***
 
 ## License
 
