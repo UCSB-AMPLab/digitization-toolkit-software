@@ -47,6 +47,10 @@ git submodule update --remote --merge
 
 ***
 
+## Development Documentation
+
+See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit/wiki) for detailed developer guides and API references.
+
 ## License
 
 MIT
