@@ -58,5 +58,89 @@
       "Hardware Setup Guides",
       "Device Setup: Raspberry Pi CM4 with Cameras"
     ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html",
+    "href": "developers/device_setup_pi5_imx519.html",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "",
+    "text": "This guide explains how to connect and configure the Arducam IMX519 camera on the Raspberry Pi 5, and how to test still captures using shell scripts.",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html#tested-hardware",
+    "href": "developers/device_setup_pi5_imx519.html#tested-hardware",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "Tested Hardware",
+    "text": "Tested Hardware\n\nRaspberry Pi 5 – 8GB RAM\nArducam IMX519 Camera Module, SKU: B0371 x 2\nCSI 22-to-22-pin Ribbon Cable (15 cm or 20 cm recommended) x 2\nRaspberry Pi Official Power Supply (5V/3A or higher, 27 W PSU recommended)\nmicroSD Card 16 GB with Raspberry Pi OS Lite (64-bit) installed\n\nInitial setup steps for Raspberry Pi OS can be found in the Raspberry Pi Documentation.",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html#hardware-connection",
+    "href": "developers/device_setup_pi5_imx519.html#hardware-connection",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "1. Hardware Connection",
+    "text": "1. Hardware Connection\nFor camera connection we followed the Arducam Quick Start Guide for Hardware Setup.\n\nCamera Connection\n\n\n\nCamera Connection\n\n\nThe actual camera connection looks like this:\n\n\n\nCamera Connection Actual\n\n\nMake sure the ribbon cable is properly seated in the connector with the blue stiffener facing outward (toward the Ethernet port) and the metal contacts facing inward toward the board.\n\n\nDual Camera Connection on Raspberry Pi 5\nThe Raspberry Pi 5 includes two CSI connectors labeled CAM0 and CAM1. Connect one camera to each port using 22-pin ribbons.\n\nBoth ports require the cable’s metal contacts to face the Ethernet port.\n\n\n\n\nDual Camera Connection\n\n\n\n\nFinal Assembly\nAfter connecting the cameras, ensure everything is securely in place. Attach any necessary heatsinks or cooling solutions, and insert the microSD card with Raspberry Pi OS installed. Finally, connect the power supply to boot up the Raspberry Pi 5. Attach peripherals (keyboard, mouse, monitor) or set up SSH for headless operation.\n\n\n\nFinal Assembly",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html#software-setup",
+    "href": "developers/device_setup_pi5_imx519.html#software-setup",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "2. Software Setup",
+    "text": "2. Software Setup\nFor this step, we followed the Arducam IMX519 Software Setup Guide, specifically the instructions for Raspberry Pi Bullseye OS 6.1.21 and Later / Bookworm OS.\n\nNote on software stacks: Raspberry Pi’s official rpicam-apps are generally preferred for Pi 5, but in our tests they did not successfully detect the IMX519. The method below, using Arducam’s packages, worked reliably. Other setups may succeed with rpicam-apps, but this guide documents the tested path.\n\nStep 1: Download the bash script\nwget -O install_pivariety_pkgs.sh https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver/releases/download/install_script/install_pivariety_pkgs.sh\n\nchmod +x install_pivariety_pkgs.sh\nStep 2: Install libcamera\n./install_pivariety_pkgs.sh -p libcamera_dev\nStep 3: Install libcamera-apps\n./install_pivariety_pkgs.sh -p libcamera_apps\nStep 4: Modify the boot configuration\nsudo nano /boot/firmware/config.txt\nAdd or modify the following:\n# Disable auto-detect (doesn’t catch third-party sensors reliably)\ncamera_auto_detect=0\n\n[all]\ndtoverlay=imx519,cam0\ndtoverlay=imx519\n\nThe first line (imx519,cam0) explicitly enables CAM0. The second (imx519) allows the kernel to probe CAM1 automatically. Both are needed for dual-camera setups.\n\nOptional: enable debug logging:\ndtdebug=1\nSave and reboot:\nsudo reboot",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html#verify-camera-detection",
+    "href": "developers/device_setup_pi5_imx519.html#verify-camera-detection",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "3. Verify Camera Detection",
+    "text": "3. Verify Camera Detection\nAfter rebooting:\nrpicam-hello --list-cameras\nExpected output (dual IMX519s):\nAvailable cameras\n-----------------\n0 : imx519 [4656x3496 …] (/base/axi/pcie@…/i2c@88000/imx519@1a)\n1 : imx519 [4656x3496 …] (/base/axi/pcie@…/i2c@80000/imx519@1a)\nIf you want to confirm the media graph:\nv4l2-ctl --list-devices\nmedia-ctl -p",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html#test-cameras",
+    "href": "developers/device_setup_pi5_imx519.html#test-cameras",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "4. Test Cameras",
+    "text": "4. Test Cameras\nPreview from each camera\nrpicam-hello --camera 0 -t 5000\nrpicam-hello --camera 1 -t 5000\nCapture a still image\nrpicam-jpeg --camera 0 -o cam0.jpg\nrpicam-jpeg --camera 1 -o cam1.jpg\nRecord short video\nrpicam-vid --camera 0 -t 10000 -o cam0.h264\nrpicam-vid --camera 1 -t 10000 -o cam1.h264",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_pi5_imx519.html#troubleshooting",
+    "href": "developers/device_setup_pi5_imx519.html#troubleshooting",
+    "title": "Raspberry Pi 5 IMX519 Camera Setup",
+    "section": "5. Troubleshooting",
+    "text": "5. Troubleshooting\n\nError -5: failed to read chip id → Sensor not responding on I²C\n\nReseat ribbon, check orientation.\nEnsure latch is fully closed.\nTry swapping CAM0 ↔︎ CAM1.\n\nOnly one camera detected → Confirm both dtoverlay lines exist. Swap modules/cables to isolate the fault.\nNo /dev/video0 → Driver didn’t bind sensor. Check logs:\ndmesg | grep imx\nCheck power health →\nvcgencmd get_throttled\n0x0 = healthy. Non-zero means undervoltage; use official PSU.\nEnable debug logs (if dtdebug=1 is set):\ndmesg | grep -i imx\nsudo vcdbg log msg",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+    ]
   }
 ]

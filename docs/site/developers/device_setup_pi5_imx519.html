@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>device_setup_pi5_imx519 – Digitization Toolkit Documentation</title>
+<title>Raspberry Pi 5 IMX519 Camera Setup – Digitization Toolkit Documentation</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -19,6 +19,40 @@ ul.task-list li input[type="checkbox"] {
   width: 0.8em;
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { display: inline-block; text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
 }
 </style>
 
@@ -155,17 +189,188 @@ ul.task-list li input[type="checkbox"] {
 </nav>
 <div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
 <!-- margin-sidebar -->
-    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar zindex-bottom">
-        
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#tested-hardware" id="toc-tested-hardware" class="nav-link active" data-scroll-target="#tested-hardware">Tested Hardware</a></li>
+  <li><a href="#hardware-connection" id="toc-hardware-connection" class="nav-link" data-scroll-target="#hardware-connection">1. Hardware Connection</a>
+  <ul class="collapse">
+  <li><a href="#camera-connection" id="toc-camera-connection" class="nav-link" data-scroll-target="#camera-connection">Camera Connection</a></li>
+  <li><a href="#dual-camera-connection-on-raspberry-pi-5" id="toc-dual-camera-connection-on-raspberry-pi-5" class="nav-link" data-scroll-target="#dual-camera-connection-on-raspberry-pi-5">Dual Camera Connection on Raspberry Pi 5</a></li>
+  <li><a href="#final-assembly" id="toc-final-assembly" class="nav-link" data-scroll-target="#final-assembly">Final Assembly</a></li>
+  </ul></li>
+  <li><a href="#software-setup" id="toc-software-setup" class="nav-link" data-scroll-target="#software-setup">2. Software Setup</a></li>
+  <li><a href="#verify-camera-detection" id="toc-verify-camera-detection" class="nav-link" data-scroll-target="#verify-camera-detection">3. Verify Camera Detection</a></li>
+  <li><a href="#test-cameras" id="toc-test-cameras" class="nav-link" data-scroll-target="#test-cameras">4. Test Cameras</a></li>
+  <li><a href="#troubleshooting" id="toc-troubleshooting" class="nav-link" data-scroll-target="#troubleshooting">5. Troubleshooting</a></li>
+  </ul>
+</nav>
     </div>
 <!-- main -->
-<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../developers/device_setup.html">Developer Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_pi5_imx519.html">Device Setup: Raspberry Pi 5 with IMX519 Camera</a></li></ol></nav></header>
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../developers/device_setup.html">Developer Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_pi5_imx519.html">Device Setup: Raspberry Pi 5 with IMX519 Camera</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Raspberry Pi 5 IMX519 Camera Setup</h1>
+</div>
 
 
 
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
 
 
+</header>
 
+
+<p>This guide explains how to connect and configure the <strong>Arducam IMX519</strong> camera on the <strong>Raspberry Pi 5</strong>, and how to test still captures using shell scripts.</p>
+<hr>
+<section id="tested-hardware" class="level2">
+<h2 class="anchored" data-anchor-id="tested-hardware">Tested Hardware</h2>
+<ul>
+<li>Raspberry Pi 5 – 8GB RAM</li>
+<li>Arducam IMX519 Camera Module, SKU: B0371 x 2</li>
+<li>CSI <strong>22-to-22-pin Ribbon Cable</strong> (15 cm or 20 cm recommended) x 2</li>
+<li>Raspberry Pi Official Power Supply (5V/3A or higher, 27 W PSU recommended)</li>
+<li>microSD Card 16 GB with Raspberry Pi OS Lite (64-bit) installed</li>
+</ul>
+<p>Initial setup steps for Raspberry Pi OS can be found in the <a href="https://www.raspberrypi.com/documentation/computers/getting-started.html">Raspberry Pi Documentation</a>.</p>
+<hr>
+</section>
+<section id="hardware-connection" class="level2">
+<h2 class="anchored" data-anchor-id="hardware-connection">1. Hardware Connection</h2>
+<p>For camera connection we followed the <a href="https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/Quick-Start-Guide/#step-3-connect-to-raspberry-pi">Arducam Quick Start Guide for Hardware Setup</a>.</p>
+<section id="camera-connection" class="level3">
+<h3 class="anchored" data-anchor-id="camera-connection">Camera Connection</h3>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="https://docs.arducam.com/Raspberry-Pi-Camera/Low-Light/picture/arducam_wiki_rpi_imx708_hardware_picture_1.png" class="img-fluid figure-img"></p>
+<figcaption>Camera Connection</figcaption>
+</figure>
+</div>
+<p>The actual camera connection looks like this:</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="../imgs/imx519_ribbon_connection.JPG" class="img-fluid figure-img"></p>
+<figcaption>Camera Connection Actual</figcaption>
+</figure>
+</div>
+<p>Make sure the ribbon cable is properly seated in the connector with the <strong>blue stiffener facing outward</strong> (toward the Ethernet port) and the metal contacts facing inward toward the board.</p>
+</section>
+<section id="dual-camera-connection-on-raspberry-pi-5" class="level3">
+<h3 class="anchored" data-anchor-id="dual-camera-connection-on-raspberry-pi-5">Dual Camera Connection on Raspberry Pi 5</h3>
+<p>The Raspberry Pi 5 includes two CSI connectors labeled <strong>CAM0</strong> and <strong>CAM1</strong>. Connect one camera to each port using 22-pin ribbons.</p>
+<blockquote class="blockquote">
+<p>Both ports require the cable’s metal contacts to face the Ethernet port.</p>
+</blockquote>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="../imgs/rpi5_camera_ribbon_connection.JPG" class="img-fluid figure-img"></p>
+<figcaption>Dual Camera Connection</figcaption>
+</figure>
+</div>
+</section>
+<section id="final-assembly" class="level3">
+<h3 class="anchored" data-anchor-id="final-assembly">Final Assembly</h3>
+<p>After connecting the cameras, ensure everything is securely in place. Attach any necessary heatsinks or cooling solutions, and insert the microSD card with Raspberry Pi OS installed. Finally, connect the power supply to boot up the Raspberry Pi 5. Attach peripherals (keyboard, mouse, monitor) or set up SSH for headless operation.</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><img src="../imgs/rpi5_imx519_B0371_setup.JPG" class="img-fluid figure-img"></p>
+<figcaption>Final Assembly</figcaption>
+</figure>
+</div>
+<hr>
+</section>
+</section>
+<section id="software-setup" class="level2">
+<h2 class="anchored" data-anchor-id="software-setup">2. Software Setup</h2>
+<p>For this step, we followed the <a href="https://docs.arducam.com/Raspberry-Pi-Camera/Native-camera/16MP-IMX519/">Arducam IMX519 Software Setup Guide</a>, specifically the instructions for Raspberry Pi Bullseye OS 6.1.21 and Later / Bookworm OS.</p>
+<blockquote class="blockquote">
+<p><strong>Note on software stacks</strong>: Raspberry Pi’s official <code>rpicam-apps</code> are generally preferred for Pi 5, but in our tests they did <strong>not</strong> successfully detect the IMX519. The method below, using Arducam’s packages, worked reliably. Other setups may succeed with <code>rpicam-apps</code>, but this guide documents the tested path.</p>
+</blockquote>
+<p><strong>Step 1: Download the bash script</strong></p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">wget</span> <span class="at">-O</span> install_pivariety_pkgs.sh https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver/releases/download/install_script/install_pivariety_pkgs.sh</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> +x install_pivariety_pkgs.sh</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>Step 2: Install <code>libcamera</code></strong></p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./install_pivariety_pkgs.sh</span> <span class="at">-p</span> libcamera_dev</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>Step 3: Install libcamera-apps</strong></p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">./install_pivariety_pkgs.sh</span> <span class="at">-p</span> libcamera_apps</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>Step 4: Modify the boot configuration</strong></p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> nano /boot/firmware/config.txt</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Add or modify the following:</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Disable auto-detect (doesn’t catch third-party sensors reliably)</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="dt">camera_auto_detect</span><span class="ot">=</span><span class="dv">0</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a><span class="kw">[all]</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a><span class="dt">dtoverlay</span><span class="ot">=</span><span class="st">imx519,cam0</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a><span class="dt">dtoverlay</span><span class="ot">=</span><span class="st">imx519</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<blockquote class="blockquote">
+<p>The first line (<code>imx519,cam0</code>) explicitly enables CAM0. The second (<code>imx519</code>) allows the kernel to probe CAM1 automatically. Both are needed for dual-camera setups.</p>
+</blockquote>
+<p>Optional: enable debug logging:</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">dtdebug</span><span class="ot">=</span><span class="dv">1</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Save and reboot:</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> reboot</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+<section id="verify-camera-detection" class="level2">
+<h2 class="anchored" data-anchor-id="verify-camera-detection">3. Verify Camera Detection</h2>
+<p>After rebooting:</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--list-cameras</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p>Expected output (dual IMX519s):</p>
+<pre class="less"><code>Available cameras
+-----------------
+0 : imx519 [4656x3496 …] (/base/axi/pcie@…/i2c@88000/imx519@1a)
+1 : imx519 [4656x3496 …] (/base/axi/pcie@…/i2c@80000/imx519@1a)</code></pre>
+<p>If you want to confirm the media graph:</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">v4l2-ctl</span> <span class="at">--list-devices</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="ex">media-ctl</span> <span class="at">-p</span></span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+<section id="test-cameras" class="level2">
+<h2 class="anchored" data-anchor-id="test-cameras">4. Test Cameras</h2>
+<p><strong>Preview from each camera</strong></p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 0 <span class="at">-t</span> 5000</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 1 <span class="at">-t</span> 5000</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>Capture a still image</strong></p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-jpeg</span> <span class="at">--camera</span> 0 <span class="at">-o</span> cam0.jpg</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-jpeg</span> <span class="at">--camera</span> 1 <span class="at">-o</span> cam1.jpg</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><strong>Record short video</strong></p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-vid</span> <span class="at">--camera</span> 0 <span class="at">-t</span> 10000 <span class="at">-o</span> cam0.h264</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-vid</span> <span class="at">--camera</span> 1 <span class="at">-t</span> 10000 <span class="at">-o</span> cam1.h264</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<hr>
+</section>
+<section id="troubleshooting" class="level2">
+<h2 class="anchored" data-anchor-id="troubleshooting">5. Troubleshooting</h2>
+<ul>
+<li><p><strong>Error -5: failed to read chip id</strong> → Sensor not responding on I²C</p>
+<ul>
+<li>Reseat ribbon, check orientation.</li>
+<li>Ensure latch is fully closed.</li>
+<li>Try swapping CAM0 ↔︎ CAM1.</li>
+</ul></li>
+<li><p><strong>Only one camera detected</strong> → Confirm both <code>dtoverlay</code> lines exist. Swap modules/cables to isolate the fault.</p></li>
+<li><p><strong>No <code>/dev/video0</code></strong> → Driver didn’t bind sensor. Check logs:</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="fu">dmesg</span> <span class="kw">|</span> <span class="fu">grep</span> imx</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div></li>
+<li><p><strong>Check power health</strong> →</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="ex">vcgencmd</span> get_throttled</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div>
+<p><code>0x0</code> = healthy. Non-zero means undervoltage; use official PSU.</p></li>
+<li><p><strong>Enable debug logs</strong> (if <code>dtdebug=1</code> is set):</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="fu">dmesg</span> <span class="kw">|</span> <span class="fu">grep</span> <span class="at">-i</span> imx</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> vcdbg log msg</span></code><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></pre></div></li>
+</ul>
+<hr>
+
+
+</section>
 
 </main> <!-- /main -->
 <script id="quarto-html-after-body" type="application/javascript">
