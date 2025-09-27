@@ -1,5 +1,8 @@
 ---
 title: "Raspberry Pi Compute Module 4 Dual Camera Setup"
+format: html
+body-footer: |
+  <p class="last-updated">Last updated: 2025-09-07</p>
 ---
 
 This guide explains how to connect and configure two cameras on the **Raspberry Pi CM4 IO Board**, and how to test simultaneous still captures with shell scripts.
@@ -28,7 +31,7 @@ This guide explains how to connect and configure two cameras on the **Raspberry 
 * Place two jumper caps in a vertical orientation (bridging the same column).
 * This connects I²C and control lines for CAM0.
 
-![alt](../imgs/CM4_cameras_setup.jpg)
+![alt](../_static/imgs/CM4_cameras_setup.jpg)
 
 **Step 3: Boot the system and check I²C**
 

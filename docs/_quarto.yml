@@ -16,8 +16,6 @@ website:
         text: Home
       - section: "Developer Guides"
         contents:
-          - href: developers/device_setup.qmd
-            text: Device Setup
           - section: "Hardware Setup Guides"
             contents:
               - href: developers/device_setup_CM4.qmd

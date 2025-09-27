@@ -28,7 +28,7 @@ For camera connection we followed the [Arducam Quick Start Guide for Hardware Se
 
 The actual camera connection looks like this:
 
-![Camera Connection Actual](../imgs/imx519_ribbon_connection.JPG)
+![Camera Connection Actual](../_static/imgs/imx519_ribbon_connection.JPG)
 
 Make sure the ribbon cable is properly seated in the connector with the **blue stiffener facing outward** (toward the Ethernet port) and the metal contacts facing inward toward the board.
 
@@ -38,13 +38,13 @@ The Raspberry Pi 5 includes two CSI connectors labeled **CAM0** and **CAM1**. Co
 
 > Both ports require the cable’s metal contacts to face the Ethernet port.
 
-![Dual Camera Connection](../imgs/rpi5_camera_ribbon_connection.JPG)
+![Dual Camera Connection](../_static/imgs/rpi5_camera_ribbon_connection.JPG)
 
 ### Final Assembly
 
 After connecting the cameras, ensure everything is securely in place. Attach any necessary heatsinks or cooling solutions, and insert the microSD card with Raspberry Pi OS installed. Finally, connect the power supply to boot up the Raspberry Pi 5. Attach peripherals (keyboard, mouse, monitor) or set up SSH for headless operation.
 
-![Final Assembly](../imgs/rpi5_imx519_B0371_setup.JPG)
+![Final Assembly](../_static/imgs/rpi5_imx519_B0371_setup.JPG)
 
 ---
 
