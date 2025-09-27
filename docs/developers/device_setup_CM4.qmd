@@ -1,13 +1,12 @@
 ---
 title: "Raspberry Pi Compute Module 4 Dual Camera Setup"
+date-modified: last-modified
 format: html
-body-footer: |
-  <p class="last-updated">Last updated: 2025-09-07</p>
 ---
 
-This guide explains how to connect and configure two cameras on the **Raspberry Pi CM4 IO Board**, and how to test simultaneous still captures with shell scripts.
-
 ***
+
+This guide explains how to connect and configure two cameras on the **Raspberry Pi CM4 IO Board**, and how to test simultaneous still captures with shell scripts.
 
 ## 1. Hardware Setup
 

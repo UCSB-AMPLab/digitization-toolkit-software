@@ -5,6 +5,8 @@ project:
     - "*.qmd"
     - "*.ipynb"
 
+date: last-modified
+
 website:
   title: "Digitization Toolkit Documentation"
   sidebar:
@@ -22,7 +24,11 @@ website:
                 text: "Device Setup: Raspberry Pi CM4 with Cameras"
               - href: developers/device_setup_pi5_imx519.qmd
                 text: "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+  page-footer:
+    center: "Documentation site built: {{< meta date >}} | [View on GitHub](https://github.com/UCSB-AMPLab/digitization-toolkit-software)"
+
 format:
   html:
+    css: _static/css/project.scss
     theme: cosmo
     toc: true

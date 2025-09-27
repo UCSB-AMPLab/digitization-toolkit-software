@@ -1,10 +1,12 @@
 ---
 title: "Raspberry Pi 5 IMX519 Camera Setup"
+date-modified: last-modified
+format: html
 ---
+
+***
 
 This guide explains how to connect and configure the **Arducam IMX519** camera on the **Raspberry Pi 5**, and how to test still captures using shell scripts.
-
----
 
 ## Tested Hardware
 
