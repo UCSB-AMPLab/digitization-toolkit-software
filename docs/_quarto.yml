@@ -1,0 +1,29 @@
+project:
+  type: website
+  output-dir: ../docs/site/
+  render:
+    - "*.qmd"
+    - "*.ipynb"
+
+website:
+  title: "Digitization Toolkit Documentation"
+  sidebar:
+    style: "docked"
+    search: true
+    contents:
+      - href: index.qmd
+        text: Home
+      - text: Developer Guides
+        contents:
+          - href: developers/device_setup.qmd
+            text: Device Setup
+          - text: Hardware Setup Guides
+            contents:
+                - href: developers/device_setup_CM4.qmd
+                  text: "Device Setup: Raspberry Pi CM4 with Cameras"
+                - href: developers/device_setup_pi5_imx519.qmd
+                  text: "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+format:
+  html:
+    theme: cosmo
+    toc: true
