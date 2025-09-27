@@ -10,19 +10,20 @@ website:
   sidebar:
     style: "docked"
     search: true
+    collapse-level: 1
     contents:
       - href: index.qmd
         text: Home
-      - text: Developer Guides
+      - section: "Developer Guides"
         contents:
           - href: developers/device_setup.qmd
             text: Device Setup
-          - text: Hardware Setup Guides
+          - section: "Hardware Setup Guides"
             contents:
-                - href: developers/device_setup_CM4.qmd
-                  text: "Device Setup: Raspberry Pi CM4 with Cameras"
-                - href: developers/device_setup_pi5_imx519.qmd
-                  text: "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+              - href: developers/device_setup_CM4.qmd
+                text: "Device Setup: Raspberry Pi CM4 with Cameras"
+              - href: developers/device_setup_pi5_imx519.qmd
+                text: "Device Setup: Raspberry Pi 5 with IMX519 Camera"
 format:
   html:
     theme: cosmo
