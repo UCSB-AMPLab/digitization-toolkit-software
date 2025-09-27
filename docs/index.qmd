@@ -1,0 +1,21 @@
+---
+title: "Digitization Toolkit Documentation"
+listing:
+  - id: developer-guides
+    contents: "developers/*.qmd"
+    type: table
+    fields: [title, date-modified]
+    field-display-names:
+      title: "Guide"
+      date-modified: "Last Updated"
+    sort: "title asc"
+---
+
+Welcome to the **Digitization Toolkit Documentation**! This site provides comprehensive guides and references for setting up and using the Digitization Toolkit software and hardware components.
+
+## Available Documentation
+
+### Developer Guides
+
+::: {#developer-guides}
+:::

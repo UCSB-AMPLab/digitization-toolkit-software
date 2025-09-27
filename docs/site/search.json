@@ -1,5 +1,25 @@
 [
   {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Digitization Toolkit Documentation",
+    "section": "",
+    "text": "Welcome to the Digitization Toolkit Documentation! This site provides comprehensive guides and references for setting up and using the Digitization Toolkit software and hardware components.",
+    "crumbs": [
+      "Home"
+    ]
+  },
+  {
+    "objectID": "index.html#available-documentation",
+    "href": "index.html#available-documentation",
+    "title": "Digitization Toolkit Documentation",
+    "section": "Available Documentation",
+    "text": "Available Documentation\n\nDeveloper Guides\n\n\n   \n     \n     \n       Order By\n       Default\n         \n          Guide\n        \n     \n  \n    \n      \n      \n    \n\n\n\n\n\nGuide\n\n\nLast Updated\n\n\n\n\n\n\nRaspberry Pi 5 IMX519 Camera Setup\n\n\nSep 27, 2025\n\n\n\n\nRaspberry Pi Compute Module 4 Dual Camera Setup\n\n\nSep 27, 2025\n\n\n\n\n\nNo matching items",
+    "crumbs": [
+      "Home"
+    ]
+  },
+  {
     "objectID": "developers/device_setup_CM4.html",
     "href": "developers/device_setup_CM4.html",
     "title": "Raspberry Pi Compute Module 4 Dual Camera Setup",
