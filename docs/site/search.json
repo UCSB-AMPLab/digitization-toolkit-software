@@ -1,0 +1,62 @@
+[
+  {
+    "objectID": "developers/device_setup_CM4.html",
+    "href": "developers/device_setup_CM4.html",
+    "title": "Raspberry Pi Compute Module 4 Dual Camera Setup",
+    "section": "",
+    "text": "This guide explains how to connect and configure two cameras on the Raspberry Pi CM4 IO Board, and how to test simultaneous still captures with shell scripts.",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi CM4 with Cameras"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_CM4.html#hardware-setup",
+    "href": "developers/device_setup_CM4.html#hardware-setup",
+    "title": "Raspberry Pi Compute Module 4 Dual Camera Setup",
+    "section": "1. Hardware Setup",
+    "text": "1. Hardware Setup\nRequired Hardware\n\nRaspberry Pi Compute Module 4 (CM4)\nCM4 IO Board\n2 × Arducam 64MP (or other libcamera-compatible CSI-2 cameras)\n2 × CSI ribbon cables\n2 × jumper caps\n\nStep 1: Attach the cameras\n\nPlug one ribbon cable into CAM0 (near the HDMI ports).\nPlug the other into CAM1 (near the USB ports).\nEnsure the ribbon contacts face the correct orientation (usually silver contacts toward the HDMI/USB connectors).\n\nStep 2: Add J6 jumpers\n\nLocate header J6 on the IO board.\nPlace two jumper caps in a vertical orientation (bridging the same column).\nThis connects I²C and control lines for CAM0.\n\n\n\n\nalt\n\n\nStep 3: Boot the system and check I²C\nInstall i2c-tools if not already present:\nsudo apt-get update\nsudo apt-get install -y i2c-tools\nList buses:\ni2cdetect -l\nYou should see:\n\ni2c-0 → mux channel 0\ni2c-10 → mux channel 1\n\nProbe each:\nsudo i2cdetect -y 0\nsudo i2cdetect -y 10\nEach should show 0x1a (camera sensor) and 0x0c (VCM driver).",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi CM4 with Cameras"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_CM4.html#firmware-configuration",
+    "href": "developers/device_setup_CM4.html#firmware-configuration",
+    "title": "Raspberry Pi Compute Module 4 Dual Camera Setup",
+    "section": "2. Firmware Configuration",
+    "text": "2. Firmware Configuration\nStep 1: Disable auto-detect\nEdit /boot/firmware/config.txt:\nsudo nano /boot/firmware/config.txt\nAdd at the end:\ncamera_auto_detect=0\ndtoverlay=arducam-64mp,cam0   # enables CAM0\ndtoverlay=arducam-64mp        # enables CAM1\nSave and reboot\nsudo reboot\nStep 2: Verify cameras\nAfter reboot\nrpicam-hello --list\nExpected output: two cameras listed",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi CM4 with Cameras"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_CM4.html#test-cameras",
+    "href": "developers/device_setup_CM4.html#test-cameras",
+    "title": "Raspberry Pi Compute Module 4 Dual Camera Setup",
+    "section": "3. Test Cameras",
+    "text": "3. Test Cameras\nTest Single Camera\nTry a preview:\nrpicam-hello --camera 0 -t 2000\nrpicam-hello --camera 1 -t 2000\nCapture stills\nrpicam-still --camera 0 -o cam0.jpg\nrpicam-still --camera 1 -o cam1.jpg\nTest Dual Camera Capture\nThis script tries both cameras at once. If high resolution fails, it falls back to lower resolutions.\nSave as dual_snap.sh:\n#!/usr/bin/env bash\nset -euo pipefail\nOUTDIR=\"${1:-captures}\"\nmkdir -p \"$OUTDIR\"\n\nSIZES=(\"4624x3472\" \"3840x2160\" \"2312x1736\")\nTIMEOUT_MS=1500\nEXTRA_OPTS=\"--thumb none --buffer-count 2\"\n\nSTAMP=\"$(date +'%Y%m%d_%H%M%S_%3N')\"\nF0=\"$OUTDIR/${STAMP}_cam0.jpg\"\nF1=\"$OUTDIR/${STAMP}_cam1.jpg\"\n\ntry_capture () {\n  local W=\"${1%x*}\" H=\"${1#*x}\"\n  echo \"Trying $W x $H ...\"\n  rpicam-still --camera 0 -t \"$TIMEOUT_MS\" -n --width \"$W\" --height \"$H\" -o \"$F0\" $EXTRA_OPTS &\n  PID0=$!\n  sleep 0.02\n  rpicam-still --camera 1 -t \"$TIMEOUT_MS\" -n --width \"$W\" --height \"$H\" -o \"$F1\" $EXTRA_OPTS &\n  PID1=$!\n  wait \"$PID0\" && wait \"$PID1\"\n}\n\nfor sz in \"${SIZES[@]}\"; do\n  if try_capture \"$sz\"; then\n    echo \"Success at $sz\"\n    echo \"Saved:\"\n    echo \"  $F0\"\n    echo \"  $F1\"\n    exit 0\n  fi\ndone\nUsage:\nchmod +x dual_snap.sh\n./dual_snap.sh",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi CM4 with Cameras"
+    ]
+  },
+  {
+    "objectID": "developers/device_setup_CM4.html#tips-troubleshooting",
+    "href": "developers/device_setup_CM4.html#tips-troubleshooting",
+    "title": "Raspberry Pi Compute Module 4 Dual Camera Setup",
+    "section": "Tips & Troubleshooting",
+    "text": "Tips & Troubleshooting\n\nMemory errors: capturing two full-res images in parallel may fail. Stick to 3840×2160 for stability.\nPermissions: ensure your user is in the video group:\n\nsudo usermod -aG video $USER\n\nColor/exposure match: use fixed settings:\n\nEXTRA_OPTS=\"--shutter 10000 --gain 1.5 --awbgains 2.0,1.5\"\n\nTruly simultaneous capture: requires external trigger/sync hardware. Software methods give ms-level offsets.",
+    "crumbs": [
+      "Developer Guides",
+      "Hardware Setup Guides",
+      "Device Setup: Raspberry Pi CM4 with Cameras"
+    ]
+  }
+]
