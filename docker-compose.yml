@@ -1,4 +1,25 @@
 services:
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: digitoolkit
+      POSTGRES_USER: digitoolkit_user
+      POSTGRES_PASSWORD: securepassword
+    command: >
+       postgres
+       -c listen_addresses=''
+       -c unix_socket_directories='/var/run/postgresql'
+       -c shared_buffers=64MB
+       -c work_mem=4MB
+       -c wal_level=replica
+       -c synchronous_commit=off
+       -c full_page_writes=off
+       -c max_wal_size=128MB
+       -c min_wal_size=32MB
+       -c wal_compression=on
+    volumes:
+      - dbdata:/var/lib/postgresql/data
   api:
     build:
       context: ./backend
@@ -33,3 +54,4 @@ services:
 volumes:
   frontend_node_modules:
   frontend_npm_cache:
+  dbdata:
