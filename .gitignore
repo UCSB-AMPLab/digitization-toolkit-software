@@ -16,3 +16,7 @@ frontend/.env
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# environment files
+.env
+.env.local
