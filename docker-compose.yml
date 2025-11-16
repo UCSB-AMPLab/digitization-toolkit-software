@@ -1,17 +1,13 @@
 services:
-
   db:
     image: postgres:16-alpine
-    env_file:
-      - ./.env
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      - POSTGRES_USER=${DATABASE_USER:-user}
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD:-password}
+      - POSTGRES_DB=${DATABASE_NAME:-digitization_toolkit}
     command: >
        postgres
-       -c listen_addresses=''
-       -c unix_socket_directories='/var/run/postgresql'
+       -c listen_addresses='0.0.0.0'
        -c shared_buffers=64MB
        -c work_mem=4MB
        -c wal_level=replica
@@ -21,8 +17,14 @@ services:
        -c min_wal_size=32MB
        -c wal_compression=on
     volumes:
-      - dbdata:/var/lib/postgresql/data
-  api:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-user} -d ${DATABASE_NAME:-digitization_toolkit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
@@ -32,6 +34,16 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+    environment:
+      - DATABASE_URL=postgresql+psycopg://${DATABASE_USER:-user}:${DATABASE_PASSWORD:-password}@db:5432/${DATABASE_NAME:-digitization_toolkit}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "
+        python -m pip install -q -r requirements.txt &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
 
   frontend:
     build:
@@ -58,6 +70,6 @@ services:
       "
 
 volumes:
+  postgres_data:
   frontend_node_modules:
   frontend_npm_cache:
-  dbdata:
