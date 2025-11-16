@@ -24,7 +24,7 @@ services:
       timeout: 5s
       retries: 5
 
-  api:
+  backend:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
