@@ -4,3 +4,6 @@
 [submodule "backend"]
 	path = backend
 	url = git@github.com:UCSB-AMPLab/digitization-toolkit-backend.git
+[submodule "wiki"]
+	path = wiki
+	url = git@github.com:UCSB-AMPLab/digitization-toolkit-software.wiki.git
