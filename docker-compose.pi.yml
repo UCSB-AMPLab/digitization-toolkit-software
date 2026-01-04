@@ -1,0 +1,11 @@
+services:
+  db:
+    volumes:
+      # Persist DB under /var/lib/dtk on the Pi
+      - /var/lib/dtk/db/postgres:/var/lib/postgresql/data
+
+  backend:
+    volumes:
+      # Override portable folders with appliance paths
+      - /var/lib/dtk:/var/lib/dtk
+      - /var/log/dtk:/var/log/dtk
