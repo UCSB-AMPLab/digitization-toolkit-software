@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_USER="dtk"
-APP_GROUP="dtk"
+# user and group to be changed in prod
+APP_USER="pi"
+APP_GROUP="digitool"
 
 DATA_DIR="/var/lib/dtk"
 LOG_DIR="/var/log/dtk"
