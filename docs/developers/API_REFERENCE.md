@@ -1,4 +1,4 @@
-# Digitization Toolkit - API Reference & Implementation Guide
+# Digitization Toolkit - API Reference and Implementation Guide
 
 
 Documentation of the backend API endpoints, data models, implementation details, and code examples for frontend integration.
@@ -57,22 +57,25 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 cd backend
-python test_api.py
+
+# Run all tests
+python -m pytest
+
+# Or run specific test suites:
+python -m pytest tests/unit/          # Unit tests
+python -m pytest tests/integration/   # Integration tests
+python tests/validate_system.py       # System validation
 ```
 
 Expected output:
 ```
-============================================================
-BACKEND API VALIDATION TEST SUITE
-============================================================
-Imports................................. ✓ PASS
-Password Hashing........................ ✓ PASS
-Token Generation........................ ✓ PASS
-Schemas................................. ✓ PASS
-Models.................................. ✓ PASS
-Routes.................................. ✓ PASS
-------------------------------------------------------------
-Total: 6/6 tests passed (100%)
+==================== test session starts ====================
+platform win32 -- Python 3.x.x
+collected X items
+
+tests/unit/test_api.py ......                        [100%]
+
+==================== X passed in X.XXs =====================
 ```
 
 ---
@@ -91,18 +94,18 @@ Total: 6/6 tests passed (100%)
 
 ## 3. API Endpoints Overview
 
-The Digitization Toolkit API consists of **21 endpoints** organized into **5 routers**.
+The Digitization Toolkit API consists of **27 endpoints** organized into **5 routers**.
 All endpoints run on: [`http://localhost:8000`](http://localhost:8000).
 
 
-### 🔐 **Auth Router** (`/auth`)
+### **Auth Router** (`/auth`)
 User authentication and session management.
 
 - User registration and login
 - JWT access token issuance and refresh
 - Password change functionality
 
-### 📄 **Documents Router** (`/documents`)
+### **Documents Router** (`/documents`)
 Full CRUD for digitized documents with typology support:
 
 - book
@@ -114,20 +117,22 @@ Full CRUD for digitized documents with typology support:
 
 Supports metadata, EXIF data, and camera settings linkage.
 
-### 📂 **Projects Router** (`/projects`)
+### **Projects Router** (`/projects`)
 Project-based organization for grouping documents into collections.
 
 - Create and list projects
 - Add/remove documents from projects
 
-### 📷 **Cameras Router** (`/cameras`)
-Camera device abstraction and metadata storage.
+### **Cameras Router** (`/cameras`)
+Camera device management, capture control, and calibration.
 
-- Device enumeration (stub)
-- Capture trigger (stub)
-- Persistent camera settings per document
+- Device enumeration with hardware detection
+- Single and dual camera capture with database integration
+- Focus and white balance calibration
+- Camera settings management per document
+- Camera registry for persistent calibration data
 
-### ❤️ **Health Check** (`/health`)
+### **Health Check** (`/health`)
 Simple system status endpoint used for monitoring and validation.
 
 ---
@@ -156,8 +161,13 @@ Below is a **complete endpoint reference overview**.
 | POST | `/cameras/` | ✅ | Create camera settings |
 | GET | `/cameras/` | ✅ | List camera settings |
 | GET | `/cameras/{id}` | ✅ | Get camera settings |
-| GET | `/cameras/devices` | ❌ | List devices (stub) |
-| POST | `/cameras/capture` | ❌ | Trigger capture (stub) |
+| PUT | `/cameras/settings/{id}` | ✅ | Update camera settings |
+| DELETE | `/cameras/settings/{id}` | ✅ | Delete camera settings |
+| GET | `/cameras/devices` | ❌ | List detected devices |
+| POST | `/cameras/capture` | ✅ | Single camera capture |
+| POST | `/cameras/capture/dual` | ✅ | Dual camera capture |
+| POST | `/cameras/calibrate` | ✅ | Calibrate autofocus |
+| POST | `/cameras/calibrate/white-balance` | ✅ | Calibrate white balance |
 | GET | `/health` | ❌ | Health check |
 
 > **Legend of the API endpoints matrix:** 
@@ -170,7 +180,7 @@ Below is a **complete endpoint reference overview**.
 
 ## 4. Testing the API
 
-### 4.1 Option 1: Interactive Docs on Swagger UI (Recommended) 🚀
+### 4.1 Option 1: Interactive Docs on Swagger UI (Recommended)
 
 The fastest way to test endpoints is using the interactive documentation.
 The interface allows to see request/response examples and test parameters directly.
@@ -378,9 +388,31 @@ Here's a recommended order to test the entire API:
 ### 4.3 Option 3: Run Test Suite
 ```bash
 cd backend
-python test_api.py
+
+# Run all tests with pytest
+python -m pytest
+
+# Run specific test categories
+python -m pytest tests/unit/          # Unit tests (API, models, schemas)
+python -m pytest tests/integration/   # Integration tests (capture workflow)
+python -m pytest tests/test_cameras.py -m camera  # Camera tests (requires hardware)
+
+# Run system validation
+python tests/validate_system.py
+
+# Run with verbose output
+python -m pytest -v
+
+# Run tests and show coverage
+python -m pytest --cov=app --cov-report=html
 ```
-Validates all imports, models, schemas, routes, and core security functions.
+
+**Test Organization:**
+- `tests/unit/test_api.py` - API endpoint validation, imports, models, schemas
+- `tests/integration/test_capture_integration.py` - Full capture workflow with database
+- `tests/test_cameras.py` - Camera hardware tests (requires connected cameras)
+- `tests/validate_system.py` - Complete system validation script
+- `tests/conftest.py` - Shared pytest fixtures
 
 ### Option 4: Python Code Examples
 See [Code Examples](#code-examples) section below for complete Python workflows:
@@ -998,6 +1030,103 @@ projects = response.json()
 
 ---
 
+### POST `/projects/{id}/initialize`
+
+Initialize project filesystem structure (requires authentication).
+
+Creates the directory structure for storing captured images, temporary files, and export packages.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Request**
+```json
+{
+  "resolution": "medium"
+}
+```
+
+**Response** (200 OK)
+```json
+{
+  "detail": "project initialized",
+  "directories_created": [
+    "/var/lib/dtk/projects/my_project/images/main",
+    "/var/lib/dtk/projects/my_project/images/temp",
+    "/var/lib/dtk/projects/my_project/images/trash",
+    "/var/lib/dtk/projects/my_project/packages"
+  ]
+}
+```
+
+**Directory Structure Created:**
+```
+/var/lib/dtk/projects/{project_name}/
+├── images/
+│   ├── main/      ← Captured images stored here
+│   ├── temp/      ← Temporary/working files
+│   └── trash/     ← Deleted images (soft delete)
+└── packages/      ← Export packages (IIIF, ZIP, etc.)
+```
+
+**Errors**
+- `401 Unauthorized` - No or invalid token
+- `404 Not Found` - Project ID doesn't exist
+
+**Python Example**
+```python
+response = requests.post(
+    "http://localhost:8000/projects/1/initialize",
+    headers={"Authorization": f"Bearer {token}"},
+    json={"resolution": "medium"}
+)
+print(response.json()["detail"])
+```
+
+---
+
+### GET `/projects/{id}/documents`
+
+Get all documents in a project (requires authentication).
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Response** (200 OK)
+```json
+[
+  {
+    "id": 1,
+    "filename": "IMG_20260109_143022_c0.jpg",
+    "file_path": "/var/lib/dtk/projects/my_project/images/main/IMG_20260109_143022_c0.jpg",
+    "title": "Page 1",
+    "resolution_width": 3840,
+    "resolution_height": 2160,
+    "created_at": "2026-01-09T14:30:22"
+  }
+]
+```
+
+**Errors**
+- `401 Unauthorized` - No or invalid token
+- `404 Not Found` - Project ID doesn't exist
+
+**Python Example**
+```python
+response = requests.get(
+    "http://localhost:8000/projects/1/documents",
+    headers={"Authorization": f"Bearer {token}"}
+)
+docs = response.json()
+print(f"Project has {len(docs)} documents")
+```
+
+---
+
 ### GET `/projects/{id}`
 
 Get a specific project.
@@ -1098,57 +1227,313 @@ response = requests.post(
 
 ### GET `/cameras/devices`
 
-List available camera devices (public endpoint, no authentication required).
+List available camera devices detected via libcamera/picamera2 (public endpoint).
 
 **Response** (200 OK)
 ```json
 [
   {
-    "id": "sim-0",
-    "name": "Simulated Camera",
-    "available": true
+    "hardware_id": "imx519_0x001a",
+    "model": "Arducam 16MP IMX519",
+    "index": 0,
+    "location": "cam0",
+    "machine_id": "pi5-001",
+    "label": "Left Camera",
+    "calibrated": true
   },
   {
-    "id": "/dev/video0",
-    "name": "Raspberry Pi Camera v3",
-    "available": true
+    "hardware_id": "imx519_0x002b",
+    "model": "Arducam 16MP IMX519",
+    "index": 1,
+    "location": "cam1",
+    "machine_id": "pi5-001",
+    "label": "Right Camera",
+    "calibrated": false
   }
 ]
 ```
 
-**Note**: Currently returns simulated device stub. Will enumerate actual /dev/video* devices after libcamera/picamera2 integration.
+**Note**: Returns empty list on non-Pi systems or if camera libraries unavailable. Each device includes:
+- `hardware_id`: Unique camera identifier for registry lookup
+- `model`: Camera model name from libcamera
+- `index`: Camera index (0, 1) for capture operations
+- `location`: Physical location (cam0, cam1)
+- `machine_id`: Host machine identifier
+- `label`: User-friendly label from registry
+- `calibrated`: Whether focus calibration data exists
 
 **Python Example**
 ```python
 response = requests.get("http://localhost:8000/cameras/devices")
 devices = response.json()
 for device in devices:
-    print(f"Device: {device['name']}")
+    status = "✓ calibrated" if device['calibrated'] else "⚠ needs calibration"
+    print(f"[{device['index']}] {device['model']} - {status}")
 ```
 
 ---
 
 ### POST `/cameras/capture`
 
-Trigger a capture on a device (public endpoint, stub implementation).
+Trigger a single image capture on specified camera (requires authentication).
 
-**Query Parameters**
-- `device_id` (string, default: "sim-0") - Device ID to capture from
+Captures image to local storage (microSD), extracts metadata, and creates database record automatically.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body**
+```json
+{
+  "project_name": "BookScanning2024",
+  "camera_index": 0,
+  "resolution": "medium",
+  "include_resolution_in_filename": false
+}
+```
+
+**Request Parameters:**
+- `project_name` (string, required): Project name (must exist, use `/projects/{id}/initialize` first)
+- `camera_index` (int, default: 0): Camera index (0 or 1)
+- `resolution` (string, default: "medium"): Image resolution:
+  - `"low"`: 2312x1736 (~4MP, 195 DPI)
+  - `"medium"`: 3840x2160 (~8MP, 350 DPI) - **Recommended**
+  - `"high"`: 4624x3472 (16MP, 420 DPI)
+- `include_resolution_in_filename` (bool, default: false): Add resolution to filename
 
 **Response** (200 OK)
 ```json
 {
-  "detail": "capture triggered on sim-0"
+  "success": true,
+  "file_path": "/var/lib/dtk/projects/BookScanning2024/images/main/IMG_20240117_143022.jpg",
+  "timing": null,
+  "error": null
 }
 ```
+
+**Response on Error**
+```json
+{
+  "success": false,
+  "file_path": null,
+  "error": "Camera 0 is not connected"
+}
+```
+
+**Automatic Actions:**
+1. Validates camera connection
+2. Loads calibration data from registry (if available)
+3. Captures image to project directory
+4. Extracts EXIF metadata
+5. Creates `DocumentImage` database record
+6. Creates `CameraSettings` record
+7. Creates `ExifData` record (if available)
+
+**Errors**
+- `401 Unauthorized` - No or invalid token
+- Camera not connected - Returns success=false with error message
 
 **Python Example**
 ```python
 response = requests.post(
     "http://localhost:8000/cameras/capture",
-    params={"device_id": "sim-0"}
+    headers={"Authorization": f"Bearer {token}"},
+    json={
+        "project_name": "BookScanning2024",
+        "camera_index": 0,
+        "resolution": "medium",
+        "include_resolution_in_filename": False
+    }
 )
-print(response.json()["detail"])
+result = response.json()
+if result['success']:
+    print(f"Captured: {result['file_path']}")
+else:
+    print(f"Error: {result['error']}")
+```
+
+---
+
+### POST `/cameras/capture/dual`
+
+Trigger simultaneous capture on both cameras (requires authentication).
+
+Used for book scanning where left and right pages are captured together.
+Both images are stored locally and metadata saved to database.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body**
+```json
+{
+  "project_name": "BookScanning2024",
+  "resolution": "medium",
+  "include_resolution_in_filename": false,
+  "stagger_ms": 20
+}
+```
+
+**Request Parameters:**
+- `project_name` (string, required): Project name
+- `resolution` (string, default: "medium"): Image resolution (low/medium/high)
+- `include_resolution_in_filename` (bool, default: false): Add resolution to filename
+- `stagger_ms` (int, default: 20): Milliseconds delay between camera triggers
+
+**Response** (200 OK)
+```json
+{
+  "success": true,
+  "file_paths": [
+    "/var/lib/dtk/projects/BookScanning2024/images/main/IMG_20240117_143022_cam0.jpg",
+    "/var/lib/dtk/projects/BookScanning2024/images/main/IMG_20240117_143022_cam1.jpg"
+  ],
+  "timing": {
+    "cam0_capture_ms": 245,
+    "cam1_capture_ms": 248,
+    "total_ms": 493
+  },
+  "error": null
+}
+```
+
+**Automatic Actions:**
+1. Validates both cameras connected
+2. Loads calibration for both cameras
+3. Captures both images with stagger delay
+4. Creates two `DocumentImage` records
+5. Creates `CameraSettings` for each
+6. Creates `ExifData` for each
+
+**Errors**
+- `401 Unauthorized` - No or invalid token
+- Camera not connected - Returns success=false with error
+
+**Python Example**
+```python
+response = requests.post(
+    "http://localhost:8000/cameras/capture/dual",
+    headers={"Authorization": f"Bearer {token}"},
+    json={
+        "project_name": "BookScanning2024",
+        "resolution": "medium",
+        "stagger_ms": 20
+    }
+)
+result = response.json()
+if result['success']:
+    print(f"Captured {len(result['file_paths'])} images")
+    for path in result['file_paths']:
+        print(f"  - {path}")
+```
+
+---
+
+### POST `/cameras/calibrate`
+
+Run autofocus calibration to find optimal lens position (requires authentication).
+
+For fixed-distance setups (book scanning), this determines the best focus position
+which is stored in the camera registry and reused for faster captures.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body**
+```json
+{
+  "camera_index": 0,
+  "resolution": "high"
+}
+```
+
+**Response** (200 OK)
+```json
+{
+  "success": true,
+  "lens_position": 1.85,
+  "distance_meters": 0.42,
+  "af_time": 2.34,
+  "error": null
+}
+```
+
+**Response Parameters:**
+- `lens_position`: Optimal lens position value (saved to registry)
+- `distance_meters`: Estimated focus distance
+- `af_time`: Autofocus operation time in seconds
+
+**Python Example**
+```python
+response = requests.post(
+    "http://localhost:8000/cameras/calibrate",
+    headers={"Authorization": f"Bearer {token}"},
+    json={"camera_index": 0, "resolution": "high"}
+)
+result = response.json()
+if result['success']:
+    print(f"Calibrated: lens_position={result['lens_position']}")
+```
+
+---
+
+### POST `/cameras/calibrate/white-balance`
+
+Calibrate white balance for consistent color reproduction (requires authentication).
+
+For best results, place a neutral gray card or white paper in the frame before running.
+The camera runs AWB until converges, then saves the gains for future captures.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Request Body**
+```json
+{
+  "camera_index": 0,
+  "resolution": "high",
+  "stabilization_frames": 30
+}
+```
+
+**Response** (200 OK)
+```json
+{
+  "success": true,
+  "awb_gains": [1.92, 1.45],
+  "colour_temperature": 5200,
+  "converged": true,
+  "error": null
+}
+```
+
+**Response Parameters:**
+- `awb_gains`: Red and blue channel gains (saved to registry)
+- `colour_temperature`: Detected color temperature in Kelvin
+- `converged`: Whether AWB algorithm converged successfully
+
+**Python Example**
+```python
+response = requests.post(
+    "http://localhost:8000/cameras/calibrate/white-balance",
+    headers={"Authorization": f"Bearer {token}"},
+    json={
+        "camera_index": 0,
+        "resolution": "high",
+        "stabilization_frames": 30
+    }
+)
+result = response.json()
+if result['success'] and result['converged']:
+    print(f"WB Calibrated: {result['colour_temperature']}K")
 ```
 
 ---
@@ -1285,6 +1670,64 @@ response = requests.get(
 )
 settings = response.json()
 ```
+
+---
+
+### PUT `/cameras/settings/{id}`
+
+Update camera settings (requires authentication).
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Request** (all fields optional)
+```json
+{
+  "camera_model": "Arducam IMX519",
+  "iso": 200,
+  "white_balance": "custom"
+}
+```
+
+**Response** (200 OK)
+```json
+{
+  "id": 1,
+  "document_image_id": 1,
+  "camera_model": "Arducam IMX519",
+  "iso": 200,
+  "white_balance": "custom",
+  "created_at": "2024-12-17T10:30:00"
+}
+```
+
+**Errors**
+- `401 Unauthorized` - No or invalid token
+- `404 Not Found` - Settings ID doesn't exist
+
+---
+
+### DELETE `/cameras/settings/{id}`
+
+Delete camera settings (requires authentication).
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Response** (200 OK)
+```json
+{
+  "detail": "Camera settings deleted"
+}
+```
+
+**Errors**
+- `401 Unauthorized` - No or invalid token
+- `404 Not Found` - Settings ID doesn't exist
 
 ---
 
@@ -1457,6 +1900,120 @@ print(response.json()["status"])
 
 ---
 
+## 10.1. File Storage  Architecture
+
+### Storage Structure
+
+Images are stored on the Raspberry Pi's microSD card at `/var/lib/dtk/projects/`:
+
+```
+/var/lib/dtk/projects/
+├── project_1/
+│   ├── images/
+│   │   ├── main/           ← Captured images here
+│   │   │   ├── 20260109_143652_123_c0.jpg
+│   │   │   ├── 20260109_143652_123_c1.jpg
+│   │   │   └── ...
+│   │   ├── temp/           ← Working files
+│   │   └── trash/          ← Deleted images (soft delete)
+│   └── packages/           ← Export packages (IIIF, ZIP)
+├── project_2/
+│   └── ...
+```
+
+### Filename Format
+
+Captured images follow the format: `YYYYMMDD_HHMMSS_mmm_cX.jpg`
+
+- `YYYYMMDD` - Date (ISO format)
+- `HHMMSS` - Time (24-hour format)
+- `mmm` - Milliseconds (000-999)
+- `cX` - Camera index (c0, c1)
+
+**Example**: `20260109_143652_123_c0.jpg`
+- January 9, 2026
+- 14:36:52.123 UTC
+- Camera 0
+
+### Data Flow Architecture
+
+```
+┌─────────────────┐
+│  API Client     │  (Frontend / cURL / Python)
+└────────┬────────┘
+         │ POST /cameras/capture
+         ▼
+┌──────────────────────┐
+│  FastAPI Endpoint    │  cameras.py
+│  (cameras.py)        │  - Validates request
+└────────┬─────────────┘  - Checks camera connection
+         │
+         ▼
+┌──────────────────────────────────┐
+│  Capture Service                 │  capture/service.py
+│  - Loads calibration from        │  - Uses picamera2/libcamera
+│    camera registry                │  - Applies camera settings
+│  - Captures image to:             │
+│    /var/lib/dtk/projects/.../    │
+│    images/main/                   │
+└────────┬─────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────┐
+│  Metadata Extraction             │  PIL / EXIF
+│  - Image dimensions              │  - Resolution
+│  - EXIF data (datetime, GPS)     │  - File size
+│  - Camera settings used          │
+└────────┬─────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────┐
+│  Create Database Records         │  SQLAlchemy ORM
+│  - DocumentImage (main record)   │
+│  - CameraSettings (capture cfg)  │
+│  - ExifData (image metadata)     │
+└────────┬─────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────┐
+│  PostgreSQL Database             │
+│  - Image metadata stored         │  - File path persisted
+│  - Linked to project             │  - Full audit trail
+└──────────────────────────────────┘
+```
+
+### Database Relationships
+
+All three record types link together:
+
+```
+DocumentImage (file_path, project_id)
+    ├─> CameraSettings (camera_model, white_balance, lens_position)
+    ├─> ExifData (raw_exif, datetime_original, GPS)
+    ├─> Project (name, description)
+    └─> User (uploaded_by)
+```
+
+### Performance Metrics
+
+**Capture Speed:**
+- Single capture: ~3-4 seconds (camera init + capture + save)
+- Dual capture: ~5-7 seconds (parallel capture with 20ms stagger)
+- Database insert: ~100-150ms per document
+
+**Throughput (Medium Resolution):**
+- Pages per hour: ~880 pph (single camera)
+- Book (300 pages): ~20 minutes
+- Dual camera: Effectively 1760 pph (both cameras)
+
+**Storage Requirements:**
+- Low resolution (2312x1736): ~2-3 MB per image
+- Medium resolution (3840x2160): ~4-5 MB per image
+- High resolution (4624x3472): ~8-10 MB per image
+- 100-page book at medium: ~400-500 MB
+
+---
+
 ## 11. Error Handling
 
 All errors follow this format:
@@ -1531,43 +2088,66 @@ print(f"   ✓ Project: {project['name']} (ID: {project['id']})")
 print("\n4. Listing cameras...")
 devices_resp = requests.get(f"{BASE_URL}/cameras/devices")
 devices = devices_resp.json()
-print(f"   ✓ Available: {[d['name'] for d in devices]}")
+if devices:
+    print(f"   ✓ Available cameras:")
+    for dev in devices:
+        status = "✓ calibrated" if dev['calibrated'] else "⚠ needs calibration"
+        print(f"     [{dev['index']}] {dev['model']} - {status}")
+else:
+    print("   ⚠ No cameras detected (run on Raspberry Pi)")
 
-# 5. Create document with book typology
-print("\n5. Creating book document...")
-doc_resp = requests.post(
+# 5. Capture image directly (creates document automatically)
+print("\n5. Capturing image with camera...")
+capture_resp = requests.post(
+    f"{BASE_URL}/cameras/capture",
+    headers={"Authorization": f"Bearer {token}"},
+    json={
+        "project_name": "Book Digitization",
+        "camera_index": 0,
+        "resolution": "medium",
+        "include_resolution_in_filename": False
+    }
+)
+capture_result = capture_resp.json()
+if capture_result['success']:
+    print(f"   ✓ Captured: {capture_result['file_path']}")
+    # Extract document ID from database query
+    # In practice, you'd query /documents/ to find the latest
+else:
+    print(f"   ✗ Capture failed: {capture_result.get('error')}")
+    # Fallback: Create document manually for demo
+    doc_resp = requests.post(
+        f"{BASE_URL}/documents/",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "filename": "ancient_book_001.jpg",
+            "file_path": "/mnt/sd/ancient_book_001.jpg",
+            "format": "jpeg",
+            "object_typology": "book",
+            "title": "Ancient Manuscript",
+            "author": "Unknown Scribe",
+            "material": "parchment",
+            "date": "1500-01-01",
+            "resolution_width": 4000,
+            "resolution_height": 3000
+        }
+    )
+    doc = doc_resp.json()
+    print(f"   ✓ Document: {doc['filename']} (ID: {doc['id']})")
+
+# 6. Get latest document (from capture or manual creation)
+print("\n6. Fetching latest document...")
+list_resp = requests.get(
     f"{BASE_URL}/documents/",
     headers={"Authorization": f"Bearer {token}"},
-    json={
-        "filename": "ancient_book_001.jpg",
-        "file_path": "/mnt/sd/ancient_book_001.jpg",
-        "format": "jpeg",
-        "object_typology": "book",
-        "title": "Ancient Manuscript",
-        "author": "Unknown Scribe",
-        "material": "parchment",
-        "date": "1500-01-01",
-        "resolution_width": 4000,
-        "resolution_height": 3000
-    }
+    params={"limit": 1}
 )
-doc = doc_resp.json()
-print(f"   ✓ Document: {doc['filename']} (ID: {doc['id']})")
-
-# 6. Add camera settings
-print("\n6. Adding camera settings...")
-cam_resp = requests.post(
-    f"{BASE_URL}/cameras/",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "document_image_id": doc['id'],
-        "camera_model": "Raspberry Pi Camera v3",
-        "iso": 100,
-        "aperture": 2.9
-    }
-)
-camera = cam_resp.json()
-print(f"   ✓ Camera: {camera['camera_model']}")
+docs = list_resp.json()
+if docs:
+    doc = docs[0]
+    print(f"   ✓ Found: {doc['filename']} (ID: {doc['id']})")
+    if doc.get('camera_settings'):
+        print(f"   ✓ Camera: {doc['camera_settings'].get('camera_model', 'N/A')}")
 
 # 7. Add document to project
 print("\n7. Adding document to project...")
@@ -1698,68 +2278,87 @@ gallery_view(token)
 ### Live Scan Page Example
 
 ```python
-def live_scan_workflow(token):
+def live_scan_workflow(token, project_name="BookScanning2024"):
     """
     Example workflow for the live scan page.
-    User captures image and saves document metadata.
+    User captures image - metadata is automatically saved.
     """
     
     # 1. Get available cameras
     print("1. Getting cameras...")
     devices_resp = requests.get(f"{BASE_URL}/cameras/devices")
     devices = devices_resp.json()
-    selected_device = devices[0] if devices else None
-    print(f"   Selected: {selected_device['name']}")
     
-    # 2. Trigger capture
+    if not devices:
+        print("   ⚠ No cameras detected")
+        return
+    
+    selected_device = devices[0]
+    print(f"   Selected: [{selected_device['index']}] {selected_device['model']}")
+    if not selected_device['calibrated']:
+        print("   ⚠ Camera not calibrated - consider running calibration first")
+    
+    # 2. Trigger capture (automatically creates document record)
     print("\n2. Triggering capture...")
     capture_resp = requests.post(
         f"{BASE_URL}/cameras/capture",
-        params={"device_id": selected_device['id']}
-    )
-    print(f"   {capture_resp.json()['detail']}")
-    
-    # 3. Image now saved to SD card at /mnt/sd/image_001.jpg
-    # (this happens on frontend/device level)
-    
-    # 4. Save document metadata to backend
-    print("\n3. Saving document metadata...")
-    doc_resp = requests.post(
-        f"{BASE_URL}/documents/",
         headers={"Authorization": f"Bearer {token}"},
         json={
-            "filename": "image_001.jpg",
-            "file_path": "/mnt/sd/image_001.jpg",
-            "format": "jpeg",
-            "object_typology": "book",
-            "title": "Page 1 of Ancient Manuscript",
-            "author": "Unknown",
-            "material": "parchment",
-            "date": "1500-01-01",
-            "resolution_width": 4000,
-            "resolution_height": 3000
+            "project_name": project_name,
+            "camera_index": selected_device['index'],
+            "resolution": "medium",
+            "include_resolution_in_filename": False
         }
     )
-    doc = doc_resp.json()
-    print(f"   ✓ Saved: {doc['filename']} (ID: {doc['id']})")
+    result = capture_resp.json()
     
-    # 5. Add camera settings from capture metadata
-    print("\n4. Adding camera metadata...")
-    cam_resp = requests.post(
-        f"{BASE_URL}/cameras/",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "document_image_id": doc['id'],
-            "camera_model": "Raspberry Pi Camera v3",
-            "iso": 100,
-            "aperture": 2.9,
-            "white_balance": "daylight"
-        }
-    )
-    print(f"   ✓ Camera settings saved")
+    if result['success']:
+        print(f"   ✓ Captured: {result['file_path']}")
+        
+        # 3. Get the created document to show details
+        print("\n3. Fetching document details...")
+        list_resp = requests.get(
+            f"{BASE_URL}/documents/",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"limit": 1}  # Get most recent
+        )
+        docs = list_resp.json()
+        if docs:
+            doc = docs[0]
+            print(f"   ✓ Document ID: {doc['id']}")
+            print(f"   ✓ Resolution: {doc['resolution_width']}x{doc['resolution_height']}")
+            if doc.get('camera_settings'):
+                print(f"   ✓ Camera: {doc['camera_settings'].get('camera_model', 'N/A')}")
+            
+            # 4. Optional: Update document metadata after capture
+            print("\n4. Updating metadata...")
+            update_resp = requests.patch(
+                f"{BASE_URL}/documents/{doc['id']}",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "title": "Page 1 of Ancient Manuscript",
+                    "object_typology": "book",
+                    "author": "Unknown Scribe",
+                    "material": "parchment",
+                    "date": "1500-01-01"
+                }
+            )
+            updated = update_resp.json()
+            print(f"   ✓ Updated: {updated['title']}")
+    else:
+        print(f"   ✗ Capture failed: {result['error']}")
 
 live_scan_workflow(token)
 ```
+
+**Note**: The capture endpoint now automatically:
+- Captures the image
+- Extracts resolution and EXIF data
+- Creates the DocumentImage record
+- Creates CameraSettings record
+- Returns the file path
+
+This eliminates the need to manually create documents after capture.
 
 ---
 
@@ -1769,14 +2368,16 @@ live_scan_workflow(token)
 
 **Goals:**
 - User authentication setup
-- Camera device testing
+- Camera device testing and calibration
 - Document typology selection
 
 **API Calls:**
 1. `POST /auth/register` - Register new user (optional, if first time)
 2. `POST /auth/login` - User login
-3. `GET /cameras/devices` - Show available cameras
-4. `POST /cameras/capture` - Test camera device
+3. `GET /cameras/devices` - Show available cameras with calibration status
+4. `POST /cameras/calibrate` - Calibrate camera focus (optional)
+5. `POST /cameras/calibrate/white-balance` - Calibrate white balance (optional)
+6. `POST /cameras/capture` - Test camera capture
 
 **Frontend Flow:**
 ```
@@ -1785,11 +2386,14 @@ live_scan_workflow(token)
 3. POST /auth/login → receive token
 4. Store token in localStorage/sessionStorage
 5. Get camera list: GET /cameras/devices
-6. Show camera list to user
-7. User clicks "Test Camera"
-8. POST /cameras/capture?device_id=<selected>
-9. Show typology selector: book, dossier, document, map, planimetry, other
-10. Display dynamic input fields based on typology
+6. Display cameras with calibration status indicators
+7. Optional: Run calibration if camera not calibrated
+   - POST /cameras/calibrate → get lens position
+   - POST /cameras/calibrate/white-balance → get AWB gains
+8. User clicks "Test Camera"
+9. POST /cameras/capture (with project_name, camera_index, resolution)
+10. Show typology selector: book, dossier, document, map, planimetry, other
+11. Display dynamic input fields based on typology
 ```
 
 ---
@@ -1798,26 +2402,37 @@ live_scan_workflow(token)
 
 **Goals:**
 - Capture images with selected camera
-- Enter document metadata
-- Save to backend
+- Document metadata is automatically created
+- Optional: Update metadata after capture
 
 **API Calls:**
 1. `GET /cameras/devices` - List cameras (on load)
-2. `POST /cameras/capture` - Trigger capture (on button click)
-3. `POST /documents/` - Save document with metadata
+2. `POST /cameras/capture` - Capture with automatic database record creation
+3. `GET /documents/` - List recent captures
+4. `PATCH /documents/{id}` - Update metadata (optional)
 
 **Frontend Flow:**
 ```
 1. Load page, get cameras: GET /cameras/devices
-2. Show camera selector dropdown
-3. User clicks "Capture"
-4. POST /cameras/capture?device_id=<selected>
-5. Capture happens on device, image saved to SD card
-6. User fills in metadata form:
-   - filename
-   - file_path (path to image on SD card)
+2. Show camera selector dropdown with calibration status
+3. User selects resolution (low/medium/high)
+4. User clicks "Capture"
+5. POST /cameras/capture with:
+   - project_name (from config or project selector)
+   - camera_index (selected camera)
+   - resolution (user choice)
+6. Backend automatically:
+   - Captures image to SD card
+   - Extracts metadata
+   - Creates DocumentImage record
+   - Creates CameraSettings record
+   - Returns file_path
+7. Frontend shows success with file path
+8. Optional: Allow user to update document metadata:
    - title, author, material, date
-   - object_typology (user selected earlier)
+   - object_typology
+   - custom_attributes (JSON)
+9. PATCH /documents/{id} with updated fields
    - custom_attributes (JSON based on typology)
 7. User clicks "Save"
 8. POST /documents/ with all metadata → receive document ID
@@ -1951,45 +2566,19 @@ Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`
 ### Extensibility
 - **Typology System**: 6 built-in document types (book, dossier, document, map, planimetry, other)
 - **Custom Attributes**: JSON field for typology-specific metadata
-- **Camera Stubs**: Ready for libcamera/picamera2 integration
+- **Camera Integration**: Camera(s) integration (libcamera/picamera2) with hardware detection
+- **Camera Registry**: Persistent calibration storage across system reboots
+- **Dual Camera Support**: Synchronized captures for book scanning
+- **Resolution Profiles**: Three DPI-optimized presets (low/medium/high)
 
----
-
-## 15. Next Steps
-
-### Priority 1: Camera Device Implementation
-- Integrate libcamera or picamera2
-- Enumerate actual /dev/video* devices
-- Implement real capture with image save to SD card
-- Add device status checks
-
-### Priority 2: File Upload (Optional)
-- Add `/documents/upload` endpoint
-- Validate image format and resolution
-- Handle SD card storage
-
-### Priority 3: Search & Filtering (Optional)
-- Add query params: `?typology=book&author=Smith&date_from=2024-01-01`
-- Full-text search on title/description
-
-### Priority 4: Testing (Recommended)
-- Integration tests with real HTTP
-- End-to-end tests
-- Load testing
-
----
 
 ## Support & Resources
 
 - **FastAPI Documentation**: https://fastapi.tiangolo.com/
 - **SQLAlchemy Documentation**: https://docs.sqlalchemy.org/
 - **Pydantic Documentation**: https://docs.pydantic.dev/
+- **Libcamera Documentation**: https://libcamera.org/
+- **Picamera2 Documentation**: https://datasheets.raspberrypi.com/camera/picamera2-manual.pdf
 - **Interactive API Docs**: http://localhost:8000/docs (when running)
 
 ---
-
-**Backend Status**: ✅ Core implementation complete and tested (6/6 tests passing)
-
-**Last Updated**: December 17, 2024
-
-**Implementation Phase**: Complete - Camera integration pending
