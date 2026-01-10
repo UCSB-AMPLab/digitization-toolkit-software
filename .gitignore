@@ -20,3 +20,9 @@ Desktop.ini
 # environment files
 .env
 .env.local
+
+_data/
+_logs/
+
+# Temporary folder
+temp/
