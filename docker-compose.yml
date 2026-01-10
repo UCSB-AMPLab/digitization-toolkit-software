@@ -5,6 +5,8 @@ services:
       - POSTGRES_USER=${DATABASE_USER:-user}
       - POSTGRES_PASSWORD=${DATABASE_PASSWORD:-password}
       - POSTGRES_DB=${DATABASE_NAME:-digitization_toolkit}
+    ports:
+      - "5432:5432"
     command: >
        postgres
        -c listen_addresses='0.0.0.0'
