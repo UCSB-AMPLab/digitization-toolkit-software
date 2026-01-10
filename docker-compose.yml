@@ -41,7 +41,11 @@ services:
       - ./_data:/var/lib/dtk
       - ./_logs:/var/log/dtk
     environment:
-      - DATABASE_URL=postgresql+psycopg://${DATABASE_USER:-user}:${DATABASE_PASSWORD:-password}@db:5432/${DATABASE_NAME:-digitization_toolkit}
+      - DATABASE_HOST=db
+      - DATABASE_USER=${DATABASE_USER:-user}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-password}
+      - DATABASE_NAME=${DATABASE_NAME:-digitization_toolkit}
+      - DATABASE_PORT=5432
       - DTK_DATA_DIR=/var/lib/dtk
       - DTK_LOG_DIR=/var/log/dtk
     depends_on:
