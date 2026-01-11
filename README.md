@@ -14,7 +14,7 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 - **Hardware**: Raspberry Pi CM4 + CM4IO, Raspberry Pi 5 (dual camera embedded), 2x 64MP ArduCam autofocus cameras, 2 x Cannon EOS Rebel T7 (GPhoto compatible cameras)
 - **Backend**: Python, FastAPI
 - **Frontend**: Svelte
-- **Database**: SQLite
+- **Database**: PostgreSQL
 
 ## Status
 
@@ -22,6 +22,29 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 > Alpha prototype planned for deployment at SBMAL in June 2025.
 
 ***
+
+## Quick Start
+
+### Development (any machine, no cameras)
+
+```bash
+# Start database + frontend + backend (all in Docker)
+docker compose --profile with-backend up
+```
+
+Access: [http://localhost:5173](http://localhost:5173) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+
+### Production (Raspberry Pi with cameras)
+
+```bash
+# Start database + frontend only
+docker compose up -d
+
+# Start native backend with camera support
+./scripts/run_backend_native.sh
+```
+
+The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
 
 ## Setup
 
