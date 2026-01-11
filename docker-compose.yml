@@ -26,7 +26,11 @@ services:
       timeout: 5s
       retries: 5
 
+  # Backend service (optional for Docker-based development)
+  # On Raspberry Pi with cameras, run backend natively: ./scripts/run_backend_native.sh
+  # For development without camera hardware, use: docker compose --profile with-backend up
   backend:
+    profiles: ["with-backend"]  # Optional: only start with --profile with-backend
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
