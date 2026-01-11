@@ -28,23 +28,30 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 ### Development (any machine, no cameras)
 
 ```bash
-# Start database + frontend + backend (all in Docker)
-docker compose --profile with-backend up
+# One-command startup (all services in Docker)
+./scripts/start-dev.sh
 ```
 
-Access: [http://localhost:5173](http://localhost:5173) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+Or manually:
+```bash
+docker compose --profile with-backend up
+```
 
 ### Production (Raspberry Pi with cameras)
 
 ```bash
-# Start database + frontend only
-docker compose up -d
-
-# Start native backend with camera support
-./scripts/run_backend_native.sh
+# One-command startup (Docker + native backend)
+./scripts/start.sh
 ```
 
-The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
+Or manually:
+```bash
+docker compose up -d && ./scripts/run_backend_native.sh
+```
+
+**Access:** [http://localhost:5173](http://localhost:5173) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+
+**Note:** The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
 
 ## Setup
 
