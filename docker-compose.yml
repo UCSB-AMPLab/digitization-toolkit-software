@@ -65,9 +65,12 @@ services:
       - ./.env
     ports:
       - "5173:5173"
+    # Allow container to reach host services
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # IMPORTANT: keep localhost here so the browser can reach the API
       - PUBLIC_API_BASE=http://localhost:8000
+      - PUBLIC_API_BASE_SSR=http://host.docker.internal:8000
       - NPM_CONFIG_AUDIT=false
       - NPM_CONFIG_FUND=false
     volumes:
