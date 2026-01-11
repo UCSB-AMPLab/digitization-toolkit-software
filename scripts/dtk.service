@@ -1,0 +1,30 @@
+[Unit]
+Description=Digitization Toolkit
+After=docker.service
+Requires=docker.service
+Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit
+
+[Service]
+Type=forking
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/dtk
+
+# Start the application
+ExecStart=/home/pi/dtk/scripts/start.sh
+ExecStop=/home/pi/dtk/scripts/stop.sh
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+# Security settings
+NoNewPrivileges=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dtk
+
+[Install]
+WantedBy=multi-user.target
