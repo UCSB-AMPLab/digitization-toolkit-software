@@ -5,6 +5,8 @@ services:
       - POSTGRES_USER=${DATABASE_USER:-user}
       - POSTGRES_PASSWORD=${DATABASE_PASSWORD:-password}
       - POSTGRES_DB=${DATABASE_NAME:-digitization_toolkit}
+    ports:
+      - "5432:5432"
     command: >
        postgres
        -c listen_addresses='0.0.0.0'
@@ -24,7 +26,11 @@ services:
       timeout: 5s
       retries: 5
 
+  # Backend service (optional for Docker-based development)
+  # On Raspberry Pi with cameras, run backend natively: ./scripts/run_backend_native.sh
+  # For development without camera hardware, use: docker compose --profile with-backend up
   backend:
+    profiles: ["with-backend"]  # Optional: only start with --profile with-backend
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
@@ -39,7 +45,11 @@ services:
       - ./_data:/var/lib/dtk
       - ./_logs:/var/log/dtk
     environment:
-      - DATABASE_URL=postgresql+psycopg://${DATABASE_USER:-user}:${DATABASE_PASSWORD:-password}@db:5432/${DATABASE_NAME:-digitization_toolkit}
+      - DATABASE_HOST=db
+      - DATABASE_USER=${DATABASE_USER:-user}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-password}
+      - DATABASE_NAME=${DATABASE_NAME:-digitization_toolkit}
+      - DATABASE_PORT=5432
       - DTK_DATA_DIR=/var/lib/dtk
       - DTK_LOG_DIR=/var/log/dtk
     depends_on:
@@ -55,20 +65,27 @@ services:
       - ./.env
     ports:
       - "5173:5173"
+    # Allow container to reach host services
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # IMPORTANT: keep localhost here so the browser can reach the API
       - PUBLIC_API_BASE=http://localhost:8000
+      - PUBLIC_API_BASE_SSR=http://host.docker.internal:8000
       - NPM_CONFIG_AUDIT=false
       - NPM_CONFIG_FUND=false
     volumes:
       - ./frontend:/app
-      - /app/node_modules
+      - frontend_node_modules:/app/node_modules
     command: >
       sh -c "
-        npm install --include=optional &&
+        rm -rf /app/node_modules/* /app/node_modules/.* /app/package-lock.json 2>/dev/null || true &&
+        npm cache clean --force &&
+        npm install --include=optional --ignore-scripts &&
+        npm rebuild &&
+        npx svelte-kit sync &&
         npm run dev -- --host 0.0.0.0
       "
 
 volumes:
   postgres_data:
-  frontend_npm_cache:
+  frontend_node_modules:
