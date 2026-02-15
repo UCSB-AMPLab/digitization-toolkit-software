@@ -46,12 +46,30 @@ docker compose --profile with-backend up
 
 Or manually:
 ```bash
-docker compose up -d && ./scripts/run_backend_native.sh
+# Start database and frontend
+docker compose up -d
+
+# Start backend with pixi
+cd backend && pixi run dev
 ```
 
 **Access:** [http://localhost:5173](http://localhost:5173) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
 
 **Note:** The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
+
+### 📦 Backend Dependency Management
+
+The backend uses **pixi** for dependency management:
+
+```bash
+# First time setup
+cd backend
+pixi install
+pixi run setup-camera-link  # Raspberry Pi only
+
+# Start backend
+pixi run dev
+```
 
 ## Setup
 
