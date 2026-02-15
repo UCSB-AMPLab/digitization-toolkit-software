@@ -15,7 +15,7 @@ Offline-capable digitization toolkit for Raspberry Pi with dual camera support. 
 ./scripts/start-dev.sh  # or: docker compose --profile with-backend up
 
 # Production (Raspberry Pi with cameras): Native backend + Docker DB
-./scripts/start.sh      # or: docker compose up -d && ./scripts/run_backend_native_pixi.sh
+./scripts/start.sh      # or: docker compose up -d && cd backend && pixi run dev
 ```
 
 **Why:** System camera libraries (python3-libcamera, python3-kms++) cannot be installed via pip and must be accessed from system packages.
@@ -187,7 +187,9 @@ frontend/
     └── routes/           # SvelteKit pages
 ```
 
-## Documentation Policy for AI Agents
+## Documentation & Script Policy for AI Agents
+
+### Documentation Files
 
 **DO NOT create new standalone documentation files** (README.md, GUIDE.md, NOTES.md, etc.) for recording changes or providing instructions.
 
@@ -202,7 +204,28 @@ Instead:
 - ❌ INSTRUCTIONS.md, AGENT.md - Update this file instead
 - ❌ Informational "status update" files - These are traceback logs, not documentation
 
-**If you need to document something important:** Ask yourself "Will another AI agent need to know this to avoid mistakes?" If yes, add it to this file. If it's a repeatable procedure, create a skill file.
+### Shell Scripts
+
+**DO NOT create shell scripts for simple tasks.** The project uses pixi tasks for backend workflows.
+
+**Only create scripts for:**
+- ✅ Multi-service orchestration (start-dev.sh, start.sh, stop.sh)
+- ✅ System-level operations (install-service.sh, uninstall-service.sh)
+
+**Never create scripts for:**
+- ❌ Database migrations - Use `pixi run db-upgrade` or `pixi run db-migrate "message"`
+- ❌ Running single services - Use `pixi run dev` directly
+- ❌ One-time setup tasks - Document in README.md instead
+- ❌ Simple command wrappers - Users can run commands directly
+
+**Existing pixi tasks** (defined in backend/pixi.toml):
+- `pixi run dev` - Start development server
+- `pixi run test` - Run tests
+- `pixi run db-upgrade` - Apply migrations
+- `pixi run db-migrate "message"` - Create migration
+- `pixi run setup-camera-link` - Link system camera packages
+
+**Decision criteria:** "Does this require coordinating multiple services or system-level changes?" If no, use pixi tasks or document the command.
 
 ## Common Mistakes AI Agents Make
 
@@ -214,6 +237,7 @@ Instead:
 6. ❌ Forgetting backend must run natively for camera access
 7. ❌ Breaking hardware ID system by reverting to index-based camera refs
 8. ❌ Creating new documentation files instead of updating existing ones
+9. ❌ Creating shell scripts for simple tasks (use pixi tasks instead)
 
 ## Quick Reference Commands
 
