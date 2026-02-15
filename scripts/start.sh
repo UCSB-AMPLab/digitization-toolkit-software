@@ -28,5 +28,5 @@ if ! docker compose ps | grep -q "db.*healthy"; then
 fi
 
 echo ""
-# Start native backend
-./scripts/run_backend_native.sh
+echo "→ Starting native backend with pixi..."
+cd "$PROJECT_ROOT/backend" && pixi run dev
