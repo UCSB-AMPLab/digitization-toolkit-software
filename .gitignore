@@ -26,3 +26,6 @@ _logs/
 
 # Temporary folder
 temp/
+
+# Working files
+docs/RP-008156-DS-2-picamera2-manual.txt
