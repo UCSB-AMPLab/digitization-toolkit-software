@@ -1,3 +1,7 @@
+---
+applyTo: "**"
+---
+
 # AI Agent Instructions for Digitization Toolkit
 
 ## Project Overview
