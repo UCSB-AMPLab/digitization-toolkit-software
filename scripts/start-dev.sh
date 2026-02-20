@@ -20,4 +20,4 @@ echo "  - Frontend (SvelteKit)"
 echo "  - Backend (FastAPI, no cameras)"
 echo ""
 
-docker compose --profile with-backend up --build
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile with-backend up --build

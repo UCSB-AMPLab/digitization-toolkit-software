@@ -34,13 +34,16 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 
 Or manually:
 ```bash
-docker compose --profile with-backend up
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile with-backend up
 ```
 
 ### Production (Raspberry Pi with cameras)
 
 ```bash
-# One-command startup (Docker + native backend)
+# Build the frontend image first (requires internet — do this at home/office):
+docker compose build
+
+# Then take it offline and run:
 ./scripts/start.sh
 ```
 
@@ -53,7 +56,8 @@ docker compose up -d
 cd backend && pixi run dev
 ```
 
-**Access:** [http://localhost:5173](http://localhost:5173) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+**Access (production):** [http://localhost:3000](http://localhost:3000) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+**Access (dev):** [http://localhost:5173](http://localhost:5173) (frontend, Vite) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
 
 **Note:** The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
 

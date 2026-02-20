@@ -15,14 +15,33 @@ Offline-capable digitization toolkit for Raspberry Pi with dual camera support. 
 ### 1. Dual Deployment Modes
 
 ```bash
-# Development (any machine, no cameras): All services in Docker
-./scripts/start-dev.sh  # or: docker compose --profile with-backend up
+# Development (any machine, no cameras): All services in Docker with Vite live reload
+./scripts/start-dev.sh  # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile with-backend up
 
-# Production (Raspberry Pi with cameras): Native backend + Docker DB
+# Production (Raspberry Pi with cameras): Native backend + Docker DB + pre-built frontend
 ./scripts/start.sh      # or: docker compose up -d && cd backend && pixi run dev
 ```
 
 **Why:** System camera libraries (python3-libcamera, python3-kms++) cannot be installed via pip and must be accessed from system packages.
+
+### 1a. Offline-First Frontend
+
+The frontend uses a **multi-stage production Docker build** (`frontend/Dockerfile`):
+- Stage 1 (builder): Installs npm deps + compiles SvelteKit → static Node.js server
+- Stage 2 (runner): Copies only the compiled output — no npm, no source code
+
+The running container needs **zero internet access**. The only requirement is a one-time internet-connected build:
+```bash
+# With internet access (e.g. at home / office):
+docker compose build frontend    # or: docker compose build
+
+# Then take the Pi offline — it will run forever from the cached image:
+docker compose up -d
+```
+
+Adapter: `@sveltejs/adapter-node` (produces `node build/index.js`), port 3000.
+
+`docker-compose.dev.yml` overrides the frontend service to use `Dockerfile.dev` (Vite dev server, port 5173, hot reload, volume mounts). Used only during development with internet.
 
 ### 2. Camera Backend Plugin System
 
@@ -242,11 +261,12 @@ Instead:
 7. ❌ Breaking hardware ID system by reverting to index-based camera refs
 8. ❌ Creating new documentation files instead of updating existing ones
 9. ❌ Creating shell scripts for simple tasks (use pixi tasks instead)
+10. ❌ Replacing `frontend/Dockerfile` (production multi-stage build) with `Dockerfile.dev` in `docker-compose.yml` — that would re-introduce npm downloads at startup and break offline use
 
 ## Quick Reference Commands
 
 ```bash
-# Start full stack development (no cameras)
+# Start full stack development (no cameras) — Vite dev server at :5173
 ./scripts/start-dev.sh
 
 # Start production with cameras
