@@ -9,8 +9,8 @@ echo "To exit: Press Ctrl+Alt+F2, then run 'pkill cage'"
 echo ""
 
 # Wait for frontend to be ready
-echo -n "Waiting for frontend at http://localhost:5173..."
-until curl -sSf http://localhost:5173 >/dev/null 2>&1; do
+echo -n "Waiting for frontend at http://localhost:3000..."
+until curl -sSf http://localhost:3000 >/dev/null 2>&1; do
   echo -n "."
   sleep 1
 done
@@ -30,4 +30,4 @@ exec cage -- chromium-browser \
   --disable-features=TranslateUI \
   --overscroll-history-navigation=0 \
   --check-for-update-interval=31536000 \
-  http://localhost:5173
+  http://localhost:3000
