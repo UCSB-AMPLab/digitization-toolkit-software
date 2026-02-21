@@ -75,6 +75,58 @@ pixi run setup-camera-link  # Raspberry Pi only
 pixi run dev
 ```
 
+## Production Distribution (SD Card Imaging)
+
+The toolkit is designed to ship as a pre-flashed SD card. The end user only needs to insert the card, power on the Pi, and the application starts automatically — no internet connection required.
+
+### Building the golden SD card (requires internet, done once)
+
+```bash
+# 1. Clone the repository onto a fresh Raspberry Pi OS installation
+git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit.git ~/dtk
+cd ~/dtk
+
+# 2. Run the one-time provisioning script (internet required here)
+#    Builds Docker images, installs pixi env, applies DB migrations
+sudo ./scripts/setup.sh
+
+# 3. Install and enable the systemd service (auto-start on boot)
+sudo ./scripts/install-service.sh
+sudo systemctl start dtk
+
+# 4. Verify the app is running
+curl http://localhost:8000/health   # → {"status":"ok"}
+curl -I http://localhost:3000       # → HTTP 200
+```
+
+### Creating an SD card image
+
+```bash
+# On the Pi — shut down cleanly
+sudo systemctl stop dtk
+sudo poweroff
+
+# On a host machine with the SD card inserted (replace sdX with your device)
+sudo dd if=/dev/sdX of=dtk-$(date +%Y%m%d).img bs=4M status=progress
+# Compress for storage/transfer
+xz -T0 dtk-$(date +%Y%m%d).img
+```
+
+### Flashing for end users
+
+Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (or `dd`) to write the `.img` to a new SD card.  
+The application starts automatically on boot — no configuration needed.
+
+### What's self-contained after provisioning
+
+| Component | Stored at | Requires internet after setup? |
+|---|---|---|
+| Frontend (SvelteKit) | Docker image in `/var/lib/docker/` | No |
+| PostgreSQL | Docker image in `/var/lib/docker/` | No |
+| Backend Python env | `backend/.pixi/` | No |
+| camera libraries | `/usr/lib/python3/dist-packages/` | No (system OS) |
+| Application data | `/var/lib/dtk/` | No |
+
 ## Setup
 
 This repository uses **Git submodules** for the `frontend` and `backend` code.  

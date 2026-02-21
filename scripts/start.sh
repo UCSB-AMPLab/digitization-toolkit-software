@@ -15,8 +15,9 @@ echo "=========================================="
 echo ""
 
 # Start Docker services (DB + Frontend)
+# Uses docker-compose.pi.yml overlay for proper appliance volume paths (/var/lib/dtk, /var/log/dtk)
 echo "→ Starting database and frontend containers..."
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
 
 echo ""
 echo "→ Waiting for database to be ready..."
@@ -29,4 +30,8 @@ fi
 
 echo ""
 echo "→ Starting native backend with pixi..."
-cd "$PROJECT_ROOT/backend" && pixi run dev
+PIXI="${HOME}/.pixi/bin/pixi"
+if [ ! -x "$PIXI" ]; then
+    PIXI="$(command -v pixi 2>/dev/null || echo pixi)"
+fi
+cd "$PROJECT_ROOT/backend" && "$PIXI" run dev

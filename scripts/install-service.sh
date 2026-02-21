@@ -21,6 +21,21 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Guard: make sure setup.sh has been run first
+if [ ! -d "$PROJECT_ROOT/backend/.pixi" ]; then
+    echo "✗ Backend pixi environment not found."
+    echo "  Run setup.sh first (requires internet):"
+    echo "    sudo $PROJECT_ROOT/scripts/setup.sh"
+    exit 1
+fi
+
+if ! docker image inspect dtk-frontend >/dev/null 2>&1; then
+    echo "✗ Frontend Docker image not found."
+    echo "  Run setup.sh first (requires internet):"
+    echo "    sudo $PROJECT_ROOT/scripts/setup.sh"
+    exit 1
+fi
+
 # Check if service file exists
 if [ ! -f "$SERVICE_FILE" ]; then
     echo "✗ Service file not found: $SERVICE_FILE"
