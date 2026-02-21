@@ -1,42 +1,71 @@
 #!/bin/bash
-# Install systemd service for auto-starting kiosk on boot
+# Set up kiosk auto-start on boot via autologin + ~/.bash_profile
+#
+# The kiosk must run inside the tty1 login session (not as a standalone
+# systemd service) so that cage (Wayland compositor) takes ownership of
+# tty1, which is what the monitor displays.
+#
+# Boot sequence:
+#   getty@tty1 autologin → bash login shell → .bash_profile → start-kiosk.sh → cage
+#
+# Restart: when cage exits, the shell exits, getty re-autologins, .bash_profile
+# runs again → kiosk restarts automatically.
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KIOSK_USER="${SUDO_USER:-pi}"
+KIOSK_HOME=$(eval echo "~$KIOSK_USER")
+BASH_PROFILE="$KIOSK_HOME/.bash_profile"
+KIOSK_SCRIPT="/home/pi/dtk/scripts/start-kiosk.sh"
 
-echo "Creating kiosk systemd service..."
+echo "Setting up kiosk auto-start for user: $KIOSK_USER"
+echo ""
 
-cat > /tmp/kiosk.service << 'EOF'
-[Unit]
-Description=Wayland Kiosk (Cage + Chromium)
-After=network-online.target docker.service
-Wants=network-online.target
-
+# ── 1. Ensure autologin is configured for tty1 ──────────────────────────────
+echo "→ Configuring autologin on tty1..."
+sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
+sudo tee /etc/systemd/system/getty@tty1.service.d/autologin.conf > /dev/null << EOF
 [Service]
-Type=simple
-User=pi
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-ExecStart=/home/pi/dtk/scripts/start-kiosk.sh
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $KIOSK_USER --noclear %I \$TERM
 EOF
-
-sudo mv /tmp/kiosk.service /etc/systemd/system/kiosk.service
 sudo systemctl daemon-reload
-sudo systemctl enable kiosk.service
+
+# ── 2. Write ~/.bash_profile to launch kiosk on tty1 ────────────────────────
+echo "→ Writing $BASH_PROFILE..."
+cat > "$BASH_PROFILE" << EOF
+# ~/.bash_profile - executed for login shells (including autologin on tty1)
+
+# Source .bashrc if present (standard practice)
+if [ -f "\$HOME/.bashrc" ]; then
+    . "\$HOME/.bashrc"
+fi
+
+# Start the kiosk when autologged-in on tty1.
+# cage (Wayland compositor + Chromium) must run from the tty1 login session
+# so it takes ownership of tty1 and is visible on the monitor.
+# When cage exits, this shell exits → getty re-autologins → kiosk restarts.
+if [[ "\$(tty)" == "/dev/tty1" ]]; then
+    exec $KIOSK_SCRIPT
+fi
+EOF
+chown "$KIOSK_USER:$KIOSK_USER" "$BASH_PROFILE"
+
+# ── 3. Remove old kiosk.service if present (replaced by .bash_profile) ──────
+if systemctl is-enabled kiosk.service &>/dev/null; then
+    echo "→ Disabling legacy kiosk.service..."
+    sudo systemctl disable kiosk.service
+    sudo systemctl stop kiosk.service 2>/dev/null || true
+fi
 
 echo ""
-echo "✓ Kiosk service installed and enabled!"
+echo "✓ Kiosk auto-start configured!"
 echo ""
 echo "The kiosk will start automatically on next boot."
+echo "(dtk.service starts Docker/backend; autologin starts cage on tty1)"
 echo ""
-echo "To control it:"
-echo "  sudo systemctl start kiosk    # Start now"
-echo "  sudo systemctl stop kiosk     # Stop"
-echo "  sudo systemctl status kiosk   # Check status"
-echo "  sudo systemctl disable kiosk  # Disable auto-start"
+echo "To apply immediately without rebooting:"
+echo "  exec /home/pi/dtk/scripts/start-kiosk.sh"
+echo ""
+echo "To disable auto-start, remove the tty1 block from $BASH_PROFILE"
 echo ""
