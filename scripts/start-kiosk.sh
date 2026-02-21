@@ -12,7 +12,7 @@ echo ""
 echo -n "Waiting for frontend at http://localhost:3000..."
 until curl -sSf http://localhost:3000 >/dev/null 2>&1; do
   echo -n "."
-  sleep 1
+  sleep 0.2
 done
 echo " ✓ Ready!"
 
@@ -30,4 +30,9 @@ exec cage -- chromium-browser \
   --disable-features=TranslateUI \
   --overscroll-history-navigation=0 \
   --check-for-update-interval=31536000 \
+  --no-first-run \
+  --disable-sync \
+  --disable-background-networking \
+  --disable-default-apps \
+  --disable-extensions \
   http://localhost:3000

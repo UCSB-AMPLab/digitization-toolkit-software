@@ -22,9 +22,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-user} -d ${DATABASE_NAME:-digitization_toolkit}"]
-      interval: 10s
+      interval: 2s
       timeout: 5s
-      retries: 5
+      retries: 15
+      start_period: 5s
 
   # Backend service (optional for Docker-based development)
   # On Raspberry Pi with cameras, run backend natively: cd backend && pixi run dev
@@ -80,9 +81,8 @@ services:
       # (e.g. ORIGIN=http://192.168.1.x:3000). Not needed for API-only frontends.
       # - ORIGIN=http://localhost:3000
       - NODE_ENV=production
-    depends_on:
-      db:
-        condition: service_healthy
+    # No depends_on db — the frontend is a Node.js API proxy and never connects
+    # to Postgres directly. Removing this lets db and frontend start in parallel.
 
 volumes:
   postgres_data:
