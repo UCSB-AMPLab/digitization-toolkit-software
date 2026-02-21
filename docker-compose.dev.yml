@@ -11,6 +11,7 @@ services:
     ports:
       - "5173:5173"
     environment:
+      - NODE_ENV=development
       - NPM_CONFIG_AUDIT=false
       - NPM_CONFIG_FUND=false
     volumes:
@@ -22,7 +23,6 @@ services:
     command: >
       sh -c "
         npm install &&
-        npx svelte-kit sync &&
         npm run dev -- --host 0.0.0.0
       "
 
