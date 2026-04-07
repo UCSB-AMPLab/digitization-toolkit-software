@@ -15,18 +15,15 @@ echo "=========================================="
 echo ""
 
 # Start Docker services (DB + Frontend)
+# Uses docker-compose.pi.yml overlay for proper appliance volume paths (/var/lib/dtk, /var/log/dtk)
 echo "→ Starting database and frontend containers..."
-docker compose up -d
+# --pull never: skip registry checks (device is offline after initial build)
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never
 
 echo ""
-echo "→ Waiting for database to be ready..."
-sleep 3
-
-# Check if database is healthy
-if ! docker compose ps | grep -q "db.*healthy"; then
-    echo "⚠ Warning: Database may still be starting up"
+echo "→ Starting native backend with pixi..."
+PIXI="${HOME}/.pixi/bin/pixi"
+if [ ! -x "$PIXI" ]; then
+    PIXI="$(command -v pixi 2>/dev/null || echo pixi)"
 fi
-
-echo ""
-# Start native backend
-./scripts/run_backend_native.sh
+cd "$PROJECT_ROOT/backend" && "$PIXI" run start

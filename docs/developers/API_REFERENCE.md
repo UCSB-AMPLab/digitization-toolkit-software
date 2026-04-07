@@ -2527,7 +2527,7 @@ LOG_LEVEL=info
 
 ### CORS Configuration
 
-Currently allows `http://localhost:5173` (Svelte dev server).
+Currently allows `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
 
 **For production**, update `app/main.py`:
 ```python
