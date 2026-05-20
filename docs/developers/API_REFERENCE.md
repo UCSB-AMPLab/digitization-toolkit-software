@@ -1,6 +1,5 @@
 # Digitization Toolkit - API Reference and Implementation Guide
 
-
 Documentation of the backend API endpoints, data models, implementation details, and code examples for frontend integration.
 
 ## Table of Contents
@@ -12,17 +11,19 @@ Documentation of the backend API endpoints, data models, implementation details,
    - [Option 1: Interactive Docs on Swagger UI (Recommended)](#41-option-1-interactive-docs-on-swagger-ui-recommended)
    - [Option 2: Complete Testing Workflow in Swagger UI](#42-option-2-complete-testing-workflow-in-swagger-ui)
    - [Option 3: Run Test Suite](#43-option-3-run-test-suite)
-5. [Authentication](#5-authentication)
-6. [Documents](#6-documents)
+5. [Authentication & User Management](#5-authentication--user-management)
+6. [Records](#6-records)
 7. [Projects](#7-projects)
-8. [Cameras](#8-cameras)
-9. [Health Check](#9-health-check)
-10. [Data Models](#10-data-models)
-11. [Error Handling](#11-error-handling)
-12. [Code Examples](#12-code-examples)
-13. [Frontend Integration](#13-frontend-integration)
-14. [Configuration](#14-configuration)
-15. [Next Steps](#15-next-steps)
+8. [Collections](#8-collections)
+9. [Cameras](#9-cameras)
+10. [System](#10-system)
+11. [Health Check](#11-health-check)
+12. [Data Models](#12-data-models)
+13. [Error Handling](#13-error-handling)
+14. [Code Examples](#14-code-examples)
+15. [Frontend Integration](#15-frontend-integration)
+16. [Configuration](#16-configuration)
+
 ---
 
 ## 1. Quick Start
@@ -69,7 +70,7 @@ python tests/validate_system.py       # System validation
 
 Expected output:
 ```
-==================== test session starts ====================
+==================== test session results ====================
 platform win32 -- Python 3.x.x
 collected X items
 
@@ -90,100 +91,134 @@ tests/unit/test_api.py ......                        [100%]
 | **Live Scan Example** | [Code Examples](#live-scan-page-example) | How to build live scan page |
 | **Gallery Example** | [Code Examples](#galleryview-page-example) | How to build gallery page |
 | **Device Setup** | `device_setup_CM4.qmd`, `device_setup_pi5_imx519.qmd` | Raspberry Pi configuration |
+
 ---
 
 ## 3. API Endpoints Overview
 
-The Digitization Toolkit API consists of **27 endpoints** organized into **5 routers**.
+The Digitization Toolkit API consists of **49 endpoints** organized into **7 routers**.
 All endpoints run on: [`http://localhost:8000`](http://localhost:8000).
 
+### **Auth & Users Routers** (`/auth`, `/users`)
 
-### **Auth Router** (`/auth`)
-User authentication and session management.
+User authentication, session management, and user administration.
 
-- User registration and login
-- JWT access token issuance and refresh
-- Password change functionality
+- Registration, login, token refresh, password change
+- `GET /users/me` for the current user's profile and role
+- Admin-only endpoints to list users, change roles, and deactivate accounts
 
-### **Documents Router** (`/documents`)
-Full CRUD for digitized documents with typology support:
+### **Records Router** (`/records`)
 
-- book
-- dossier
-- document
-- map
-- planimetry
-- other
+Full CRUD for archival records and their captured images.
 
-Supports metadata, EXIF data, and camera settings linkage.
+A **Record** represents a physical object being digitized (book, map, document, etc.). Each Record can have multiple **RecordImages** — individual scans or photographs.
+
+Supported typologies:
+- `book`, `dossier`, `document`, `map`, `planimetry`, `other`
 
 ### **Projects Router** (`/projects`)
-Project-based organization for grouping documents into collections.
 
-- Create and list projects
-- Add/remove documents from projects
+Project-based organization for grouping records.
+
+- Create, update, delete projects
+- Add/remove records from projects
+- Initialize project filesystem structure on the device
+
+### **Collections Router** (`/collections`)
+
+Nested collection hierarchy within projects.
+
+- Create top-level collections inside a project
+- Create sub-collections nested inside other collections
+- Full hierarchy traversal
 
 ### **Cameras Router** (`/cameras`)
+
 Camera device management, capture control, and calibration.
 
 - Device enumeration with hardware detection
-- Single and dual camera capture with database integration
+- Single and dual camera capture with automatic database record creation
 - Focus and white balance calibration
-- Camera settings management per document
-- Camera registry for persistent calibration data
+- Camera settings management per record image
+
+### **System Router** (`/system`)
+
+Hardware monitoring endpoints (temperature, etc.).
 
 ### **Health Check** (`/health`)
-Simple system status endpoint used for monitoring and validation.
+
+Simple system status endpoint for monitoring and validation.
 
 ---
 
 Endpoints are grouped by functionality and implemented using FastAPI routers.
 Below is a **complete endpoint reference overview**.
 
+> **Legend:**
+> - `public` — no authentication required
+> - `reviewer+` — any authenticated user (reviewer, operator, or admin)
+> - `operator+` — operator or admin only
+> - `admin` — admin only
 
-| Method | Endpoint | Auth | Purpose |
+| Method | Endpoint | Role | Purpose |
 |--------|----------|------|---------|
-| POST | `/auth/register` | ❌ | Register new user |
-| POST | `/auth/login` | ❌ | Login, get token |
-| POST | `/auth/refresh` | ✅ | Refresh token |
-| POST | `/auth/password-reset` | ✅ | Change password |
-| POST | `/documents/` | ✅ | Create document |
-| GET | `/documents/` | ✅ | List documents |
-| GET | `/documents/{id}` | ❌ | Get document |
-| PATCH | `/documents/{id}` | ✅ | Update document |
-| PUT | `/documents/{id}` | ✅ | Replace document |
-| DELETE | `/documents/{id}` | ✅ | Delete document |
-| POST | `/projects/` | ✅ | Create project |
-| GET | `/projects/` | ✅ | List projects |
-| GET | `/projects/{id}` | ✅ | Get project |
-| POST | `/projects/{id}/add_document/{doc_id}` | ✅ | Add doc to project |
-| POST | `/projects/{id}/remove_document/{doc_id}` | ✅ | Remove doc from project |
-| POST | `/cameras/` | ✅ | Create camera settings |
-| GET | `/cameras/` | ✅ | List camera settings |
-| GET | `/cameras/{id}` | ✅ | Get camera settings |
-| PUT | `/cameras/settings/{id}` | ✅ | Update camera settings |
-| DELETE | `/cameras/settings/{id}` | ✅ | Delete camera settings |
-| GET | `/cameras/devices` | ❌ | List detected devices |
-| POST | `/cameras/capture` | ✅ | Single camera capture |
-| POST | `/cameras/capture/dual` | ✅ | Dual camera capture |
-| POST | `/cameras/calibrate` | ✅ | Calibrate autofocus |
-| POST | `/cameras/calibrate/white-balance` | ✅ | Calibrate white balance |
-| GET | `/health` | ❌ | Health check |
-
-> **Legend of the API endpoints matrix:** 
-> 
->✅ = requires authentication
->
->❌ = public access
+| POST | `/auth/register` | public | Register new user |
+| POST | `/auth/login` | public | Login, get token |
+| POST | `/auth/refresh` | reviewer+ | Refresh token |
+| POST | `/auth/password-reset` | reviewer+ | Change own password |
+| GET | `/users/me` | reviewer+ | Get current user's profile and role |
+| GET | `/auth/users` | admin | List all users |
+| GET | `/auth/users/{id}` | admin | Get user by ID |
+| PATCH | `/auth/users/{id}/role` | admin | Change user's role |
+| PATCH | `/auth/users/{id}/active` | admin | Activate/deactivate user |
+| DELETE | `/auth/{id}` | admin | Delete user |
+| POST | `/records/` | operator+ | Create record |
+| GET | `/records/` | reviewer+ | List records |
+| GET | `/records/{id}` | reviewer+ | Get record with images |
+| PATCH | `/records/{id}` | operator+ | Update record metadata |
+| DELETE | `/records/{id}` | operator+ | Delete record |
+| POST | `/records/{id}/images` | operator+ | Upload image to record |
+| GET | `/records/{id}/images` | reviewer+ | List images of a record |
+| GET | `/records/images/{img_id}` | reviewer+ | Get image metadata |
+| PATCH | `/records/images/{img_id}` | operator+ | Update image metadata |
+| DELETE | `/records/images/{img_id}` | operator+ | Delete image |
+| GET | `/records/images/{img_id}/file` | reviewer+ | Download image file |
+| GET | `/records/images/{img_id}/thumbnail` | reviewer+ | Get image thumbnail |
+| POST | `/projects/` | operator+ | Create project |
+| GET | `/projects/` | reviewer+ | List projects |
+| GET | `/projects/{id}` | reviewer+ | Get project |
+| PUT | `/projects/{id}` | operator+ | Update project |
+| DELETE | `/projects/{id}` | operator+ | Delete project |
+| POST | `/projects/{id}/initialize` | operator+ | Initialize project filesystem |
+| POST | `/projects/{id}/add_record/{rec_id}` | operator+ | Add record to project |
+| POST | `/projects/{id}/remove_record/{rec_id}` | operator+ | Remove record from project |
+| GET | `/projects/{id}/records` | reviewer+ | List project's records |
+| POST | `/collections/` | operator+ | Create collection |
+| GET | `/collections/` | reviewer+ | List collections |
+| GET | `/collections/{id}` | reviewer+ | Get collection |
+| GET | `/collections/{id}/hierarchy` | reviewer+ | Get collection with nested children |
+| PATCH | `/collections/{id}` | operator+ | Update collection |
+| DELETE | `/collections/{id}` | operator+ | Delete collection |
+| GET | `/cameras/devices` | reviewer+ | List detected camera devices |
+| POST | `/cameras/capture` | operator+ | Single camera capture |
+| POST | `/cameras/capture/dual` | operator+ | Dual camera capture |
+| POST | `/cameras/calibrate` | operator+ | Calibrate autofocus |
+| POST | `/cameras/calibrate/white-balance` | operator+ | Calibrate white balance |
+| POST | `/cameras/` | operator+ | Create camera settings |
+| GET | `/cameras/` | reviewer+ | List camera settings |
+| GET | `/cameras/{id}` | reviewer+ | Get camera settings |
+| PUT | `/cameras/settings/{id}` | operator+ | Update camera settings |
+| DELETE | `/cameras/settings/{id}` | operator+ | Delete camera settings |
+| GET | `/system/temperature` | reviewer+ | Get device CPU temperature |
+| GET | `/health` | public | Health check |
 
 ---
 
 ## 4. Testing the API
 
-### 4.1 Option 1: Interactive Docs on Swagger UI (Recommended)
+### 4.1 Option 1: Interactive Docs on Swagger UI
 
 The fastest way to test endpoints is using the interactive documentation.
-The interface allows to see request/response examples and test parameters directly.
 
 #### **Getting Started with Swagger UI**
 
@@ -193,131 +228,30 @@ The interface allows to see request/response examples and test parameters direct
    ```
 
 2. **You'll see:**
-   - List of all API endpoints grouped by category (Auth, Documents, Projects, Cameras) with collapsible sections
-   - Green `POST`, `GET`, `PATCH`, `PUT`, `DELETE` method badges
+   - All API endpoints grouped by tag (auth, users, records, projects, collections, cameras, system)
+   - Green `POST`, blue `GET`, orange `PATCH`, purple `PUT`, red `DELETE` method badges
 
 #### **Swagger UI Navigation Guide**
 
-##### Finding Endpoints
-
-```
-📌 Top-right corner: "Swagger UI" logo and version
-📌 Left side: Search box to find endpoints by name
-📌 Main area: All endpoints sorted by tags (Auth, Documents, Projects, Cameras, Health)
-```
-
-**Example:** To find the login endpoint:
-1. Look for the **Auth** section (it will have a blue badge)
-2. Expand the Auth section by clicking on it
-3. Scroll to find `POST /auth/login`
-
-**Step-by-step example of how to test an endpoint (e.g., Login):**
-
-**Step 1: Find the Endpoint**
-- Locate `POST /auth/login` under the **Auth** section
-- Click on the endpoint row to expand it
-
-**Step 2: Review Endpoint Details**
-Once expanded, you'll see:
-- **Description:** "Login and retrieve access token"
-- **Request body schema** with required fields (username, password)
-- **Response examples** showing expected 200 OK response
-
-**Step 3: Click "Try it out" Button**
-- Located on the right side of the expanded endpoint
-- Changes the interface to "request mode"
-- Text fields become editable
-
-**Step 4: Fill in Request Body**
-After clicking "Try it out", a text editor appears with a template:
-```json
-{
-  "username": "string",
-  "password": "string"
-}
-```
-
-Replace with real arbitrary values:
-```json
-{
-  "username": "john_doe",
-  "password": "secure_password_123"
-}
-```
-
-**Step 5: Click "Execute" Button**
-- Blue button below the request editor
-- Sends the request to the server
-- Shows loading spinner briefly
-
-**Step 6: View Response**
-
-After execution, you'll see:
-
-- Response headers (showing HTTP status):
-```
-HTTP/1.1 200 OK
-content-length: 156
-content-type: application/json
-date: Tue, 17 Dec 2024 10:30:45 GMT
-```
-
-- Response body (the actual data):
-```json
-{
-  "access_token": "eyJzdWIiOiIxIiwiZXhwIjoxNzM0NDUyNjAwfQ.sig...",
-  "token_type": "bearer"
-}
-```
-
-- cURL command (for reference):
-```bash
-curl -X 'POST' \
-  'http://localhost:8000/auth/login' \
-  -H 'accept: application/json' \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"john_doe","password":"secure_password_123"}'
-```
----
+**Example:** To test the login endpoint:
+1. Look for the **auth** section and expand it
+2. Click `POST /auth/login`
+3. Click **"Try it out"**, fill in credentials, click **"Execute"**
+4. Copy the `access_token` from the response
 
 **Using Bearer Tokens for Protected Endpoints**
 
-Many endpoints require authentication. Here's how to use your token:
+1. Test `POST /auth/login`, copy the `access_token`
+2. Click the green **"Authorize"** button (top-right)
+3. Paste the token (with or without `Bearer ` prefix) and click **"Authorize"**
+4. All subsequent requests automatically include your token
 
-**Step 1: Get Token from Login**
-1. Test `POST /auth/login` as shown above
-2. Copy the `access_token` value from the response
+**Testing a Protected Endpoint Example: Create Record**
 
-**Step 2: Authorize in Swagger UI**
-1. Click the green **"Authorize"** button in the top-right corner
-2. A modal dialog appears with an input field labeled "Value"
-3. Paste your token exactly as it appears (or with `Bearer ` prefix):
-   ```
-   Bearer eyJzdWIiOiIxIiwiZXhwIjoxNzM0NDUyNjAwfQ.sig...
-   ```
-   Or just the token without prefix (Swagger adds it automatically):
-   ```
-   eyJzdWIiOiIxIiwiZXhwIjoxNzM0NDUyNjAwfQ.sig...
-   ```
-4. Click **"Authorize"** button in the modal
-5. Click **"Close"** to dismiss the modal
-
-**Step 3: Test Protected Endpoints**
-Once authorized:
-- All subsequent requests automatically include your token
-- Protected endpoints (marked with 🔒 lock icon) will now work
-- Green checkmark appears next to "Authorize" button
-
-**Testing a Protected Endpoint Example: Create Document**
-
-1. After authorization, find `POST /documents/` under **Documents** section
-2. Click "Try it out"
-3. Fill in the request body:
+1. After authorization, find `POST /records/` under **records** section
+2. Click "Try it out", fill in the request body:
    ```json
    {
-     "filename": "book_page_001.jpg",
-     "file_path": "/mnt/sd/book_page_001.jpg",
-     "format": "jpeg",
      "title": "Ancient Manuscript",
      "object_typology": "book",
      "author": "Unknown",
@@ -325,67 +259,36 @@ Once authorized:
      "date": "1500-01-01"
    }
    ```
-4. Click "Execute"
-5. View successful 201 Created response with document ID
+3. Click "Execute": view 201 Created response with record ID
 
-##### Key Swagger UI Features
+##### Swagger UI Features
 
-**Response Status Indicators**
-- **2xx (Green):** Success - request worked as expected
-- **4xx (Red):** Client error - check your request
+- **2xx (Green):** Success
+- **4xx (Red):** Client error - check your request or role permissions
 - **5xx (Red):** Server error - backend issue
-
-**Example Responses**
-- Click the "Example Value" tab to see formatted JSON
-- Click "Schema" tab to see field definitions
-- Useful for understanding required vs optional fields
-
-**Schemas Tab**
-- Shows data models used by the API
-- Each field shows: name, type, description, constraints
-- Example: "username" is a string, min 3 characters, max 50
-
-**Testing Different Response Scenarios**
-
-Create a document successfully:
-```json
-{
-  "filename": "test.jpg",
-  "file_path": "/mnt/sd/test.jpg",
-  "format": "jpeg",
-  "object_typology": "book"
-}
-```
-Expected: **201 Created** ✅
-
-Attempt without required fields:
-```json
-{
-  "title": "No filename"
-}
-```
-Expected: **400 Bad Request** with validation errors ❌
 
 ---
 
 ### 4.2 Option 2: Complete Testing Workflow in Swagger UI
 
-Here's a recommended order to test the entire API:
+Recommended order to test the entire API:
 
 1. **Health Check** → `GET /health` (no auth needed)
-2. **Register User** → `POST /auth/register` 
+2. **Register User** → `POST /auth/register` (first user becomes admin)
 3. **Login** → `POST /auth/login` (save token)
 4. **Authorize** → Click Authorize button, paste token
-5. **Create Project** → `POST /projects/`
-6. **Create Document** → `POST /documents/`
-7. **Add to Project** → `POST /projects/{id}/add_document/{doc_id}`
-8. **Get Document** → `GET /documents/{id}`
-9. **Update Document** → `PATCH /documents/{id}`
-10. **Delete Document** → `DELETE /documents/{id}`
+5. **Get Current User** → `GET /users/me` (check your role)
+6. **Create Project** → `POST /projects/`
+7. **Create Record** → `POST /records/`
+8. **Upload Image** → `POST /records/{id}/images`
+9. **Add to Project** → `POST /projects/{id}/add_record/{rec_id}`
+10. **Get Record** → `GET /records/{id}`
+11. **Delete Record** → `DELETE /records/{id}`
 
 ---
 
 ### 4.3 Option 3: Run Test Suite
+
 ```bash
 cd backend
 
@@ -397,9 +300,6 @@ python -m pytest tests/unit/          # Unit tests (API, models, schemas)
 python -m pytest tests/integration/   # Integration tests (capture workflow)
 python -m pytest tests/test_cameras.py -m camera  # Camera tests (requires hardware)
 
-# Run system validation
-python tests/validate_system.py
-
 # Run with verbose output
 python -m pytest -v
 
@@ -408,23 +308,14 @@ python -m pytest --cov=app --cov-report=html
 ```
 
 **Test Organization:**
-- `tests/unit/test_api.py` - API endpoint validation, imports, models, schemas
-- `tests/integration/test_capture_integration.py` - Full capture workflow with database
-- `tests/test_cameras.py` - Camera hardware tests (requires connected cameras)
-- `tests/validate_system.py` - Complete system validation script
-- `tests/conftest.py` - Shared pytest fixtures
+- `tests/unit/test_api.py` — API endpoint validation, imports, models, schemas
+- `tests/integration/test_capture_integration.py` — Full capture workflow with database
+- `tests/test_cameras.py` — Camera hardware tests (requires connected cameras)
+- `tests/validate_system.py` — Complete system validation script
+- `tests/conftest.py` — Shared pytest fixtures
 
-### Option 4: Python Code Examples
-See [Code Examples](#code-examples) section below for complete Python workflows:
-- Registration and login
-- Document creation with typology
-- Project management
-- Gallery listing
+### Option 4: Manual Testing (cURL)
 
-### Option 5: JavaScript/TypeScript
-Frontend examples provided in [Frontend Integration](#frontend-integration) section.
-
-### Option 6: Manual Testing (cURL)
 ```bash
 # Health check
 curl http://localhost:8000/health
@@ -438,6 +329,10 @@ curl -X POST http://localhost:8000/auth/register \
 curl -X POST http://localhost:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"test","password":"pass123"}'
+
+# Get current user's role
+curl http://localhost:8000/users/me \
+  -H "Authorization: Bearer <token>"
 ```
 
 ---
@@ -448,27 +343,33 @@ curl -X POST http://localhost:8000/auth/login \
 ```
 http://localhost:8000/redoc
 ```
-- Cleaner, more organized layout
-- Better for reading documentation
-- Cannot test endpoints directly
 
 **OpenAPI JSON** (Raw specification):
 ```
 http://localhost:8000/openapi.json
 ```
-- Machine-readable API specification
-- Used by third-party tools
-- Complete schema and endpoint definitions
 
 ---
 
-Below are provided specific testing examples in Swagger UI for all the 21 endpoints.
+## 5. Authentication & User Management
 
-## 5. Authentication
+### Role System
+
+The API enforces three roles with graduated permissions:
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | Full access including user management and system configuration |
+| `operator` | Full access to records, projects, collections, and cameras — cannot manage users |
+| `reviewer` | Read-only access to records, projects, collections, and camera devices |
+
+**Bootstrap behavior**: The first user to register becomes `admin`. All subsequent registrations receive the `reviewer` role. Use `PATCH /auth/users/{id}/role` to promote users.
+
+---
 
 ### POST `/auth/register`
 
-Register a new user.
+Register a new user. The first user becomes `admin`; all subsequent users become `reviewer`.
 
 **Request**
 ```json
@@ -485,14 +386,15 @@ Register a new user.
   "id": 1,
   "username": "john_doe",
   "email": "john@example.com",
+  "role": "admin",
   "is_active": true,
   "created_at": "2024-12-17T10:30:00"
 }
 ```
 
 **Errors**
-- `409 Conflict` - Username or email already exists
-- `400 Bad Request` - Invalid email format or missing fields
+- `409 Conflict` — Username or email already exists
+- `400 Bad Request` — Invalid email format or missing fields
 
 **Python Example**
 ```python
@@ -507,7 +409,7 @@ response = requests.post(
     }
 )
 user = response.json()
-print(f"Registered: {user['username']}")
+print(f"Registered: {user['username']} (role: {user['role']})")
 ```
 
 ---
@@ -533,8 +435,8 @@ Login and get access token.
 ```
 
 **Errors**
-- `401 Unauthorized` - Invalid credentials
-- `403 Forbidden` - User account inactive
+- `401 Unauthorized` — Invalid credentials
+- `403 Forbidden` — User account inactive
 
 **Python Example**
 ```python
@@ -543,7 +445,39 @@ response = requests.post(
     json={"username": "john_doe", "password": "secure_password_123"}
 )
 token = response.json()["access_token"]
-print(f"Token: {token[:20]}...")
+```
+
+---
+
+### GET `/users/me`
+
+Get the current authenticated user's profile, including their role. Used by the frontend immediately after login to determine which UI sections to show.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Response** (200 OK)
+```json
+{
+  "id": 1,
+  "username": "john_doe",
+  "email": "john@example.com",
+  "role": "admin",
+  "is_active": true,
+  "created_at": "2024-12-17T10:30:00"
+}
+```
+
+**Python Example**
+```python
+response = requests.get(
+    "http://localhost:8000/users/me",
+    headers={"Authorization": f"Bearer {token}"}
+)
+me = response.json()
+print(f"Role: {me['role']}")
 ```
 
 ---
@@ -565,23 +499,11 @@ Authorization: Bearer <current_token>
 }
 ```
 
-**Errors**
-- `401 Unauthorized` - Token expired or invalid
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/auth/refresh",
-    headers={"Authorization": f"Bearer {old_token}"}
-)
-new_token = response.json()["access_token"]
-```
-
 ---
 
 ### POST `/auth/password-reset`
 
-Change user password (requires valid token and old password verification).
+Change own password. Requires the current password.
 
 **Headers**
 ```
@@ -603,32 +525,82 @@ Authorization: Bearer <token>
 }
 ```
 
-**Errors**
-- `401 Unauthorized` - Invalid old password or token expired
-- `400 Bad Request` - New password invalid
+---
 
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/auth/password-reset",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "old_password": "old_pass",
-        "new_password": "new_pass"
-    }
-)
-print(response.json()["detail"])
+### GET `/auth/users` — Admin only
+
+List all registered users.
+
+**Query Parameters**
+- `skip` (int, default: 0)
+- `limit` (int, default: 100, max: 1000)
+
+**Response** (200 OK) — array of `UserRead`
+
+---
+
+### GET `/auth/users/{user_id}` — Admin only
+
+Get a user by ID.
+
+**Response** (200 OK) — `UserRead`
+
+---
+
+### PATCH `/auth/users/{user_id}/role` — Admin only
+
+Change a user's role. Admins cannot change their own role.
+
+**Request**
+```json
+{
+  "role": "operator"
+}
+```
+
+Valid roles: `"admin"`, `"operator"`, `"reviewer"`
+
+**Response** (200 OK) — updated `UserRead`
+
+**Errors**
+- `400 Bad Request` — Trying to change own role
+- `404 Not Found` — User ID doesn't exist
+
+---
+
+### PATCH `/auth/users/{user_id}/active` — Admin only
+
+Activate or deactivate a user account. Admins cannot deactivate their own account.
+
+**Query Parameters**
+- `is_active` (bool, required)
+
+**Response** (200 OK) — updated `UserRead`
+
+---
+
+### DELETE `/auth/{user_id}` — Admin only
+
+Permanently delete a user account.
+
+**Response** (200 OK)
+```json
+{
+  "detail": "user deleted successfully"
+}
 ```
 
 ---
 
-## 6. Documents
+## 6. Records
 
-All document endpoints require authentication except GET by ID (public read).
+A **Record** is a conceptual archival object (a book, map, document, etc.) that groups one or more **RecordImages** — the individual captures or scans. Records hold the descriptive metadata; RecordImages hold the file paths, camera settings, and EXIF data.
 
-### POST `/documents/`
+---
 
-Create a new document with optional camera settings and EXIF data.
+### POST `/records/` — Operator+
+
+Create a new archival record.
 
 **Headers**
 ```
@@ -638,72 +610,62 @@ Authorization: Bearer <token>
 **Request**
 ```json
 {
-  "filename": "ancient_book_001.jpg",
-  "file_path": "/mnt/sd/digitized/ancient_book_001.jpg",
-  "format": "jpeg",
   "title": "Ancient Manuscript",
   "description": "Historical document from 1500s",
-  "file_size": 8388608,
-  "resolution_width": 4000,
-  "resolution_height": 3000,
   "object_typology": "book",
   "author": "Unknown Scribe",
   "material": "parchment",
   "date": "1500-01-01",
+  "project_id": 1,
+  "collection_id": null,
   "custom_attributes": "{\"isbn\": \"N/A\", \"condition\": \"fair\", \"pages\": 150}"
 }
 ```
 
-**Response** (201 Created)
+**Response** (200 OK)
 ```json
 {
   "id": 1,
-  "filename": "ancient_book_001.jpg",
-  "file_path": "/mnt/sd/digitized/ancient_book_001.jpg",
-  "format": "jpeg",
   "title": "Ancient Manuscript",
   "object_typology": "book",
   "author": "Unknown Scribe",
   "material": "parchment",
   "date": "1500-01-01",
-  "uploaded_by": "john_doe",
-  "project_id": null,
+  "project_id": 1,
+  "collection_id": null,
+  "created_by": "john_doe",
   "created_at": "2024-12-17T10:30:00",
-  "modified_at": "2024-12-17T10:30:00"
+  "modified_at": "2024-12-17T10:30:00",
+  "images": []
 }
 ```
 
 **Errors**
-- `401 Unauthorized` - No or invalid token
-- `409 Conflict` - Filename already exists
+- `401 Unauthorized` — No or invalid token
+- `403 Forbidden` — Role insufficient (reviewer cannot create)
 
 **Python Example**
 ```python
-import json
-
-doc = requests.post(
-    "http://localhost:8000/documents/",
+rec = requests.post(
+    "http://localhost:8000/records/",
     headers={"Authorization": f"Bearer {token}"},
     json={
-        "filename": "book_001.jpg",
-        "file_path": "/mnt/sd/book_001.jpg",
-        "format": "jpeg",
-        "object_typology": "book",
         "title": "Ancient Book",
+        "object_typology": "book",
         "author": "Unknown",
         "material": "parchment",
         "date": "1500-01-01"
     }
 )
-doc_data = doc.json()
-print(f"Created document: {doc_data['id']}")
+rec_data = rec.json()
+print(f"Created record: {rec_data['id']}")
 ```
 
 ---
 
-### GET `/documents/`
+### GET `/records/` — Reviewer+
 
-List all documents (paginated, requires authentication).
+List all records (paginated).
 
 **Headers**
 ```
@@ -711,117 +673,58 @@ Authorization: Bearer <token>
 ```
 
 **Query Parameters**
-- `skip` (int, default: 0) - Number of documents to skip
-- `limit` (int, default: 100, max: 1000) - Number of documents to return
+- `skip` (int, default: 0)
+- `limit` (int, default: 100, max: 1000)
 
-**Example Request**
-```
-GET /documents/?skip=0&limit=50
-```
-
-**Response** (200 OK)
-```json
-[
-  {
-    "id": 1,
-    "filename": "book_001.jpg",
-    "file_path": "/mnt/sd/book_001.jpg",
-    "format": "jpeg",
-    "title": "Ancient Book",
-    "object_typology": "book",
-    "author": "Unknown",
-    "uploaded_by": "john_doe",
-    "created_at": "2024-12-17T10:30:00"
-  },
-  {
-    "id": 2,
-    "filename": "map_001.jpg",
-    "file_path": "/mnt/sd/map_001.jpg",
-    "format": "jpeg",
-    "title": "Historical Map",
-    "object_typology": "map",
-    "created_at": "2024-12-17T11:00:00"
-  }
-]
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/documents/",
-    headers={"Authorization": f"Bearer {token}"},
-    params={"skip": 0, "limit": 50}
-)
-documents = response.json()
-print(f"Found {len(documents)} documents")
-for doc in documents:
-    print(f"- {doc['filename']}: {doc['object_typology']}")
-```
+**Response** (200 OK) — array of `RecordRead`
 
 ---
 
-### GET `/documents/{id}`
+### GET `/records/{id}` — Reviewer+
 
-Get a specific document by ID (public, no authentication required).
+Get a specific record including all its images, camera settings, and EXIF data.
 
 **Response** (200 OK)
 ```json
 {
   "id": 1,
-  "filename": "book_001.jpg",
-  "file_path": "/mnt/sd/book_001.jpg",
-  "format": "jpeg",
-  "title": "Ancient Book",
-  "description": "Historical manuscript",
-  "file_size": 8388608,
-  "resolution_width": 4000,
-  "resolution_height": 3000,
+  "title": "Ancient Manuscript",
   "object_typology": "book",
-  "author": "Unknown",
-  "material": "parchment",
-  "date": "1500-01-01",
-  "uploaded_by": "john_doe",
+  "author": "Unknown Scribe",
   "project_id": 1,
-  "custom_attributes": "{\"isbn\": \"N/A\", \"condition\": \"fair\"}",
   "created_at": "2024-12-17T10:30:00",
-  "modified_at": "2024-12-17T10:30:00",
-  "camera_settings": {
-    "id": 1,
-    "camera_model": "Raspberry Pi Camera v3",
-    "iso": 100,
-    "aperture": 2.9
-  },
-  "exif_data": {
-    "id": 1,
-    "exposure_time": "1/100"
-  }
+  "images": [
+    {
+      "id": 1,
+      "filename": "20260109_143652_123_c0.jpg",
+      "file_path": "/var/lib/dtk/projects/my_project/images/main/20260109_143652_123_c0.jpg",
+      "format": "jpeg",
+      "resolution_width": 3840,
+      "resolution_height": 2160,
+      "role": "left",
+      "camera_settings": {
+        "id": 1,
+        "camera_model": "Arducam 16MP IMX519",
+        "iso": 100,
+        "aperture": 2.9
+      },
+      "exif_data": {
+        "id": 1,
+        "datetime_original": "2026-01-09T14:36:52"
+      }
+    }
+  ]
 }
 ```
 
 **Errors**
-- `404 Not Found` - Document ID doesn't exist
-
-**Python Example**
-```python
-response = requests.get("http://localhost:8000/documents/1")
-doc = response.json()
-print(f"{doc['title']} by {doc['author']}")
-print(f"Camera: {doc['camera_settings']['camera_model']}")
-```
+- `404 Not Found` — Record ID doesn't exist
 
 ---
 
-### PATCH `/documents/{id}`
+### PATCH `/records/{id}` — Operator+
 
-Partially update a document (only provided fields are updated).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Partially update a record's metadata (only provided fields are changed).
 
 **Request** (all fields optional)
 ```json
@@ -831,112 +734,90 @@ Authorization: Bearer <token>
 }
 ```
 
+**Response** (200 OK) — updated `RecordRead`
+
+---
+
+### DELETE `/records/{id}` — Operator+
+
+Delete a record and all its images.
+
 **Response** (200 OK)
 ```json
 {
-  "id": 1,
-  "title": "Updated Title",
-  "material": "parchment with leather binding",
-  ...
+  "detail": "record deleted"
 }
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Document ID doesn't exist
-
-**Python Example**
-```python
-response = requests.patch(
-    "http://localhost:8000/documents/1",
-    headers={"Authorization": f"Bearer {token}"},
-    json={"title": "New Title", "material": "new material"}
-)
-updated_doc = response.json()
-print(f"Updated: {updated_doc['title']}")
 ```
 
 ---
 
-### PUT `/documents/{id}`
+### POST `/records/{id}/images` — Operator+
 
-Replace entire document (all fields required).
+Upload an image file to a record. Accepts multipart form upload and creates a `RecordImage` with optional embedded camera settings and EXIF data.
 
 **Headers**
 ```
 Authorization: Bearer <token>
+Content-Type: multipart/form-data
 ```
+
+**Form Fields**
+- `file` (file, required) — The image file
+- `metadata` (JSON string, optional) — `RecordImageCreate` schema
+
+**Response** (200 OK) — `RecordImageRead`
+
+---
+
+### GET `/records/{id}/images` — Reviewer+
+
+List all images belonging to a record.
+
+**Response** (200 OK) — array of `RecordImageRead`
+
+---
+
+### GET `/records/images/{img_id}` — Reviewer+
+
+Get metadata for a specific image.
+
+**Response** (200 OK) — `RecordImageRead`
+
+---
+
+### PATCH `/records/images/{img_id}` — Operator+
+
+Update image metadata (sequence, role, thumbnail path).
 
 **Request**
 ```json
 {
-  "filename": "book_001_v2.jpg",
-  "file_path": "/mnt/sd/book_001_v2.jpg",
-  "format": "jpeg",
-  "title": "Ancient Book - Version 2",
-  "object_typology": "book",
-  "author": "Updated Author"
+  "sequence": 2,
+  "role": "right"
 }
-```
-
-**Response** (200 OK)
-```json
-{
-  "id": 1,
-  "filename": "book_001_v2.jpg",
-  ...
-}
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Document ID doesn't exist
-- `400 Bad Request` - Missing required fields
-
-**Python Example**
-```python
-response = requests.put(
-    "http://localhost:8000/documents/1",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "filename": "updated.jpg",
-        "file_path": "/mnt/sd/updated.jpg",
-        "format": "jpeg",
-        "title": "Updated Title"
-    }
-)
 ```
 
 ---
 
-### DELETE `/documents/{id}`
+### DELETE `/records/images/{img_id}` — Operator+
 
-Delete a document (also deletes associated camera settings and EXIF data).
+Delete an image and its associated file.
 
-**Headers**
-```
-Authorization: Bearer <token>
-```
+---
 
-**Response** (200 OK)
-```json
-{
-  "detail": "document deleted"
-}
-```
+### GET `/records/images/{img_id}/file` — Reviewer+
 
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Document ID doesn't exist
+Download the original image file. Supports `?token=<jwt>` query parameter for `<img src>` use in browsers.
 
-**Python Example**
-```python
-response = requests.delete(
-    "http://localhost:8000/documents/1",
-    headers={"Authorization": f"Bearer {token}"}
-)
-print(response.json()["detail"])
-```
+**Response** — File download (JPEG, TIFF, etc.)
+
+---
+
+### GET `/records/images/{img_id}/thumbnail` — Reviewer+
+
+Get a generated thumbnail of the image. Supports `?token=<jwt>` query parameter.
+
+**Response** — JPEG thumbnail
 
 ---
 
@@ -944,14 +825,9 @@ print(response.json()["detail"])
 
 All project endpoints require authentication.
 
-### POST `/projects/`
+### POST `/projects/` — Operator+
 
 Create a new project.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
 
 **Request**
 ```json
@@ -961,7 +837,7 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response** (201 Created)
+**Response** (200 OK)
 ```json
 {
   "id": 1,
@@ -973,91 +849,74 @@ Authorization: Bearer <token>
 ```
 
 **Errors**
-- `401 Unauthorized` - No or invalid token
-- `409 Conflict` - Project name already exists
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/projects/",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "name": "My Project",
-        "description": "Description here"
-    }
-)
-project = response.json()
-print(f"Created project: {project['id']}")
-```
+- `409 Conflict` — Project name already exists
 
 ---
 
-### GET `/projects/`
+### GET `/projects/` — Reviewer+
 
 List all projects (paginated).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
 
 **Query Parameters**
 - `skip` (int, default: 0)
 - `limit` (int, default: 100, max: 1000)
 
-**Response** (200 OK)
-```json
-[
-  {
-    "id": 1,
-    "name": "Book Digitization Project",
-    "description": "Scanning historical books",
-    "created_by": "john_doe",
-    "created_at": "2024-12-17T10:30:00"
-  }
-]
-```
+---
 
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/projects/",
-    headers={"Authorization": f"Bearer {token}"},
-    params={"skip": 0, "limit": 50}
-)
-projects = response.json()
-```
+### GET `/projects/{id}` — Reviewer+
+
+Get a specific project.
 
 ---
 
-### POST `/projects/{id}/initialize`
+### PUT `/projects/{id}` — Operator+
 
-Initialize project filesystem structure (requires authentication).
-
-Creates the directory structure for storing captured images, temporary files, and export packages.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Update a project's name or description.
 
 **Request**
 ```json
 {
-  "resolution": "medium"
+  "name": "Updated Project Name",
+  "description": "Updated description"
+}
+```
+
+**Errors**
+- `409 Conflict` — New name already in use by another project
+
+---
+
+### DELETE `/projects/{id}` — Operator+
+
+Delete a project. Associated records are unlinked but not deleted.
+
+**Response** (200 OK)
+```json
+{
+  "detail": "project deleted"
+}
+```
+
+---
+
+### POST `/projects/{id}/initialize` — Operator+
+
+Initialize project filesystem structure on the device.
+
+Creates the directory layout needed before capturing images.
+
+**Request**
+```json
+{
+  "resolution": "high"
 }
 ```
 
 **Response** (200 OK)
 ```json
 {
-  "detail": "project initialized",
-  "directories_created": [
-    "/var/lib/dtk/projects/my_project/images/main",
-    "/var/lib/dtk/projects/my_project/images/temp",
-    "/var/lib/dtk/projects/my_project/images/trash",
-    "/var/lib/dtk/projects/my_project/packages"
-  ]
+  "success": true,
+  "project_path": "/var/lib/dtk/projects/Book_Digitization_Project"
 }
 ```
 
@@ -1071,163 +930,152 @@ Authorization: Bearer <token>
 └── packages/      ← Export packages (IIIF, ZIP, etc.)
 ```
 
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Project ID doesn't exist
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/projects/1/initialize",
-    headers={"Authorization": f"Bearer {token}"},
-    json={"resolution": "medium"}
-)
-print(response.json()["detail"])
-```
-
 ---
 
-### GET `/projects/{id}/documents`
+### POST `/projects/{id}/add_record/{rec_id}` — Operator+
 
-Get all documents in a project (requires authentication).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Add an existing record to a project.
 
 **Response** (200 OK)
 ```json
-[
-  {
-    "id": 1,
-    "filename": "IMG_20260109_143022_c0.jpg",
-    "file_path": "/var/lib/dtk/projects/my_project/images/main/IMG_20260109_143022_c0.jpg",
-    "title": "Page 1",
-    "resolution_width": 3840,
-    "resolution_height": 2160,
-    "created_at": "2026-01-09T14:30:22"
-  }
-]
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Project ID doesn't exist
-
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/projects/1/documents",
-    headers={"Authorization": f"Bearer {token}"}
-)
-docs = response.json()
-print(f"Project has {len(docs)} documents")
+{
+  "detail": "record added"
+}
 ```
 
 ---
 
-### GET `/projects/{id}`
+### POST `/projects/{id}/remove_record/{rec_id}` — Operator+
 
-Get a specific project.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Remove a record from a project (unlinks it; does not delete the record).
 
 **Response** (200 OK)
+```json
+{
+  "detail": "record removed"
+}
+```
+
+---
+
+### GET `/projects/{id}/records` — Reviewer+
+
+List all records associated with a project.
+
+**Query Parameters**
+- `skip` (int, default: 0)
+- `limit` (int, default: 100, max: 1000)
+
+**Response** (200 OK) — array of `RecordRead`
+
+---
+
+## 8. Collections
+
+Collections provide a nested organizational hierarchy within projects. A collection can contain records directly or group sub-collections.
+
+### POST `/collections/` — Operator+
+
+Create a new collection. Specify either `project_id` (top-level) or `parent_collection_id` (nested), not both.
+
+**Request**
+```json
+{
+  "name": "Volume I",
+  "description": "First volume of the manuscript series",
+  "collection_type": "series",
+  "project_id": 1
+}
+```
+
+**Response** (201 Created) — `CollectionRead`
+
+**Errors**
+- `400 Bad Request` — Both or neither parent specified
+- `404 Not Found` — Parent project or collection not found
+
+---
+
+### GET `/collections/` — Reviewer+
+
+List collections with optional filters.
+
+**Query Parameters**
+- `project_id` (int, optional) — Filter by project (returns top-level collections only)
+- `parent_collection_id` (int, optional) — Filter by parent collection (returns sub-collections)
+- `skip` (int, default: 0)
+- `limit` (int, default: 100, max: 1000)
+
+**Response** (200 OK) — array of `CollectionRead`
+
+---
+
+### GET `/collections/{id}` — Reviewer+
+
+Get a specific collection.
+
+**Response** (200 OK) — `CollectionRead`
+
+---
+
+### GET `/collections/{id}/hierarchy` — Reviewer+
+
+Get a collection with its full nested child hierarchy and record counts.
+
+**Response** (200 OK) — `CollectionWithChildren`
+
 ```json
 {
   "id": 1,
-  "name": "Book Digitization Project",
-  "description": "Scanning historical books",
-  "created_by": "john_doe",
-  "created_at": "2024-12-17T10:30:00"
+  "name": "Volume I",
+  "record_count": 42,
+  "child_collections": [
+    {
+      "id": 2,
+      "name": "Chapter 1",
+      "record_count": 15,
+      "child_collections": []
+    }
+  ]
 }
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Project ID doesn't exist
-
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/projects/1",
-    headers={"Authorization": f"Bearer {token}"}
-)
-project = response.json()
 ```
 
 ---
 
-### POST `/projects/{id}/add_document/{doc_id}`
+### PATCH `/collections/{id}` — Operator+
 
-Add a document to a project.
+Update a collection's name, description, type, metadata, or move it to a different parent.
+Circular hierarchy creation is prevented.
+
+**Request** (all fields optional)
+```json
+{
+  "name": "Updated Name",
+  "parent_collection_id": 3
+}
+```
+
+**Errors**
+- `400 Bad Request` — Circular hierarchy detected
+
+---
+
+### DELETE `/collections/{id}` — Operator+
+
+Delete a collection. Child collections are cascade-deleted; records in this collection are orphaned.
+
+---
+
+## 9. Cameras
+
+### GET `/cameras/devices` — Reviewer+
+
+List available camera devices detected via libcamera/picamera2.
 
 **Headers**
 ```
 Authorization: Bearer <token>
 ```
-
-**Response** (200 OK)
-```json
-{
-  "detail": "document added to project"
-}
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Project or document doesn't exist
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/projects/1/add_document/5",
-    headers={"Authorization": f"Bearer {token}"}
-)
-print(response.json()["detail"])
-```
-
----
-
-### POST `/projects/{id}/remove_document/{doc_id}`
-
-Remove a document from a project.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Response** (200 OK)
-```json
-{
-  "detail": "document removed from project"
-}
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Project or document doesn't exist
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/projects/1/remove_document/5",
-    headers={"Authorization": f"Bearer {token}"}
-)
-```
-
----
-
-## 8. Cameras
-
-### GET `/cameras/devices`
-
-List available camera devices detected via libcamera/picamera2 (public endpoint).
 
 **Response** (200 OK)
 ```json
@@ -1253,36 +1101,15 @@ List available camera devices detected via libcamera/picamera2 (public endpoint)
 ]
 ```
 
-**Note**: Returns empty list on non-Pi systems or if camera libraries unavailable. Each device includes:
-- `hardware_id`: Unique camera identifier for registry lookup
-- `model`: Camera model name from libcamera
-- `index`: Camera index (0, 1) for capture operations
-- `location`: Physical location (cam0, cam1)
-- `machine_id`: Host machine identifier
-- `label`: User-friendly label from registry
-- `calibrated`: Whether focus calibration data exists
-
-**Python Example**
-```python
-response = requests.get("http://localhost:8000/cameras/devices")
-devices = response.json()
-for device in devices:
-    status = "✓ calibrated" if device['calibrated'] else "⚠ needs calibration"
-    print(f"[{device['index']}] {device['model']} - {status}")
-```
+Returns empty list on non-Pi systems or when camera libraries are unavailable.
 
 ---
 
-### POST `/cameras/capture`
+### POST `/cameras/capture` — Operator+
 
-Trigger a single image capture on specified camera (requires authentication).
+Trigger a single image capture on a specified camera.
 
-Captures image to local storage (microSD), extracts metadata, and creates database record automatically.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Captures the image to local storage, extracts metadata, and creates `RecordImage`, `CameraSettings`, and `ExifData` records automatically.
 
 **Request Body**
 ```json
@@ -1294,31 +1121,22 @@ Authorization: Bearer <token>
 }
 ```
 
-**Request Parameters:**
-- `project_name` (string, required): Project name (must exist, use `/projects/{id}/initialize` first)
-- `camera_index` (int, default: 0): Camera index (0 or 1)
-- `resolution` (string, default: "medium"): Image resolution:
-  - `"low"`: 2312x1736 (~4MP, 195 DPI)
-  - `"medium"`: 3840x2160 (~8MP, 350 DPI) - **Recommended**
-  - `"high"`: 4624x3472 (16MP, 420 DPI)
-- `include_resolution_in_filename` (bool, default: false): Add resolution to filename
+**Parameters:**
+- `project_name` (string, required) — Project name (use `/projects/{id}/initialize` first)
+- `camera_index` (int, default: 0) — Camera index (0 or 1)
+- `resolution` (string, default: "medium"):
+  - `"low"`: 2312×1736 (~4MP, 195 DPI)
+  - `"medium"`: 3840×2160 (~8MP, 350 DPI) — **Recommended**
+  - `"high"`: 4624×3472 (16MP, 420 DPI)
+- `include_resolution_in_filename` (bool, default: false)
 
 **Response** (200 OK)
 ```json
 {
   "success": true,
-  "file_path": "/var/lib/dtk/projects/BookScanning2024/images/main/IMG_20240117_143022.jpg",
+  "file_path": "/var/lib/dtk/projects/BookScanning2024/images/main/20240117_143022_000_c0.jpg",
   "timing": null,
   "error": null
-}
-```
-
-**Response on Error**
-```json
-{
-  "success": false,
-  "file_path": null,
-  "error": "Camera 0 is not connected"
 }
 ```
 
@@ -1327,13 +1145,7 @@ Authorization: Bearer <token>
 2. Loads calibration data from registry (if available)
 3. Captures image to project directory
 4. Extracts EXIF metadata
-5. Creates `DocumentImage` database record
-6. Creates `CameraSettings` record
-7. Creates `ExifData` record (if available)
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- Camera not connected - Returns success=false with error message
+5. Creates `RecordImage`, `CameraSettings`, and `ExifData` database records
 
 **Python Example**
 ```python
@@ -1343,8 +1155,7 @@ response = requests.post(
     json={
         "project_name": "BookScanning2024",
         "camera_index": 0,
-        "resolution": "medium",
-        "include_resolution_in_filename": False
+        "resolution": "medium"
     }
 )
 result = response.json()
@@ -1356,17 +1167,9 @@ else:
 
 ---
 
-### POST `/cameras/capture/dual`
+### POST `/cameras/capture/dual` — Operator+
 
-Trigger simultaneous capture on both cameras (requires authentication).
-
-Used for book scanning where left and right pages are captured together.
-Both images are stored locally and metadata saved to database.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Trigger simultaneous capture on both cameras.
 
 **Request Body**
 ```json
@@ -1378,19 +1181,16 @@ Authorization: Bearer <token>
 }
 ```
 
-**Request Parameters:**
-- `project_name` (string, required): Project name
-- `resolution` (string, default: "medium"): Image resolution (low/medium/high)
-- `include_resolution_in_filename` (bool, default: false): Add resolution to filename
-- `stagger_ms` (int, default: 20): Milliseconds delay between camera triggers
+**Parameters:**
+- `stagger_ms` (int, default: 20) — Milliseconds delay between camera triggers
 
 **Response** (200 OK)
 ```json
 {
   "success": true,
   "file_paths": [
-    "/var/lib/dtk/projects/BookScanning2024/images/main/IMG_20240117_143022_cam0.jpg",
-    "/var/lib/dtk/projects/BookScanning2024/images/main/IMG_20240117_143022_cam1.jpg"
+    "/var/lib/dtk/projects/BookScanning2024/images/main/20240117_143022_000_c0.jpg",
+    "/var/lib/dtk/projects/BookScanning2024/images/main/20240117_143022_020_c1.jpg"
   ],
   "timing": {
     "cam0_capture_ms": 245,
@@ -1401,49 +1201,11 @@ Authorization: Bearer <token>
 }
 ```
 
-**Automatic Actions:**
-1. Validates both cameras connected
-2. Loads calibration for both cameras
-3. Captures both images with stagger delay
-4. Creates two `DocumentImage` records
-5. Creates `CameraSettings` for each
-6. Creates `ExifData` for each
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- Camera not connected - Returns success=false with error
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/cameras/capture/dual",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "project_name": "BookScanning2024",
-        "resolution": "medium",
-        "stagger_ms": 20
-    }
-)
-result = response.json()
-if result['success']:
-    print(f"Captured {len(result['file_paths'])} images")
-    for path in result['file_paths']:
-        print(f"  - {path}")
-```
-
 ---
 
-### POST `/cameras/calibrate`
+### POST `/cameras/calibrate` — Operator+
 
-Run autofocus calibration to find optimal lens position (requires authentication).
-
-For fixed-distance setups (book scanning), this determines the best focus position
-which is stored in the camera registry and reused for faster captures.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Run autofocus calibration to find optimal lens position. Calibration data is saved to the camera registry and reused for faster captures.
 
 **Request Body**
 ```json
@@ -1464,36 +1226,11 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response Parameters:**
-- `lens_position`: Optimal lens position value (saved to registry)
-- `distance_meters`: Estimated focus distance
-- `af_time`: Autofocus operation time in seconds
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/cameras/calibrate",
-    headers={"Authorization": f"Bearer {token}"},
-    json={"camera_index": 0, "resolution": "high"}
-)
-result = response.json()
-if result['success']:
-    print(f"Calibrated: lens_position={result['lens_position']}")
-```
-
 ---
 
-### POST `/cameras/calibrate/white-balance`
+### POST `/cameras/calibrate/white-balance` — Operator+
 
-Calibrate white balance for consistent color reproduction (requires authentication).
-
-For best results, place a neutral gray card or white paper in the frame before running.
-The camera runs AWB until converges, then saves the gains for future captures.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Calibrate white balance. Place a neutral gray card in frame for best results.
 
 **Request Body**
 ```json
@@ -1515,44 +1252,17 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response Parameters:**
-- `awb_gains`: Red and blue channel gains (saved to registry)
-- `colour_temperature`: Detected color temperature in Kelvin
-- `converged`: Whether AWB algorithm converged successfully
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/cameras/calibrate/white-balance",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "camera_index": 0,
-        "resolution": "high",
-        "stabilization_frames": 30
-    }
-)
-result = response.json()
-if result['success'] and result['converged']:
-    print(f"WB Calibrated: {result['colour_temperature']}K")
-```
-
 ---
 
-### POST `/cameras/`
+### POST `/cameras/` — Operator+
 
-Create camera settings for a document (requires authentication).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Manually create camera settings for a record image.
 
 **Request**
 ```json
 {
-  "document_image_id": 1,
-  "camera_model": "Raspberry Pi Camera v3",
-  "camera_manufacturer": "Raspberry Pi Foundation",
+  "record_image_id": 1,
+  "camera_model": "Arducam 16MP IMX519",
   "iso": 100,
   "aperture": 2.9,
   "shutter_speed": "1/100",
@@ -1561,162 +1271,43 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response** (201 Created)
-```json
-{
-  "id": 1,
-  "document_image_id": 1,
-  "camera_model": "Raspberry Pi Camera v3",
-  "iso": 100,
-  "aperture": 2.9,
-  "created_at": "2024-12-17T10:30:00"
-}
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Document doesn't exist
-- `409 Conflict` - Settings already exist for document
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/cameras/",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "document_image_id": 1,
-        "camera_model": "Raspberry Pi Camera v3",
-        "iso": 100,
-        "aperture": 2.9
-    }
-)
-settings = response.json()
-```
+**Response** (201 Created) — `CameraSettingsRead`
 
 ---
 
-### GET `/cameras/`
+### GET `/cameras/` — Reviewer+
 
-List all camera settings (paginated, requires authentication).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+List all camera settings (paginated).
 
 **Query Parameters**
 - `skip` (int, default: 0)
 - `limit` (int, default: 100, max: 1000)
 
-**Response** (200 OK)
-```json
-[
-  {
-    "id": 1,
-    "document_image_id": 1,
-    "camera_model": "Raspberry Pi Camera v3",
-    "iso": 100,
-    "aperture": 2.9,
-    "created_at": "2024-12-17T10:30:00"
-  }
-]
-```
+---
 
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/cameras/",
-    headers={"Authorization": f"Bearer {token}"},
-    params={"limit": 50}
-)
-```
+### GET `/cameras/{id}` — Reviewer+
+
+Get specific camera settings by ID.
 
 ---
 
-### GET `/cameras/{id}`
+### PUT `/cameras/settings/{id}` — Operator+
 
-Get specific camera settings (requires authentication).
+Update camera settings (all fields optional).
 
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Response** (200 OK)
+**Request**
 ```json
 {
-  "id": 1,
-  "document_image_id": 1,
-  "camera_model": "Raspberry Pi Camera v3",
-  "camera_manufacturer": "Raspberry Pi Foundation",
-  "iso": 100,
-  "aperture": 2.9,
-  "shutter_speed": "1/100",
-  "white_balance": "daylight",
-  "flash_used": false,
-  "created_at": "2024-12-17T10:30:00"
-}
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Settings ID doesn't exist
-
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/cameras/1",
-    headers={"Authorization": f"Bearer {token}"}
-)
-settings = response.json()
-```
-
----
-
-### PUT `/cameras/settings/{id}`
-
-Update camera settings (requires authentication).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Request** (all fields optional)
-```json
-{
-  "camera_model": "Arducam IMX519",
   "iso": 200,
   "white_balance": "custom"
 }
 ```
 
-**Response** (200 OK)
-```json
-{
-  "id": 1,
-  "document_image_id": 1,
-  "camera_model": "Arducam IMX519",
-  "iso": 200,
-  "white_balance": "custom",
-  "created_at": "2024-12-17T10:30:00"
-}
-```
-
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Settings ID doesn't exist
-
 ---
 
-### DELETE `/cameras/settings/{id}`
+### DELETE `/cameras/settings/{id}` — Operator+
 
-Delete camera settings (requires authentication).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
+Delete camera settings.
 
 **Response** (200 OK)
 ```json
@@ -1725,13 +1316,42 @@ Authorization: Bearer <token>
 }
 ```
 
-**Errors**
-- `401 Unauthorized` - No or invalid token
-- `404 Not Found` - Settings ID doesn't exist
+---
+
+## 10. System
+
+### GET `/system/temperature` — Reviewer+
+
+Get Raspberry Pi CPU temperature via `vcgencmd measure_temp`.
+
+Returns `available: false` on non-Pi systems or when `vcgencmd` is not installed.
+
+**Headers**
+```
+Authorization: Bearer <token>
+```
+
+**Response** (200 OK)
+```json
+{
+  "temperature": 47.2,
+  "unit": "C",
+  "available": true
+}
+```
+
+**Response when unavailable**
+```json
+{
+  "temperature": null,
+  "unit": "C",
+  "available": false
+}
+```
 
 ---
 
-## 9. Health Check
+## 11. Health Check
 
 ### GET `/health`
 
@@ -1744,24 +1364,20 @@ Health check endpoint (no authentication required).
 }
 ```
 
-**Python Example**
-```python
-response = requests.get("http://localhost:8000/health")
-print(response.json()["status"])
-```
-
 ---
 
-## 10. Data Models
+## 12. Data Models
 
 ### UserCreate (Request)
 ```json
 {
   "username": "string",
-  "email": "string (must be valid email)",
-  "password": "string (min 8 chars recommended)"
+  "email": "string (valid email format)",
+  "password": "string"
 }
 ```
+
+Note: Role is assigned automatically by the server — not accepted from the request body.
 
 ### UserRead (Response)
 ```json
@@ -1769,73 +1385,113 @@ print(response.json()["status"])
   "id": "integer",
   "username": "string",
   "email": "string",
+  "role": "admin | operator | reviewer",
   "is_active": "boolean",
   "created_at": "datetime or null"
 }
 ```
 
----
-
-### DocumentCreate (Request)
+### UserRoleUpdate (Request — admin only)
 ```json
 {
-  "filename": "string (required)",
-  "file_path": "string (required)",
-  "format": "string (required, e.g., 'jpeg', 'tiff')",
-  "title": "string or null",
-  "description": "string or null",
-  "file_size": "integer or null (bytes)",
-  "resolution_width": "integer or null (pixels)",
-  "resolution_height": "integer or null (pixels)",
-  "uploaded_by": "string or null (auto-filled from token)",
-  "object_typology": "book|dossier|document|map|planimetry|other or null",
-  "author": "string or null",
-  "material": "string or null (e.g., 'paper', 'parchment')",
-  "date": "string or null (YYYY-MM-DD)",
-  "custom_attributes": "JSON string or null (typology-specific data)"
+  "role": "admin | operator | reviewer"
 }
 ```
 
-### DocumentRead (Response)
+---
+
+### RecordCreate (Request)
+```json
+{
+  "title": "string (required)",
+  "description": "string or null",
+  "object_typology": "book|dossier|document|map|planimetry|other or null",
+  "author": "string or null",
+  "material": "string or null",
+  "date": "string or null (YYYY-MM-DD)",
+  "custom_attributes": "JSON string or null (typology-specific data)",
+  "project_id": "integer or null",
+  "collection_id": "integer or null",
+  "created_by": "string or null (auto-filled from token if omitted)"
+}
+```
+
+### RecordRead (Response)
 ```json
 {
   "id": "integer",
-  "filename": "string",
-  "file_path": "string",
-  "format": "string",
-  "title": "string or null",
+  "title": "string",
   "description": "string or null",
-  "file_size": "integer or null",
-  "resolution_width": "integer or null",
-  "resolution_height": "integer or null",
-  "uploaded_by": "string or null",
-  "project_id": "integer or null",
   "object_typology": "string or null",
   "author": "string or null",
   "material": "string or null",
   "date": "string or null",
   "custom_attributes": "string or null",
+  "project_id": "integer or null",
+  "collection_id": "integer or null",
+  "created_by": "string or null",
   "created_at": "datetime or null",
   "modified_at": "datetime or null",
-  "camera_settings": "CameraSettingsRead or null",
-  "exif_data": "ExifDataRead or null"
+  "images": "array of RecordImageRead"
 }
 ```
 
-### DocumentUpdate (Request - PATCH only)
+### RecordUpdate (Request — PATCH only)
 ```json
 {
   "title": "string or null",
   "description": "string or null",
-  "file_size": "integer or null",
-  "resolution_width": "integer or null",
-  "resolution_height": "integer or null",
-  "project_id": "integer or null",
   "object_typology": "string or null",
   "author": "string or null",
   "material": "string or null",
   "date": "string or null",
-  "custom_attributes": "string or null"
+  "custom_attributes": "string or null",
+  "project_id": "integer or null",
+  "collection_id": "integer or null"
+}
+```
+
+---
+
+### RecordImageCreate (Request)
+```json
+{
+  "filename": "string (required)",
+  "file_path": "string (required)",
+  "format": "string (required, e.g. 'jpeg', 'tiff')",
+  "file_size": "integer or null (bytes)",
+  "resolution_width": "integer or null",
+  "resolution_height": "integer or null",
+  "capture_id": "string or null (UUID for grouping captures)",
+  "pair_id": "string or null (UUID for dual-camera pairs)",
+  "sequence": "integer or null",
+  "role": "string or null ('left', 'right', 'single', 'overview')",
+  "uploaded_by": "string or null",
+  "camera_settings": "CameraSettingsCreate or null",
+  "exif_data": "ExifDataCreate or null"
+}
+```
+
+### RecordImageRead (Response)
+```json
+{
+  "id": "integer",
+  "record_id": "integer",
+  "filename": "string",
+  "file_path": "string",
+  "thumbnail_path": "string or null",
+  "format": "string",
+  "file_size": "integer or null",
+  "resolution_width": "integer or null",
+  "resolution_height": "integer or null",
+  "capture_id": "string or null",
+  "pair_id": "string or null",
+  "sequence": "integer or null",
+  "role": "string or null",
+  "uploaded_by": "string or null",
+  "created_at": "datetime or null",
+  "camera_settings": "CameraSettingsRead or null",
+  "exif_data": "ExifDataRead or null"
 }
 ```
 
@@ -1865,7 +1521,6 @@ print(response.json()["status"])
 ### CameraSettingsCreate (Request)
 ```json
 {
-  "document_image_id": "integer (required)",
   "camera_model": "string or null",
   "camera_manufacturer": "string or null",
   "lens_model": "string or null",
@@ -1883,7 +1538,7 @@ print(response.json()["status"])
 ```json
 {
   "id": "integer",
-  "document_image_id": "integer",
+  "record_image_id": "integer",
   "camera_model": "string or null",
   "camera_manufacturer": "string or null",
   "lens_model": "string or null",
@@ -1900,7 +1555,7 @@ print(response.json()["status"])
 
 ---
 
-## 10.1. File Storage  Architecture
+## 12.1. File Storage Architecture
 
 ### Storage Structure
 
@@ -1925,15 +1580,13 @@ Images are stored on the Raspberry Pi's microSD card at `/var/lib/dtk/projects/`
 
 Captured images follow the format: `YYYYMMDD_HHMMSS_mmm_cX.jpg`
 
-- `YYYYMMDD` - Date (ISO format)
-- `HHMMSS` - Time (24-hour format)
-- `mmm` - Milliseconds (000-999)
-- `cX` - Camera index (c0, c1)
+- `YYYYMMDD` — Date (ISO format)
+- `HHMMSS` — Time (24-hour format)
+- `mmm` — Milliseconds (000–999)
+- `cX` — Camera index (c0, c1)
 
 **Example**: `20260109_143652_123_c0.jpg`
-- January 9, 2026
-- 14:36:52.123 UTC
-- Camera 0
+- January 9, 2026 · 14:36:52.123 UTC · Camera 0
 
 ### Data Flow Architecture
 
@@ -1945,76 +1598,75 @@ Captured images follow the format: `YYYYMMDD_HHMMSS_mmm_cX.jpg`
          ▼
 ┌──────────────────────┐
 │  FastAPI Endpoint    │  cameras.py
-│  (cameras.py)        │  - Validates request
-└────────┬─────────────┘  - Checks camera connection
-         │
+│  - Validates request │
+│  - Checks auth/role  │
+└────────┬─────────────┘
          ▼
 ┌──────────────────────────────────┐
 │  Capture Service                 │  capture/service.py
 │  - Loads calibration from        │  - Uses picamera2/libcamera
-│    camera registry                │  - Applies camera settings
-│  - Captures image to:             │
+│    camera registry               │  - Applies camera settings
+│  - Captures image to:            │
 │    /var/lib/dtk/projects/.../    │
-│    images/main/                   │
+│    images/main/                  │
 └────────┬─────────────────────────┘
-         │
          ▼
 ┌──────────────────────────────────┐
 │  Metadata Extraction             │  PIL / EXIF
-│  - Image dimensions              │  - Resolution
-│  - EXIF data (datetime, GPS)     │  - File size
+│  - Image dimensions              │
+│  - EXIF data (datetime, GPS)     │
 │  - Camera settings used          │
 └────────┬─────────────────────────┘
-         │
          ▼
 ┌──────────────────────────────────┐
 │  Create Database Records         │  SQLAlchemy ORM
-│  - DocumentImage (main record)   │
+│  - RecordImage (main record)     │
 │  - CameraSettings (capture cfg)  │
 │  - ExifData (image metadata)     │
 └────────┬─────────────────────────┘
-         │
          ▼
 ┌──────────────────────────────────┐
 │  PostgreSQL Database             │
-│  - Image metadata stored         │  - File path persisted
-│  - Linked to project             │  - Full audit trail
+│  - Image metadata stored         │
+│  - Linked to project + record    │
 └──────────────────────────────────┘
 ```
 
 ### Database Relationships
 
-All three record types link together:
-
 ```
-DocumentImage (file_path, project_id)
-    ├─> CameraSettings (camera_model, white_balance, lens_position)
-    ├─> ExifData (raw_exif, datetime_original, GPS)
-    ├─> Project (name, description)
-    └─> User (uploaded_by)
+Record (title, object_typology, project_id, collection_id)
+    └─> RecordImage[] (file_path, filename, format, role)
+            ├─> CameraSettings (camera_model, white_balance, lens_position)
+            └─> ExifData (raw_exif, datetime_original, GPS)
+
+Project (name, description)
+    └─> Record[]
+    └─> Collection[]
+            └─> Collection[] (nested sub-collections)
 ```
 
 ### Performance Metrics
 
 **Capture Speed:**
-- Single capture: ~3-4 seconds (camera init + capture + save)
-- Dual capture: ~5-7 seconds (parallel capture with 20ms stagger)
-- Database insert: ~100-150ms per document
+- Single capture: ~3–4 seconds (camera init + capture + save)
+- Dual capture: ~5–7 seconds (parallel capture with 20ms stagger)
+- Database insert: ~100–150ms per record
 
 **Throughput (Medium Resolution):**
 - Pages per hour: ~880 pph (single camera)
 - Book (300 pages): ~20 minutes
-- Dual camera: Effectively 1760 pph (both cameras)
+- Dual camera: Effectively 1760 pph
 
 **Storage Requirements:**
-- Low resolution (2312x1736): ~2-3 MB per image
-- Medium resolution (3840x2160): ~4-5 MB per image
-- High resolution (4624x3472): ~8-10 MB per image
-- 100-page book at medium: ~400-500 MB
+- Low resolution (2312×1736): ~2–3 MB per image
+- Medium resolution (3840×2160): ~4–5 MB per image
+- High resolution (4624×3472): ~8–10 MB per image
+- 100-page book at medium: ~400–500 MB
 
 ---
 
-## 11. Error Handling
+## 13. Error Handling
 
 All errors follow this format:
 
@@ -2032,24 +1684,27 @@ All errors follow this format:
 | 201 | Created | Successful POST (resource created) |
 | 400 | Bad Request | Validation error, missing fields |
 | 401 | Unauthorized | Invalid/missing token, wrong credentials |
-| 403 | Forbidden | User account inactive |
+| 403 | Forbidden | Role insufficient, or account inactive |
 | 404 | Not Found | Resource ID doesn't exist |
 | 409 | Conflict | Duplicate entry, resource already exists |
 | 500 | Internal Server Error | Unexpected server error |
 
+**403 vs 401:**
+- `401` — Token is missing, expired, or invalid
+- `403` — Token is valid but the user's role does not permit the operation
+
 ---
 
-## 12. Code Examples
+## 14. Code Examples
 
 ### Complete Workflow: Registration to Gallery
 
 ```python
 import requests
-import json
 
 BASE_URL = "http://localhost:8000"
 
-# 1. Register user
+# 1. Register first user (becomes admin)
 print("1. Registering user...")
 user_resp = requests.post(
     f"{BASE_URL}/auth/register",
@@ -2060,7 +1715,7 @@ user_resp = requests.post(
     }
 )
 user = user_resp.json()
-print(f"   ✓ Registered: {user['username']}")
+print(f"   Registered: {user['username']} (role: {user['role']})")
 
 # 2. Login
 print("\n2. Logging in...")
@@ -2069,114 +1724,83 @@ login_resp = requests.post(
     json={"username": "john_doe", "password": "secure_password_123"}
 )
 token = login_resp.json()["access_token"]
-print(f"   ✓ Token: {token[:20]}...")
+headers = {"Authorization": f"Bearer {token}"}
 
-# 3. Create project
-print("\n3. Creating project...")
+# 3. Get current user role (frontend uses this for dashboard routing)
+me_resp = requests.get(f"{BASE_URL}/users/me", headers=headers)
+me = me_resp.json()
+print(f"   Role: {me['role']}")
+
+# 4. Create project (operator+ required)
+print("\n4. Creating project...")
 project_resp = requests.post(
     f"{BASE_URL}/projects/",
-    headers={"Authorization": f"Bearer {token}"},
+    headers=headers,
     json={
         "name": "Book Digitization",
         "description": "Scanning historical books"
     }
 )
 project = project_resp.json()
-print(f"   ✓ Project: {project['name']} (ID: {project['id']})")
+print(f"   Project: {project['name']} (ID: {project['id']})")
 
-# 4. List devices
-print("\n4. Listing cameras...")
-devices_resp = requests.get(f"{BASE_URL}/cameras/devices")
+# 5. List devices
+print("\n5. Listing cameras...")
+devices_resp = requests.get(f"{BASE_URL}/cameras/devices", headers=headers)
 devices = devices_resp.json()
 if devices:
-    print(f"   ✓ Available cameras:")
     for dev in devices:
-        status = "✓ calibrated" if dev['calibrated'] else "⚠ needs calibration"
-        print(f"     [{dev['index']}] {dev['model']} - {status}")
+        status = "calibrated" if dev['calibrated'] else "needs calibration"
+        print(f"   [{dev['index']}] {dev['model']} - {status}")
 else:
-    print("   ⚠ No cameras detected (run on Raspberry Pi)")
+    print("   No cameras detected (run on Raspberry Pi)")
 
-# 5. Capture image directly (creates document automatically)
-print("\n5. Capturing image with camera...")
+# 6. Capture image (creates RecordImage automatically)
+print("\n6. Capturing image...")
 capture_resp = requests.post(
     f"{BASE_URL}/cameras/capture",
-    headers={"Authorization": f"Bearer {token}"},
+    headers=headers,
     json={
         "project_name": "Book Digitization",
         "camera_index": 0,
-        "resolution": "medium",
-        "include_resolution_in_filename": False
+        "resolution": "medium"
     }
 )
 capture_result = capture_resp.json()
 if capture_result['success']:
-    print(f"   ✓ Captured: {capture_result['file_path']}")
-    # Extract document ID from database query
-    # In practice, you'd query /documents/ to find the latest
+    print(f"   Captured: {capture_result['file_path']}")
 else:
-    print(f"   ✗ Capture failed: {capture_result.get('error')}")
-    # Fallback: Create document manually for demo
-    doc_resp = requests.post(
-        f"{BASE_URL}/documents/",
-        headers={"Authorization": f"Bearer {token}"},
+    print(f"   Capture failed: {capture_result.get('error')}")
+
+    # Fallback: create record manually
+    rec_resp = requests.post(
+        f"{BASE_URL}/records/",
+        headers=headers,
         json={
-            "filename": "ancient_book_001.jpg",
-            "file_path": "/mnt/sd/ancient_book_001.jpg",
-            "format": "jpeg",
-            "object_typology": "book",
             "title": "Ancient Manuscript",
+            "object_typology": "book",
             "author": "Unknown Scribe",
             "material": "parchment",
             "date": "1500-01-01",
-            "resolution_width": 4000,
-            "resolution_height": 3000
+            "project_id": project['id']
         }
     )
-    doc = doc_resp.json()
-    print(f"   ✓ Document: {doc['filename']} (ID: {doc['id']})")
+    rec = rec_resp.json()
+    print(f"   Created record: {rec['title']} (ID: {rec['id']})")
 
-# 6. Get latest document (from capture or manual creation)
-print("\n6. Fetching latest document...")
+# 7. List records (gallery)
+print("\n7. Fetching gallery...")
 list_resp = requests.get(
-    f"{BASE_URL}/documents/",
-    headers={"Authorization": f"Bearer {token}"},
-    params={"limit": 1}
-)
-docs = list_resp.json()
-if docs:
-    doc = docs[0]
-    print(f"   ✓ Found: {doc['filename']} (ID: {doc['id']})")
-    if doc.get('camera_settings'):
-        print(f"   ✓ Camera: {doc['camera_settings'].get('camera_model', 'N/A')}")
-
-# 7. Add document to project
-print("\n7. Adding document to project...")
-add_resp = requests.post(
-    f"{BASE_URL}/projects/{project['id']}/add_document/{doc['id']}",
-    headers={"Authorization": f"Bearer {token}"}
-)
-print(f"   ✓ {add_resp.json()['detail']}")
-
-# 8. List all documents (gallery)
-print("\n8. Fetching gallery...")
-list_resp = requests.get(
-    f"{BASE_URL}/documents/",
-    headers={"Authorization": f"Bearer {token}"},
+    f"{BASE_URL}/records/",
+    headers=headers,
     params={"limit": 50}
 )
-docs = list_resp.json()
-print(f"   ✓ Total documents: {len(docs)}")
-for d in docs[:3]:
-    print(f"   - {d['filename']}: {d.get('object_typology', 'unknown')}")
+records = list_resp.json()
+print(f"   Total records: {len(records)}")
+for r in records[:3]:
+    print(f"   - {r['title']}: {r.get('object_typology', 'unknown')}")
 
-# 9. Get full document details
-print("\n9. Fetching document details...")
-detail_resp = requests.get(f"{BASE_URL}/documents/{doc['id']}")
-full_doc = detail_resp.json()
-print(f"   ✓ {full_doc['title']} by {full_doc['author']}")
-print(f"   ✓ Camera: {full_doc['camera_settings']['camera_model']}")
-
-print("\n✅ Workflow complete!")
+print("\nWorkflow complete!")
 ```
 
 ---
@@ -2185,92 +1809,39 @@ print("\n✅ Workflow complete!")
 
 ```python
 def configuration_page_flow(token):
-    """
-    Example flow for the configuration/setup page.
-    User selects device, tests it, and chooses document typology.
-    """
-    
+    """Flow for the configuration/setup page: cameras, calibration, typology selector."""
+    headers = {"Authorization": f"Bearer {token}"}
+
     # Step 1: Get available cameras
-    print("Getting available cameras...")
-    devices_resp = requests.get(f"{BASE_URL}/cameras/devices")
-    devices = devices_resp.json()
-    print(f"Devices: {devices}")
-    
-    # Step 2: Test device
-    if devices:
-        device_id = devices[0]['id']
-        print(f"\nTesting device: {device_id}")
-        test_resp = requests.post(
-            f"{BASE_URL}/cameras/capture",
-            params={"device_id": device_id}
+    devices = requests.get(f"{BASE_URL}/cameras/devices", headers=headers).json()
+    print(f"Devices: {len(devices)} found")
+
+    # Step 2: Run calibration if needed
+    if devices and not devices[0]['calibrated']:
+        cal_resp = requests.post(
+            f"{BASE_URL}/cameras/calibrate",
+            headers=headers,
+            json={"camera_index": 0, "resolution": "high"}
         )
-        print(f"Result: {test_resp.json()['detail']}")
-    
+        result = cal_resp.json()
+        if result['success']:
+            print(f"Calibrated: lens_position={result['lens_position']}")
+
     # Step 3: Show available typologies
     typologies = ["book", "dossier", "document", "map", "planimetry", "other"]
-    print(f"\nAvailable document types: {typologies}")
-    selected_type = "book"
-    print(f"User selected: {selected_type}")
-    
-    # Step 4: Show dynamic fields for selected typology
+    print(f"Available document types: {typologies}")
+
+    # Step 4: Dynamic fields per typology
     typology_fields = {
-        "book": ["title", "author", "material", "date", "isbn", "publisher", "pages", "condition"],
+        "book": ["title", "author", "material", "date", "isbn", "publisher", "pages"],
         "dossier": ["title", "author", "date", "contents_summary"],
         "document": ["title", "author", "date", "signature"],
         "map": ["title", "region", "scale", "coverage"],
         "planimetry": ["title", "scale", "project_name"],
         "other": ["title", "description"]
     }
-    
-    print(f"\nFields for '{selected_type}': {typology_fields[selected_type]}")
-
-configuration_page_flow(token)
-```
-
----
-
-### Gallery/View Page Example
-
-```python
-def gallery_view(token):
-    """
-    Example flow for the gallery/view page.
-    Display all captured documents grouped by typology.
-    """
-    
-    # Fetch all documents
-    print("Fetching documents...")
-    list_resp = requests.get(
-        f"{BASE_URL}/documents/",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"limit": 100}
-    )
-    documents = list_resp.json()
-    
-    print(f"\nTotal Documents: {len(documents)}\n")
-    
-    # Group by typology
-    by_type = {}
-    for doc in documents:
-        typology = doc.get('object_typology', 'unknown')
-        if typology not in by_type:
-            by_type[typology] = []
-        by_type[typology].append(doc)
-    
-    # Display by typology
-    for typology, docs in sorted(by_type.items()):
-        print(f"\n{typology.upper()} ({len(docs)} items)")
-        print("-" * 60)
-        for doc in docs[:5]:  # Show first 5
-            print(f"  • {doc.get('title', doc['filename'])}")
-            print(f"    Author: {doc.get('author', 'N/A')}")
-            print(f"    Date: {doc.get('date', 'N/A')}")
-            print(f"    Path: {doc['file_path']}")
-            if doc.get('camera_settings'):
-                print(f"    Camera: {doc['camera_settings'].get('camera_model', 'N/A')}")
-            print()
-
-gallery_view(token)
+    selected = "book"
+    print(f"Fields for '{selected}': {typology_fields[selected]}")
 ```
 
 ---
@@ -2279,204 +1850,96 @@ gallery_view(token)
 
 ```python
 def live_scan_workflow(token, project_name="BookScanning2024"):
-    """
-    Example workflow for the live scan page.
-    User captures image - metadata is automatically saved.
-    """
-    
-    # 1. Get available cameras
-    print("1. Getting cameras...")
-    devices_resp = requests.get(f"{BASE_URL}/cameras/devices")
-    devices = devices_resp.json()
-    
+    """Workflow for the live scan page: capture → auto-save → optional metadata update."""
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Get cameras
+    devices = requests.get(f"{BASE_URL}/cameras/devices", headers=headers).json()
     if not devices:
-        print("   ⚠ No cameras detected")
+        print("No cameras detected")
         return
-    
-    selected_device = devices[0]
-    print(f"   Selected: [{selected_device['index']}] {selected_device['model']}")
-    if not selected_device['calibrated']:
-        print("   ⚠ Camera not calibrated - consider running calibration first")
-    
-    # 2. Trigger capture (automatically creates document record)
-    print("\n2. Triggering capture...")
+    selected = devices[0]
+    print(f"Selected: [{selected['index']}] {selected['model']}")
+
+    # 2. Capture (automatically creates RecordImage, CameraSettings, ExifData)
     capture_resp = requests.post(
         f"{BASE_URL}/cameras/capture",
-        headers={"Authorization": f"Bearer {token}"},
+        headers=headers,
         json={
             "project_name": project_name,
-            "camera_index": selected_device['index'],
-            "resolution": "medium",
-            "include_resolution_in_filename": False
+            "camera_index": selected['index'],
+            "resolution": "medium"
         }
     )
     result = capture_resp.json()
-    
-    if result['success']:
-        print(f"   ✓ Captured: {result['file_path']}")
-        
-        # 3. Get the created document to show details
-        print("\n3. Fetching document details...")
-        list_resp = requests.get(
-            f"{BASE_URL}/documents/",
-            headers={"Authorization": f"Bearer {token}"},
-            params={"limit": 1}  # Get most recent
+    if not result['success']:
+        print(f"Capture failed: {result['error']}")
+        return
+    print(f"Captured: {result['file_path']}")
+
+    # 3. Find the latest record and update its metadata
+    records = requests.get(
+        f"{BASE_URL}/records/",
+        headers=headers,
+        params={"limit": 1}
+    ).json()
+    if records:
+        rec_id = records[0]['id']
+        update_resp = requests.patch(
+            f"{BASE_URL}/records/{rec_id}",
+            headers=headers,
+            json={
+                "title": "Page 1 of Ancient Manuscript",
+                "object_typology": "book",
+                "author": "Unknown Scribe"
+            }
         )
-        docs = list_resp.json()
-        if docs:
-            doc = docs[0]
-            print(f"   ✓ Document ID: {doc['id']}")
-            print(f"   ✓ Resolution: {doc['resolution_width']}x{doc['resolution_height']}")
-            if doc.get('camera_settings'):
-                print(f"   ✓ Camera: {doc['camera_settings'].get('camera_model', 'N/A')}")
-            
-            # 4. Optional: Update document metadata after capture
-            print("\n4. Updating metadata...")
-            update_resp = requests.patch(
-                f"{BASE_URL}/documents/{doc['id']}",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "title": "Page 1 of Ancient Manuscript",
-                    "object_typology": "book",
-                    "author": "Unknown Scribe",
-                    "material": "parchment",
-                    "date": "1500-01-01"
-                }
-            )
-            updated = update_resp.json()
-            print(f"   ✓ Updated: {updated['title']}")
-    else:
-        print(f"   ✗ Capture failed: {result['error']}")
-
-live_scan_workflow(token)
-```
-
-**Note**: The capture endpoint now automatically:
-- Captures the image
-- Extracts resolution and EXIF data
-- Creates the DocumentImage record
-- Creates CameraSettings record
-- Returns the file path
-
-This eliminates the need to manually create documents after capture.
-
----
-
-## 13. Frontend Integration
-
-### Configuration Page (`pages/configurations`)
-
-**Goals:**
-- User authentication setup
-- Camera device testing and calibration
-- Document typology selection
-
-**API Calls:**
-1. `POST /auth/register` - Register new user (optional, if first time)
-2. `POST /auth/login` - User login
-3. `GET /cameras/devices` - Show available cameras with calibration status
-4. `POST /cameras/calibrate` - Calibrate camera focus (optional)
-5. `POST /cameras/calibrate/white-balance` - Calibrate white balance (optional)
-6. `POST /cameras/capture` - Test camera capture
-
-**Frontend Flow:**
-```
-1. Show login form
-2. User enters credentials
-3. POST /auth/login → receive token
-4. Store token in localStorage/sessionStorage
-5. Get camera list: GET /cameras/devices
-6. Display cameras with calibration status indicators
-7. Optional: Run calibration if camera not calibrated
-   - POST /cameras/calibrate → get lens position
-   - POST /cameras/calibrate/white-balance → get AWB gains
-8. User clicks "Test Camera"
-9. POST /cameras/capture (with project_name, camera_index, resolution)
-10. Show typology selector: book, dossier, document, map, planimetry, other
-11. Display dynamic input fields based on typology
+        print(f"Updated: {update_resp.json()['title']}")
 ```
 
 ---
 
-### Live Scan Page (`pages/scan`)
+### Gallery/View Page Example
 
-**Goals:**
-- Capture images with selected camera
-- Document metadata is automatically created
-- Optional: Update metadata after capture
+```python
+def gallery_view(token):
+    """Display all captured records grouped by typology."""
+    headers = {"Authorization": f"Bearer {token}"}
 
-**API Calls:**
-1. `GET /cameras/devices` - List cameras (on load)
-2. `POST /cameras/capture` - Capture with automatic database record creation
-3. `GET /documents/` - List recent captures
-4. `PATCH /documents/{id}` - Update metadata (optional)
+    records = requests.get(
+        f"{BASE_URL}/records/",
+        headers=headers,
+        params={"limit": 100}
+    ).json()
 
-**Frontend Flow:**
-```
-1. Load page, get cameras: GET /cameras/devices
-2. Show camera selector dropdown with calibration status
-3. User selects resolution (low/medium/high)
-4. User clicks "Capture"
-5. POST /cameras/capture with:
-   - project_name (from config or project selector)
-   - camera_index (selected camera)
-   - resolution (user choice)
-6. Backend automatically:
-   - Captures image to SD card
-   - Extracts metadata
-   - Creates DocumentImage record
-   - Creates CameraSettings record
-   - Returns file_path
-7. Frontend shows success with file path
-8. Optional: Allow user to update document metadata:
-   - title, author, material, date
-   - object_typology
-   - custom_attributes (JSON)
-9. PATCH /documents/{id} with updated fields
-   - custom_attributes (JSON based on typology)
-7. User clicks "Save"
-8. POST /documents/ with all metadata → receive document ID
-9. Optionally: POST /cameras/ to save camera settings
-10. Show confirmation and offer next capture
+    print(f"Total Records: {len(records)}\n")
+
+    # Group by typology
+    by_type = {}
+    for rec in records:
+        typology = rec.get('object_typology', 'unknown')
+        by_type.setdefault(typology, []).append(rec)
+
+    for typology, recs in sorted(by_type.items()):
+        print(f"\n{typology.upper()} ({len(recs)} items)")
+        print("-" * 60)
+        for rec in recs[:5]:
+            print(f"  - {rec['title']}")
+            print(f"    Author: {rec.get('author', 'N/A')}")
+            print(f"    Images: {len(rec.get('images', []))}")
 ```
 
 ---
 
-### Gallery Page (`pages/gallery`)
-
-**Goals:**
-- Display all captured documents
-- Filter/search by typology
-- View document details
-
-**API Calls:**
-1. `GET /documents/` - List all documents (paginated)
-2. `GET /documents/{id}` - Get full document details
-3. `DELETE /documents/{id}` - Delete document (optional)
-
-**Frontend Flow:**
-```
-1. Load page, get documents: GET /documents/?limit=50
-2. Display grid/list of thumbnails
-3. Group by typology (book, map, dossier, etc.)
-4. User clicks on document
-5. GET /documents/{id} → full details + camera settings
-6. Show modal/detail view with:
-   - Image from file_path (served from SD card)
-   - Metadata: title, author, material, date
-   - Camera info: model, ISO, aperture, etc.
-7. Optional: Edit button → PATCH /documents/{id}
-8. Optional: Delete button → DELETE /documents/{id}
-```
-
----
+## 15. Frontend Integration
 
 ### Authentication Flow
 
 ```
-1. POST /auth/register (optional)
+1. POST /auth/register
    Request: { username, email, password }
-   Response: { id, username, email, is_active, created_at }
+   Response: { id, username, email, role, is_active, created_at }
+   Note: first user becomes admin, all others become reviewer
 
 2. POST /auth/login
    Request: { username, password }
@@ -2484,12 +1947,18 @@ This eliminates the need to manually create documents after capture.
 
 3. Store token: localStorage.setItem("token", access_token)
 
-4. Use token in all protected requests:
+4. GET /users/me
+   Headers: { Authorization: Bearer <token> }
+   Response: { id, username, role, ... }
+   → Use role to determine which UI sections to show:
+     - admin:    full dashboard + user management panel
+     - operator: full dashboard, no user management
+     - reviewer: read-only views only
+
+5. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
 
-5. Token expires after 1 hour by default
-
-6. Before expiry, refresh:
+6. Before expiry (~1 hour), refresh:
    POST /auth/refresh
    Headers: { Authorization: Bearer <old_token> }
    Response: { access_token, token_type }
@@ -2500,7 +1969,101 @@ This eliminates the need to manually create documents after capture.
 
 ---
 
-## 14. Configuration
+### Configuration Page (`pages/configurations`)
+
+**Goals:** Camera device testing and calibration, document typology selection.
+
+**API Calls:**
+1. `POST /auth/login` — User login
+2. `GET /users/me` — Get role for UI gating
+3. `GET /cameras/devices` — Show available cameras with calibration status
+4. `POST /cameras/calibrate` — Calibrate autofocus (operator+ required)
+5. `POST /cameras/calibrate/white-balance` — Calibrate white balance (operator+ required)
+
+**Frontend Flow:**
+```
+1. POST /auth/login → receive token
+2. GET /users/me → get role
+3. Show camera list: GET /cameras/devices
+4. Display cameras with calibration status indicators
+5. If operator/admin: show calibration controls
+   - POST /cameras/calibrate → get lens position
+   - POST /cameras/calibrate/white-balance → get AWB gains
+6. Show typology selector: book, dossier, document, map, planimetry, other
+7. Display dynamic input fields based on typology
+```
+
+---
+
+### Live Scan Page (`pages/scan`)
+
+**Goals:** Capture images, automatic database record creation.
+
+**API Calls:**
+1. `GET /cameras/devices` — List cameras on load (reviewer+)
+2. `POST /cameras/capture` — Capture + automatic RecordImage creation (operator+)
+3. `GET /records/` — List recent captures (reviewer+)
+4. `PATCH /records/{id}` — Update metadata after capture (operator+)
+
+**Frontend Flow:**
+```
+1. GET /cameras/devices → show camera selector
+2. User selects resolution (low/medium/high)
+3. User clicks "Capture"
+4. POST /cameras/capture with project_name, camera_index, resolution
+   → Backend creates RecordImage + CameraSettings + ExifData
+   → Returns file_path
+5. Show success, file path, and option to update metadata
+6. Optional: PATCH /records/{id} with title, typology, author, etc.
+```
+
+---
+
+### Gallery Page (`pages/gallery`)
+
+**Goals:** Display all captured records, filter by typology, view details.
+
+**API Calls:**
+1. `GET /records/` — List all records (reviewer+)
+2. `GET /records/{id}` — Get full record with images (reviewer+)
+3. `GET /records/images/{img_id}/thumbnail?token=<jwt>` — Display thumbnails (reviewer+)
+4. `DELETE /records/{id}` — Delete record (operator+)
+
+**Frontend Flow:**
+```
+1. GET /records/?limit=50 → display grid
+2. Group by typology
+3. Use /records/images/{img_id}/thumbnail?token=<jwt> for <img src>
+4. Click record → GET /records/{id} → detail view
+5. If operator/admin: show edit/delete controls
+```
+
+---
+
+### Projects & Collections Page
+
+**API Calls:**
+1. `GET /projects/` — List projects (reviewer+)
+2. `POST /projects/` — Create project (operator+)
+3. `POST /projects/{id}/initialize` — Init filesystem (operator+)
+4. `GET /collections/?project_id={id}` — List top-level collections (reviewer+)
+5. `GET /collections/{id}/hierarchy` — Full collection tree (reviewer+)
+6. `POST /collections/` — Create collection (operator+)
+7. `GET /projects/{id}/records` — List project records (reviewer+)
+
+---
+
+### User Management Page (Admin only)
+
+**API Calls:**
+1. `GET /auth/users` — List all users
+2. `PATCH /auth/users/{id}/role` — Promote/demote user
+3. `PATCH /auth/users/{id}/active` — Activate/deactivate user
+4. `DELETE /auth/{id}` — Delete user
+
+---
+
+## 16. Configuration
 
 ### Environment Variables (`.env`)
 
@@ -2538,9 +2101,7 @@ allow_origins=["https://yourdomain.com", "https://www.yourdomain.com"]
 
 ### Token Expiration
 
-Default: 1 hour (3600 seconds)
-
-Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`
+Default: 1 hour (3600 seconds). Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`.
 
 ---
 
@@ -2550,27 +2111,29 @@ Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`
 - **Password Hashing**: PBKDF2 with 100,000 iterations
 - **Tokens**: HMAC-SHA256 signed, time-based expiration
 - **Authentication**: HTTPBearer scheme with automatic dependency injection
-- **User Status**: Inactive users cannot login
+- **Authorization**: Role-based via `RoleChecker` dependency (`admin`, `operator`, `reviewer`)
+- **Bootstrap**: First registered user becomes admin; all others start as reviewer
+- **User Status**: Inactive users cannot log in
 
 ### Database
 - **ORM**: SQLAlchemy 2.0
 - **Engine**: PostgreSQL
 - **Relationships**: Proper foreign keys with cascading deletes
-- **Timestamps**: Automatic created_at/modified_at on all resources
+- **Timestamps**: Automatic `created_at`/`modified_at` on all resources
+- **Migrations**: Alembic (`alembic upgrade head` runs automatically on container startup)
 
 ### Validation
-- **Schemas**: Pydantic for all inputs/outputs
+- **Schemas**: Pydantic v2 for all inputs/outputs
 - **Type Safety**: Full type hints throughout
 - **Email Validation**: Verified email format for user registration
 
 ### Extensibility
 - **Typology System**: 6 built-in document types (book, dossier, document, map, planimetry, other)
 - **Custom Attributes**: JSON field for typology-specific metadata
-- **Camera Integration**: Camera(s) integration (libcamera/picamera2) with hardware detection
+- **Camera Integration**: libcamera/picamera2 with hardware detection
 - **Camera Registry**: Persistent calibration storage across system reboots
 - **Dual Camera Support**: Synchronized captures for book scanning
 - **Resolution Profiles**: Three DPI-optimized presets (low/medium/high)
-
 
 ## Support & Resources
 
