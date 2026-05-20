@@ -21,9 +21,6 @@ ExecStop=/home/pi/dtk/scripts/stop.sh
 Restart=on-failure
 RestartSec=10s
 
-# Security settings
-NoNewPrivileges=true
-
 # Logging
 StandardOutput=journal
 StandardError=journal
