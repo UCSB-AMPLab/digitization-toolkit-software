@@ -6,7 +6,9 @@ applyTo: "frontend/**"
 
 ## ⛔ CSS Location — Non-Negotiable Rules
 
-**ALL CSS must live in `frontend/static/app.css`. No exceptions.**
+**ALL CSS must live in `frontend/src/app.css`. No exceptions.**
+
+> `frontend/src/app.css` is the single global stylesheet. It is processed by Vite/Tailwind and imported in `frontend/src/routes/+layout.svelte`. Do NOT create a `frontend/static/app.css` — that file has been removed.
 
 ### FORBIDDEN patterns — never do these:
 
@@ -39,7 +41,7 @@ const styles = { color: 'red' };
 Add a named class to `frontend/static/app.css`, then apply it in the template:
 
 ```css
-/* frontend/static/app.css */
+/* frontend/src/app.css */
 .my-button {
   color: var(--accent-primary);
   margin: var(--spacing-sm);
@@ -61,7 +63,7 @@ Only JS-driven dynamic values that cannot be expressed as toggled CSS classes ma
 ```
 
 ```css
-/* The visual rule still lives in app.css */
+/* The visual rule still lives in frontend/src/app.css */
 .progress-bar::after { width: var(--progress); }
 ```
 
@@ -89,11 +91,11 @@ All colors, spacing, and typography values are defined as CSS variables in `app.
 | `--spacing-xl` | 2rem |
 | `--spacing-xxl` | 3rem |
 
-When you need a new reusable value, **add it as a CSS variable in `:root`** inside `app.css` before using it.
+When you need a new reusable value, **add it as a CSS variable in `:root`** inside `frontend/src/app.css` before using it.
 
 ---
 
-## CSS Organization in app.css
+## CSS Organization in `frontend/src/app.css`
 
 Follow these section headers when adding new rules:
 
@@ -118,7 +120,7 @@ Group styles by component or feature. Keep existing sections intact. Do not scat
 ## Svelte Component Rules
 
 - `.svelte` files contain **only** `<script>`, template markup, and **no** `<style>` blocks.
-- Apply styling exclusively through CSS classes defined in `app.css`.
+- Apply styling exclusively through CSS classes defined in `frontend/src/app.css`.
 - Use `class:` directive for conditional classes (not `style:`):
 
 ```svelte

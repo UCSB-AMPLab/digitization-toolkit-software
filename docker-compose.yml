@@ -77,6 +77,7 @@ services:
     environment:
       - PUBLIC_API_BASE=http://localhost:8000
       - PUBLIC_API_BASE_SSR=http://host.docker.internal:8000
+      - PUBLIC_DEMO_MODE=false
       - PORT=3000
       # ORIGIN: uncomment and set to the Pi's IP/hostname if form actions break
       # (e.g. ORIGIN=http://192.168.1.x:3000). Not needed for API-only frontends.

@@ -23,6 +23,10 @@ website:
     contents:
       - href: index.qmd
         text: Home
+      - section: "User Guides"
+        contents:
+          - href: users/external-storage.qmd
+            text: "External Storage"
       - section: "Developer Guides"
         contents:
           - section: "Hardware Setup Guides"

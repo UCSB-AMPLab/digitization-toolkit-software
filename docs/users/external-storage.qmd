@@ -1,0 +1,157 @@
+---
+title: "External Storage"
+date-modified: last-modified
+format: html
+---
+
+The Digitization Toolkit can save captured images to an external USB drive or SD card instead of
+the device's internal storage. This is useful when digitizing large collections that would exceed
+the capacity of the built-in microSD card.
+
+::: {.callout-warning}
+## Experimental feature
+This feature depends on operating-system-level disk operations. Compatibility varies by drive
+format and hardware. See [Supported formats](#supported-formats) below. Do not rely on an
+external drive as your **only** copy of digitized material — always keep a backup.
+:::
+
+---
+
+## How it works
+
+When an external drive is **activated**, new projects are saved to a `dtk-projects/` folder on
+that drive. Existing projects already stored on the internal card are unaffected and remain
+accessible. Only one external location can be active at a time.
+
+---
+
+## Preparing the drive {#supported-formats}
+
+### Recommended format: exFAT
+
+**exFAT** is the recommended format for external drives used with the toolkit. It is:
+
+- Compatible with Linux, Windows, and macOS (no drivers needed on any platform)
+- Supports files larger than 4 GB (important for high-resolution image sets)
+- Well-supported on Raspberry Pi OS
+
+### How to format a drive as exFAT
+
+::: {.panel-tabset}
+
+#### Linux / Raspberry Pi
+
+```bash
+# Install the exFAT tools if not already present
+sudo apt install exfatprogs
+
+# Identify the drive (look for your USB device — e.g. /dev/sda2)
+lsblk
+
+# Format the partition (replace /dev/sdXN with your actual partition)
+sudo mkfs.exfat /dev/sdXN
+```
+
+::: {.callout-caution}
+Double-check the device path with `lsblk` before running `mkfs`. Formatting the wrong partition
+will permanently erase its contents.
+:::
+
+#### Windows
+
+1. Open **File Explorer** and right-click the drive → **Format…**
+2. Set **File system** to `exFAT`
+3. Click **Start**
+
+#### macOS
+
+1. Open **Disk Utility** (Applications → Utilities → Disk Utility)
+2. Select the drive in the left panel
+3. Click **Erase**, set **Format** to `ExFAT`, then click **Erase**
+
+:::
+
+### Format compatibility summary
+
+| Format | Works with DTK | Notes |
+|--------|:--------------:|-------|
+| **exFAT** | ✅ Recommended | Best cross-platform choice |
+| **ext4** | ✅ Supported | Linux-only; slightly faster |
+| **FAT32 (vfat)** | ✅ Supported | 4 GB file size limit |
+| NTFS | ⚠️ May work | Requires `ntfs-3g`; not guaranteed |
+| APFS | ❌ Not supported | macOS-only filesystem |
+| HFS+ | ❌ Not supported | macOS-only filesystem |
+
+---
+
+## Using external storage in the UI
+
+Navigate to **Configuración** (the gear icon in the sidebar) and expand the
+**Unidad de almacenamiento** section.
+
+### Step 1 — Connect the drive
+
+Plug the USB drive or SD card into the Raspberry Pi. The drive does not need to be
+mounted beforehand.
+
+### Step 2 — Mount the drive
+
+The device list shows all detected partitions. Unmounted partitions have a **Montar**
+(Mount) button.
+
+1. Find the partition you want to use in the list
+2. Click **Montar**
+3. The toolkit mounts the drive and the button changes to **Activar**
+
+### Step 3 — Activate the drive
+
+Click **Activar** next to the mounted partition. The toolkit:
+
+1. Creates a `dtk-projects/` directory on the drive (if it does not exist)
+2. Sets that directory as the active projects location
+3. Shows a green **activo** badge on the device row and a banner confirming the active path
+
+New projects created after this point are stored on the external drive.
+
+### Deactivating / reverting to internal storage
+
+Click **Restaurar predeterminado** in the override banner to switch back to the
+internal storage. The external drive is **not** unmounted — existing projects on it remain
+intact and accessible.
+
+### Safely removing the drive
+
+Before physically unplugging the drive:
+
+1. If it is the active storage location, click **Restaurar predeterminado** first
+2. Click **Desmontar** next to the partition
+3. Wait for the success message
+4. Unplug the drive
+
+::: {.callout-important}
+Always click **Desmontar** before unplugging. Removing a drive while it is mounted can
+corrupt the filesystem and cause data loss.
+:::
+
+---
+
+## Troubleshooting
+
+**Drive not appearing in the list**
+: The toolkit only shows partitions on removable devices that are not part of the
+operating system. Try clicking **Actualizar lista**. If the drive still does not appear,
+check that it is properly connected and recognised by the OS (`lsblk` in a terminal).
+
+**"Montar" returns an error**
+: The drive may use an unsupported format (APFS, HFS+) or require additional kernel modules
+(NTFS). Reformat the drive as exFAT and try again.
+
+**"Activar" fails with a permission error**
+: This can happen on freshly formatted ext4 drives where the filesystem root is owned by
+`root`. The toolkit attempts a fallback using elevated privileges. If it still fails,
+reformat the drive as exFAT.
+
+**Drive mounted but read-only**
+: Some drives enforce read-only mode when almost full or when the filesystem has errors.
+Check available space and run `sudo fsck /dev/sdXN` (with the drive unmounted) to repair
+any filesystem errors.
