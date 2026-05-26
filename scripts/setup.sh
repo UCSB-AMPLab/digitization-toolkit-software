@@ -61,10 +61,26 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Creating system directories..."
 mkdir -p /var/lib/dtk/db/postgres
+mkdir -p /var/lib/dtk/mounts
 mkdir -p /var/log/dtk
 chown -R "$DTK_USER:$DTK_USER" /var/lib/dtk /var/log/dtk 2>/dev/null || true
 echo "  /var/lib/dtk  ✓"
 echo "  /var/log/dtk  ✓"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 2b. Sudoers rule for storage mounting (no polkit/D-Bus needed)
+# ---------------------------------------------------------------------------
+echo "→ Configuring storage mount permissions..."
+cat > /etc/sudoers.d/dtk-storage << 'EOF'
+# Digitization Toolkit — allow backend user to mount/unmount removable storage
+# without a password. Required because the backend runs without a login session
+# and polkit cannot perform interactive authentication in that context.
+Defaults:pi !requiretty
+pi ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /bin/mount, /bin/umount, /usr/bin/mkdir, /bin/mkdir, /usr/bin/chown, /bin/chown
+EOF
+chmod 0440 /etc/sudoers.d/dtk-storage
+echo "  /etc/sudoers.d/dtk-storage  ✓"
 echo ""
 
 # ---------------------------------------------------------------------------

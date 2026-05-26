@@ -6,9 +6,9 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="dcterms.date" content="2026-02-18">
+<meta name="dcterms.date" content="2026-05-19">
 
-<title>Raspberry Pi Compute Module 4 Dual Camera Setup – Digitization Toolkit Documentation</title>
+<title>External Storage – Digitization Toolkit Documentation</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -142,7 +142,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Device Setup: Raspberry Pi CM4 with Cameras</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../users/external-storage.html">User Guides</a></li><li class="breadcrumb-item"><a href="../users/external-storage.html">External Storage</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
       <button type="button" class="btn quarto-search-button" aria-label="Search" onclick="window.quartoOpenSearch();">
@@ -170,16 +170,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
  <span class="menu-text">User Guides</span></a>
-          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 ">  
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../users/external-storage.html" class="sidebar-item-text sidebar-link">
+  <a href="../users/external-storage.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">External Storage</span></a>
   </div>
 </li>
@@ -187,25 +187,25 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false">
  <span class="menu-text">Developer Guides</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 ">  
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false">
  <span class="menu-text">Hardware Setup Guides</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth2 show">  
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth2 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link active">
+  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Device Setup: Raspberry Pi CM4 with Cameras</span></a>
   </div>
 </li>
@@ -229,19 +229,31 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#hardware-setup" id="toc-hardware-setup" class="nav-link active" data-scroll-target="#hardware-setup">1. Hardware Setup</a></li>
-  <li><a href="#firmware-configuration" id="toc-firmware-configuration" class="nav-link" data-scroll-target="#firmware-configuration">2. Firmware Configuration</a></li>
-  <li><a href="#test-cameras" id="toc-test-cameras" class="nav-link" data-scroll-target="#test-cameras">3. Test Cameras</a></li>
-  <li><a href="#tips-troubleshooting" id="toc-tips-troubleshooting" class="nav-link" data-scroll-target="#tips-troubleshooting">Tips &amp; Troubleshooting</a></li>
+  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link active" data-scroll-target="#how-it-works">How it works</a></li>
+  <li><a href="#supported-formats" id="toc-supported-formats" class="nav-link" data-scroll-target="#supported-formats">Preparing the drive</a>
+  <ul class="collapse">
+  <li><a href="#recommended-format-exfat" id="toc-recommended-format-exfat" class="nav-link" data-scroll-target="#recommended-format-exfat">Recommended format: exFAT</a></li>
+  <li><a href="#how-to-format-a-drive-as-exfat" id="toc-how-to-format-a-drive-as-exfat" class="nav-link" data-scroll-target="#how-to-format-a-drive-as-exfat">How to format a drive as exFAT</a></li>
+  <li><a href="#format-compatibility-summary" id="toc-format-compatibility-summary" class="nav-link" data-scroll-target="#format-compatibility-summary">Format compatibility summary</a></li>
+  </ul></li>
+  <li><a href="#using-external-storage-in-the-ui" id="toc-using-external-storage-in-the-ui" class="nav-link" data-scroll-target="#using-external-storage-in-the-ui">Using external storage in the UI</a>
+  <ul class="collapse">
+  <li><a href="#step-1-connect-the-drive" id="toc-step-1-connect-the-drive" class="nav-link" data-scroll-target="#step-1-connect-the-drive">Step 1 — Connect the drive</a></li>
+  <li><a href="#step-2-mount-the-drive" id="toc-step-2-mount-the-drive" class="nav-link" data-scroll-target="#step-2-mount-the-drive">Step 2 — Mount the drive</a></li>
+  <li><a href="#step-3-activate-the-drive" id="toc-step-3-activate-the-drive" class="nav-link" data-scroll-target="#step-3-activate-the-drive">Step 3 — Activate the drive</a></li>
+  <li><a href="#deactivating-reverting-to-internal-storage" id="toc-deactivating-reverting-to-internal-storage" class="nav-link" data-scroll-target="#deactivating-reverting-to-internal-storage">Deactivating / reverting to internal storage</a></li>
+  <li><a href="#safely-removing-the-drive" id="toc-safely-removing-the-drive" class="nav-link" data-scroll-target="#safely-removing-the-drive">Safely removing the drive</a></li>
+  </ul></li>
+  <li><a href="#troubleshooting" id="toc-troubleshooting" class="nav-link" data-scroll-target="#troubleshooting">Troubleshooting</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Device Setup: Raspberry Pi CM4 with Cameras</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../users/external-storage.html">User Guides</a></li><li class="breadcrumb-item"><a href="../users/external-storage.html">External Storage</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Raspberry Pi Compute Module 4 Dual Camera Setup</h1>
+<h1 class="title">External Storage</h1>
 </div>
 
 
@@ -252,14 +264,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">February 18, 2026</p>
+      <p class="date">May 19, 2026</p>
     </div>
   </div>
   
     <div>
     <div class="quarto-title-meta-heading">Modified</div>
     <div class="quarto-title-meta-contents">
-      <p class="date-modified">February 18, 2026</p>
+      <p class="date-modified">May 19, 2026</p>
     </div>
   </div>
     
@@ -270,131 +282,203 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<hr>
-<p>This guide explains how to connect and configure two cameras on the <strong>Raspberry Pi CM4 IO Board</strong>, and how to test simultaneous still captures with shell scripts.</p>
-<section id="hardware-setup" class="level2">
-<h2 class="anchored" data-anchor-id="hardware-setup">1. Hardware Setup</h2>
-<p><strong>Required Hardware</strong></p>
-<ul>
-<li>Raspberry Pi Compute Module 4 (CM4)</li>
-<li>CM4 IO Board</li>
-<li>2 × Arducam 64MP (or other libcamera-compatible CSI-2 cameras)</li>
-<li>2 × CSI ribbon cables</li>
-<li>2 × jumper caps</li>
-</ul>
-<p><strong>Step 1: Attach the cameras</strong></p>
-<ul>
-<li>Plug one ribbon cable into CAM0 (near the HDMI ports).</li>
-<li>Plug the other into CAM1 (near the USB ports).</li>
-<li>Ensure the ribbon contacts face the correct orientation (usually silver contacts toward the HDMI/USB connectors).</li>
-</ul>
-<p><strong>Step 2: Add J6 jumpers</strong></p>
-<ul>
-<li>Locate header J6 on the IO board.</li>
-<li>Place two jumper caps in a vertical orientation (bridging the same column).</li>
-<li>This connects I²C and control lines for CAM0.</li>
-</ul>
-<div class="quarto-figure quarto-figure-center">
-<figure class="figure">
-<p><img src="../_static/imgs/CM4_cameras_setup.jpg" class="img-fluid figure-img"></p>
-<figcaption>alt</figcaption>
-</figure>
+<p>The Digitization Toolkit can save captured images to an external USB drive or SD card instead of the device’s internal storage. This is useful when digitizing large collections that would exceed the capacity of the built-in microSD card.</p>
+<div class="callout callout-style-default callout-warning callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
 </div>
-<p><strong>Step 3: Boot the system and check I²C</strong></p>
-<p>Install <code>i2c-tools</code> if not already present:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get update</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get install <span class="at">-y</span> i2c-tools</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>List buses:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">i2cdetect</span> <span class="at">-l</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>You should see:</p>
-<ul>
-<li><code>i2c-0</code> → mux channel 0</li>
-<li><code>i2c-10</code> → mux channel 1</li>
-</ul>
-<p>Probe each:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> i2cdetect <span class="at">-y</span> 0</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> i2cdetect <span class="at">-y</span> 10</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Each should show <code>0x1a</code> (camera sensor) and <code>0x0c</code> (VCM driver).</p>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Warning</span>Experimental feature
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>This feature depends on operating-system-level disk operations. Compatibility varies by drive format and hardware. See <a href="#supported-formats">Supported formats</a> below. Do not rely on an external drive as your <strong>only</strong> copy of digitized material — always keep a backup.</p>
+</div>
+</div>
+<hr>
+<section id="how-it-works" class="level2">
+<h2 class="anchored" data-anchor-id="how-it-works">How it works</h2>
+<p>When an external drive is <strong>activated</strong>, new projects are saved to a <code>dtk-projects/</code> folder on that drive. Existing projects already stored on the internal card are unaffected and remain accessible. Only one external location can be active at a time.</p>
+<hr>
 </section>
-<section id="firmware-configuration" class="level2">
-<h2 class="anchored" data-anchor-id="firmware-configuration">2. Firmware Configuration</h2>
-<p><strong>Step 1: Disable auto-detect</strong></p>
-<p>Edit <code>/boot/firmware/config.txt</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> nano /boot/firmware/config.txt</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Add at the end:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="va">camera_auto_detect</span><span class="op">=</span>0</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="va">dtoverlay</span><span class="op">=</span>arducam-64mp,cam0   <span class="co"># enables CAM0</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="va">dtoverlay</span><span class="op">=</span>arducam-64mp        <span class="co"># enables CAM1</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Save and reboot</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> reboot</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong>Step 2: Verify cameras</strong></p>
-<p>After reboot</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--list</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><em><strong>Expected output: two cameras listed</strong></em></p>
+<section id="supported-formats" class="level2">
+<h2 class="anchored" data-anchor-id="supported-formats">Preparing the drive</h2>
+<section id="recommended-format-exfat" class="level3">
+<h3 class="anchored" data-anchor-id="recommended-format-exfat">Recommended format: exFAT</h3>
+<p><strong>exFAT</strong> is the recommended format for external drives used with the toolkit. It is:</p>
+<ul>
+<li>Compatible with Linux, Windows, and macOS (no drivers needed on any platform)</li>
+<li>Supports files larger than 4 GB (important for high-resolution image sets)</li>
+<li>Well-supported on Raspberry Pi OS</li>
+</ul>
 </section>
-<section id="test-cameras" class="level2">
-<h2 class="anchored" data-anchor-id="test-cameras">3. Test Cameras</h2>
-<p><strong>Test Single Camera</strong></p>
-<p>Try a preview:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 0 <span class="at">-t</span> 2000</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 1 <span class="at">-t</span> 2000</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Capture stills</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-still</span> <span class="at">--camera</span> 0 <span class="at">-o</span> cam0.jpg</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-still</span> <span class="at">--camera</span> 1 <span class="at">-o</span> cam1.jpg</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong>Test Dual Camera Capture</strong></p>
-<p>This script tries both cameras at once. If high resolution fails, it falls back to lower resolutions.</p>
-<p>Save as <code>dual_snap.sh</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="va">OUTDIR</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">:-</span>captures<span class="va">}</span><span class="st">"</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">"</span><span class="va">$OUTDIR</span><span class="st">"</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="va">SIZES</span><span class="op">=</span><span class="va">(</span><span class="st">"4624x3472"</span> <span class="st">"3840x2160"</span> <span class="st">"2312x1736"</span><span class="va">)</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="va">TIMEOUT_MS</span><span class="op">=</span>1500</span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="va">EXTRA_OPTS</span><span class="op">=</span><span class="st">"--thumb none --buffer-count 2"</span></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="va">STAMP</span><span class="op">=</span><span class="st">"</span><span class="va">$(</span><span class="fu">date</span> +<span class="st">'%Y%m%d_%H%M%S_%3N'</span><span class="va">)</span><span class="st">"</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="va">F0</span><span class="op">=</span><span class="st">"</span><span class="va">$OUTDIR</span><span class="st">/</span><span class="va">${STAMP}</span><span class="st">_cam0.jpg"</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="va">F1</span><span class="op">=</span><span class="st">"</span><span class="va">$OUTDIR</span><span class="st">/</span><span class="va">${STAMP}</span><span class="st">_cam1.jpg"</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="fu">try_capture ()</span> <span class="kw">{</span></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>  <span class="bu">local</span> <span class="va">W</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">%</span>x<span class="pp">*</span><span class="va">}</span><span class="st">"</span> <span class="va">H</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">#</span><span class="pp">*</span>x<span class="va">}</span><span class="st">"</span></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="st">"Trying </span><span class="va">$W</span><span class="st"> x </span><span class="va">$H</span><span class="st"> ..."</span></span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="ex">rpicam-still</span> <span class="at">--camera</span> 0 <span class="at">-t</span> <span class="st">"</span><span class="va">$TIMEOUT_MS</span><span class="st">"</span> <span class="at">-n</span> <span class="at">--width</span> <span class="st">"</span><span class="va">$W</span><span class="st">"</span> <span class="at">--height</span> <span class="st">"</span><span class="va">$H</span><span class="st">"</span> <span class="at">-o</span> <span class="st">"</span><span class="va">$F0</span><span class="st">"</span> <span class="va">$EXTRA_OPTS</span> <span class="kw">&amp;</span></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  <span class="va">PID0</span><span class="op">=</span><span class="va">$!</span></span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">sleep</span> 0.02</span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="ex">rpicam-still</span> <span class="at">--camera</span> 1 <span class="at">-t</span> <span class="st">"</span><span class="va">$TIMEOUT_MS</span><span class="st">"</span> <span class="at">-n</span> <span class="at">--width</span> <span class="st">"</span><span class="va">$W</span><span class="st">"</span> <span class="at">--height</span> <span class="st">"</span><span class="va">$H</span><span class="st">"</span> <span class="at">-o</span> <span class="st">"</span><span class="va">$F1</span><span class="st">"</span> <span class="va">$EXTRA_OPTS</span> <span class="kw">&amp;</span></span>
-<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">PID1</span><span class="op">=</span><span class="va">$!</span></span>
-<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>  <span class="bu">wait</span> <span class="st">"</span><span class="va">$PID0</span><span class="st">"</span> <span class="kw">&amp;&amp;</span> <span class="bu">wait</span> <span class="st">"</span><span class="va">$PID1</span><span class="st">"</span></span>
-<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
-<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> sz <span class="kw">in</span> <span class="st">"</span><span class="va">${SIZES</span><span class="op">[@]</span><span class="va">}</span><span class="st">"</span><span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="ex">try_capture</span> <span class="st">"</span><span class="va">$sz</span><span class="st">"</span><span class="kw">;</span> <span class="cf">then</span></span>
-<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"Success at </span><span class="va">$sz</span><span class="st">"</span></span>
-<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"Saved:"</span></span>
-<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"  </span><span class="va">$F0</span><span class="st">"</span></span>
-<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"  </span><span class="va">$F1</span><span class="st">"</span></span>
-<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>    <span class="bu">exit</span> 0</span>
-<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">fi</span></span>
-<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Usage:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> +x dual_snap.sh</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./dual_snap.sh</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="how-to-format-a-drive-as-exfat" class="level3">
+<h3 class="anchored" data-anchor-id="how-to-format-a-drive-as-exfat">How to format a drive as exFAT</h3>
+<div class="tabset-margin-container"></div><div class="panel-tabset">
+<ul class="nav nav-tabs" role="tablist"><li class="nav-item" role="presentation"><a class="nav-link active" id="tabset-1-1-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-1" role="tab" aria-controls="tabset-1-1" aria-selected="true" href="">Linux / Raspberry Pi</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-2-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-2" role="tab" aria-controls="tabset-1-2" aria-selected="false" href="">Windows</a></li><li class="nav-item" role="presentation"><a class="nav-link" id="tabset-1-3-tab" data-bs-toggle="tab" data-bs-target="#tabset-1-3" role="tab" aria-controls="tabset-1-3" aria-selected="false" href="">macOS</a></li></ul>
+<div class="tab-content">
+<div id="tabset-1-1" class="tab-pane active" role="tabpanel" aria-labelledby="tabset-1-1-tab">
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Install the exFAT tools if not already present</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt install exfatprogs</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Identify the drive (look for your USB device — e.g. /dev/sda2)</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="ex">lsblk</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Format the partition (replace /dev/sdXN with your actual partition)</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> mkfs.exfat /dev/sdXN</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="callout callout-style-default callout-caution callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Caution
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Double-check the device path with <code>lsblk</code> before running <code>mkfs</code>. Formatting the wrong partition will permanently erase its contents.</p>
+</div>
+</div>
+</div>
+<div id="tabset-1-2" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-2-tab">
+<ol type="1">
+<li>Open <strong>File Explorer</strong> and right-click the drive → <strong>Format…</strong></li>
+<li>Set <strong>File system</strong> to <code>exFAT</code></li>
+<li>Click <strong>Start</strong></li>
+</ol>
+</div>
+<div id="tabset-1-3" class="tab-pane" role="tabpanel" aria-labelledby="tabset-1-3-tab">
+<ol type="1">
+<li>Open <strong>Disk Utility</strong> (Applications → Utilities → Disk Utility)</li>
+<li>Select the drive in the left panel</li>
+<li>Click <strong>Erase</strong>, set <strong>Format</strong> to <code>ExFAT</code>, then click <strong>Erase</strong></li>
+</ol>
+</div>
+</div>
+</div>
 </section>
-<section id="tips-troubleshooting" class="level2">
-<h2 class="anchored" data-anchor-id="tips-troubleshooting">Tips &amp; Troubleshooting</h2>
-<ul>
-<li><strong>Memory errors</strong>: capturing two full-res images in parallel may fail. Stick to 3840×2160 for stability.</li>
-<li><strong>Permissions</strong>: ensure your user is in the video group:</li>
-</ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> usermod <span class="at">-aG</span> video <span class="va">$USER</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<ul>
-<li><strong>Color/exposure match</strong>: use fixed settings:</li>
-</ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="va">EXTRA_OPTS</span><span class="op">=</span><span class="st">"--shutter 10000 --gain 1.5 --awbgains 2.0,1.5"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<ul>
-<li><strong>Truly simultaneous capture</strong>: requires external trigger/sync hardware. Software methods give ms-level offsets.</li>
-</ul>
+<section id="format-compatibility-summary" class="level3">
+<h3 class="anchored" data-anchor-id="format-compatibility-summary">Format compatibility summary</h3>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Format</th>
+<th style="text-align: center;">Works with DTK</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>exFAT</strong></td>
+<td style="text-align: center;">✅ Recommended</td>
+<td>Best cross-platform choice</td>
+</tr>
+<tr class="even">
+<td><strong>ext4</strong></td>
+<td style="text-align: center;">✅ Supported</td>
+<td>Linux-only; slightly faster</td>
+</tr>
+<tr class="odd">
+<td><strong>FAT32 (vfat)</strong></td>
+<td style="text-align: center;">✅ Supported</td>
+<td>4 GB file size limit</td>
+</tr>
+<tr class="even">
+<td>NTFS</td>
+<td style="text-align: center;">⚠️ May work</td>
+<td>Requires <code>ntfs-3g</code>; not guaranteed</td>
+</tr>
+<tr class="odd">
+<td>APFS</td>
+<td style="text-align: center;">❌ Not supported</td>
+<td>macOS-only filesystem</td>
+</tr>
+<tr class="even">
+<td>HFS+</td>
+<td style="text-align: center;">❌ Not supported</td>
+<td>macOS-only filesystem</td>
+</tr>
+</tbody>
+</table>
+<hr>
+</section>
+</section>
+<section id="using-external-storage-in-the-ui" class="level2">
+<h2 class="anchored" data-anchor-id="using-external-storage-in-the-ui">Using external storage in the UI</h2>
+<p>Navigate to <strong>Configuración</strong> (the gear icon in the sidebar) and expand the <strong>Unidad de almacenamiento</strong> section.</p>
+<section id="step-1-connect-the-drive" class="level3">
+<h3 class="anchored" data-anchor-id="step-1-connect-the-drive">Step 1 — Connect the drive</h3>
+<p>Plug the USB drive or SD card into the Raspberry Pi. The drive does not need to be mounted beforehand.</p>
+</section>
+<section id="step-2-mount-the-drive" class="level3">
+<h3 class="anchored" data-anchor-id="step-2-mount-the-drive">Step 2 — Mount the drive</h3>
+<p>The device list shows all detected partitions. Unmounted partitions have a <strong>Montar</strong> (Mount) button.</p>
+<ol type="1">
+<li>Find the partition you want to use in the list</li>
+<li>Click <strong>Montar</strong></li>
+<li>The toolkit mounts the drive and the button changes to <strong>Activar</strong></li>
+</ol>
+</section>
+<section id="step-3-activate-the-drive" class="level3">
+<h3 class="anchored" data-anchor-id="step-3-activate-the-drive">Step 3 — Activate the drive</h3>
+<p>Click <strong>Activar</strong> next to the mounted partition. The toolkit:</p>
+<ol type="1">
+<li>Creates a <code>dtk-projects/</code> directory on the drive (if it does not exist)</li>
+<li>Sets that directory as the active projects location</li>
+<li>Shows a green <strong>activo</strong> badge on the device row and a banner confirming the active path</li>
+</ol>
+<p>New projects created after this point are stored on the external drive.</p>
+</section>
+<section id="deactivating-reverting-to-internal-storage" class="level3">
+<h3 class="anchored" data-anchor-id="deactivating-reverting-to-internal-storage">Deactivating / reverting to internal storage</h3>
+<p>Click <strong>Restaurar predeterminado</strong> in the override banner to switch back to the internal storage. The external drive is <strong>not</strong> unmounted — existing projects on it remain intact and accessible.</p>
+</section>
+<section id="safely-removing-the-drive" class="level3">
+<h3 class="anchored" data-anchor-id="safely-removing-the-drive">Safely removing the drive</h3>
+<p>Before physically unplugging the drive:</p>
+<ol type="1">
+<li>If it is the active storage location, click <strong>Restaurar predeterminado</strong> first</li>
+<li>Click <strong>Desmontar</strong> next to the partition</li>
+<li>Wait for the success message</li>
+<li>Unplug the drive</li>
+</ol>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Important
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Always click <strong>Desmontar</strong> before unplugging. Removing a drive while it is mounted can corrupt the filesystem and cause data loss.</p>
+</div>
+</div>
+<hr>
+</section>
+</section>
+<section id="troubleshooting" class="level2">
+<h2 class="anchored" data-anchor-id="troubleshooting">Troubleshooting</h2>
+<dl>
+<dt><strong>Drive not appearing in the list</strong></dt>
+<dd>
+The toolkit only shows partitions on removable devices that are not part of the operating system. Try clicking <strong>Actualizar lista</strong>. If the drive still does not appear, check that it is properly connected and recognised by the OS (<code>lsblk</code> in a terminal).
+</dd>
+<dt><strong>“Montar” returns an error</strong></dt>
+<dd>
+The drive may use an unsupported format (APFS, HFS+) or require additional kernel modules (NTFS). Reformat the drive as exFAT and try again.
+</dd>
+<dt><strong>“Activar” fails with a permission error</strong></dt>
+<dd>
+This can happen on freshly formatted ext4 drives where the filesystem root is owned by <code>root</code>. The toolkit attempts a fallback using elevated privileges. If it still fails, reformat the drive as exFAT.
+</dd>
+<dt><strong>Drive mounted but read-only</strong></dt>
+<dd>
+Some drives enforce read-only mode when almost full or when the filesystem has errors. Check available space and run <code>sudo fsck /dev/sdXN</code> (with the drive unmounted) to repair any filesystem errors.
+</dd>
+</dl>
 
 
 </section>
@@ -807,7 +891,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       &nbsp;
     </div>   
     <div class="nav-footer-center">
-<p>Documentation site built: February 18, 2026</p>
+<p>Documentation site built: May 19, 2026</p>
 </div>
     <div class="nav-footer-right">
       &nbsp;
