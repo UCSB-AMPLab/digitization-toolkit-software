@@ -75,13 +75,12 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - PUBLIC_API_BASE=http://localhost:8000
+      - HOST=0.0.0.0
+      - PUBLIC_API_BASE=http://${HOST_IP:-localhost}:8000
       - PUBLIC_API_BASE_SSR=http://host.docker.internal:8000
       - PUBLIC_DEMO_MODE=false
       - PORT=3000
-      # ORIGIN: uncomment and set to the Pi's IP/hostname if form actions break
-      # (e.g. ORIGIN=http://192.168.1.x:3000). Not needed for API-only frontends.
-      # - ORIGIN=http://localhost:3000
+      - ORIGIN=http://${HOST_IP:-localhost}:3000
       - NODE_ENV=production
     # No depends_on db — the frontend is a Node.js API proxy and never connects
     # to Postgres directly. Removing this lets db and frontend start in parallel.
