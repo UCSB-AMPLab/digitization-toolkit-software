@@ -1,0 +1,156 @@
+---
+title: "SD Card Distribution"
+date-modified: last-modified
+format: html
+---
+
+***
+
+This guide explains how to prepare and ship a Raspberry Pi SD card image with the Digitization Toolkit pre-installed, so the recipient can plug it in and access the application from any device on the same network — without any manual IP configuration.
+
+---
+
+## How It Works
+
+The Raspberry Pi broadcasts its hostname over the local network using **mDNS** (via the Avahi daemon, pre-installed on Raspberry Pi OS). This means any device on the same network can reach the Pi at `http://<hostname>.local` without knowing its IP address.
+
+The application is configured to use this hostname instead of a hardcoded IP, so the image works on any network regardless of what IP the router assigns.
+
+---
+
+## Preparing the Master Image
+
+### 1. Set a meaningful hostname
+
+Choose a hostname that identifies the device. The current convention is `digitool`:
+
+```bash
+sudo hostnamectl set-hostname digitool
+```
+
+Verify:
+
+```bash
+hostname
+# digitool
+```
+
+The Pi will be reachable at `http://digitool.local` on the destination network.
+
+### 2. Confirm Avahi is running
+
+Avahi (mDNS) is pre-installed on Raspberry Pi OS. Confirm it is active:
+
+```bash
+systemctl is-enabled avahi-daemon
+systemctl is-active avahi-daemon
+```
+
+Both should return `enabled` / `active`. If not:
+
+```bash
+sudo systemctl enable --now avahi-daemon
+```
+
+### 3. Update `.env` to use the hostname
+
+In `/home/pi/dtk/.env`, set `HOST_IP` to the `.local` hostname:
+
+```bash
+HOST_IP=digitool.local
+CORS_ORIGINS=["http://digitool.local:5173","http://digitool.local:3000","http://localhost:5173","http://localhost:3000"]
+```
+
+`PUBLIC_API_BASE` resolves automatically from `HOST_IP`:
+
+```bash
+PUBLIC_API_BASE=http://${HOST_IP}:8000
+```
+
+### 4. Rebuild and verify the frontend container
+
+The `PUBLIC_API_BASE` variable is baked into the compiled frontend at build time. After editing `.env`, rebuild:
+
+```bash
+cd /home/pi/dtk
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build --force-recreate
+```
+
+Open `http://digitool.local:3000` from another device on the same network to confirm it loads.
+
+### 5. Image the SD card
+
+Once the system is working correctly, shut down the Pi cleanly and image the SD card from another machine:
+
+**macOS / Linux:**
+```bash
+# Identify the SD card device (e.g. /dev/disk4 or /dev/sdb)
+diskutil list           # macOS
+lsblk                   # Linux
+
+# Create compressed image
+sudo dd if=/dev/sdX bs=4M status=progress | gzip > dtk-$(date +%Y%m%d).img.gz
+```
+
+**Windows:** Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/) or [Win32DiskImager](https://win32diskimager.org/) to read the card to a `.img` file.
+
+::: {.callout-tip}
+## Shrink before imaging
+Tools like [PiShrink](https://github.com/Drewsif/PiShrink) can reduce the image size significantly before compression by trimming unused filesystem space.
+:::
+
+---
+
+## Flashing and Delivering the Image
+
+Flash the image onto a new SD card:
+
+```bash
+# Linux / macOS
+gzip -dc dtk-YYYYMMDD.img.gz | sudo dd of=/dev/sdX bs=4M status=progress
+```
+
+Or use Raspberry Pi Imager → *Use custom image* → select the `.img.gz` file.
+
+---
+
+## What the Recipient Needs to Do
+
+Nothing, in most cases. They:
+
+1. Insert the SD card and power on the Pi.
+2. Connect the Pi to their local network (Ethernet or Wi-Fi configured before imaging).
+3. Open `http://digitool.local:3000` from any browser on the same network.
+
+::: {.callout-note}
+## Wi-Fi pre-configuration
+If the destination uses Wi-Fi (not Ethernet), configure the network credentials on the SD card **before** shipping. The easiest way is via Raspberry Pi Imager's *Advanced options* when flashing, or by placing a `wpa_supplicant.conf` in the `/boot` partition after flashing.
+:::
+
+---
+
+## Troubleshooting
+
+**`digitool.local` doesn't resolve**
+
+- Windows requires [Bonjour](https://support.apple.com/kb/DL999) (installed automatically with iTunes or iCloud). Windows 10 (1803+) supports mDNS natively.
+- Try pinging: `ping digitool.local`
+- As a fallback, find the IP via the router's DHCP client list and use it directly.
+
+**CORS errors in the browser**
+
+The frontend origin must match `CORS_ORIGINS` in `.env`. If you changed the hostname or port, update that list and restart the backend:
+
+```bash
+cd /home/pi/dtk/backend && pixi run dev
+```
+
+**Two Pis on the same network**
+
+mDNS hostnames must be unique per network. Change the hostname on one of them:
+
+```bash
+sudo hostnamectl set-hostname digitool-2
+```
+
+And update `HOST_IP` and `CORS_ORIGINS` in `.env` accordingly, then rebuild the frontend container.

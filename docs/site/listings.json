@@ -4,7 +4,8 @@
     "items": [
       "/users/external-storage.html",
       "/developers/device_setup_pi5_imx519.html",
-      "/developers/device_setup_CM4.html"
+      "/developers/device_setup_CM4.html",
+      "/developers/sd_card_distribution.html"
     ]
   }
 ]

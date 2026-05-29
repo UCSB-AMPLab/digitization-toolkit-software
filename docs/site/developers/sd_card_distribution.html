@@ -8,7 +8,7 @@
 
 <meta name="dcterms.date" content="2026-05-29">
 
-<title>Digitization Toolkit Documentation</title>
+<title>SD Card Distribution – Digitization Toolkit Documentation</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -24,28 +24,61 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
-<script src="site_libs/quarto-nav/quarto-nav.js"></script>
-<script src="site_libs/quarto-nav/headroom.min.js"></script>
-<script src="site_libs/clipboard/clipboard.min.js"></script>
-<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
-<script src="site_libs/quarto-search/fuse.min.js"></script>
-<script src="site_libs/quarto-search/quarto-search.js"></script>
-<meta name="quarto:offset" content="./">
-<script src="site_libs/quarto-listing/list.min.js"></script>
-<script src="site_libs/quarto-listing/quarto-listing.js"></script>
-<script src="site_libs/quarto-html/quarto.js" type="module"></script>
-<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
-<script src="site_libs/quarto-html/popper.min.js"></script>
-<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
-<script src="site_libs/quarto-html/anchor.min.js"></script>
-<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
-<link href="site_libs/quarto-html/quarto-syntax-highlighting-7f8f88aac4f3542376d5c11b86a4c14d.css" rel="stylesheet" id="quarto-text-highlighting-styles">
-<script src="site_libs/bootstrap/bootstrap.min.js"></script>
-<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
-<link href="site_libs/bootstrap/bootstrap-2832c693f0fd49d84288d2c01aa32519.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-7f8f88aac4f3542376d5c11b86a4c14d.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-2832c693f0fd49d84288d2c01aa32519.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -73,95 +106,9 @@ ul.task-list li input[type="checkbox"] {
     "search-label": "Search"
   }
 }</script>
-<script>
 
-  window.document.addEventListener("DOMContentLoaded", function (_event) {
-    const listingTargetEl = window.document.querySelector('#listing-user-guides .list');
-    if (!listingTargetEl) {
-      // No listing discovered, do not attach.
-      return; 
-    }
 
-    const options = {
-      valueNames: ['listing-title','listing-date-modified',{ data: ['index'] },{ data: ['categories'] },{ data: ['listing-date-sort'] },{ data: ['listing-title-sort'] }],
-      
-      searchColumns: ["listing-date","listing-title","listing-author"],
-    };
-
-    window['quarto-listings'] = window['quarto-listings'] || {};
-    window['quarto-listings']['listing-user-guides'] = new List('listing-user-guides', options);
-
-    if (window['quarto-listing-loaded']) {
-      window['quarto-listing-loaded']();
-    }
-  });
-
-  window.addEventListener('hashchange',() => {
-    if (window['quarto-listing-loaded']) {
-      window['quarto-listing-loaded']();
-    }
-  })
-  
-
-  window.document.addEventListener("DOMContentLoaded", function (_event) {
-    const listingTargetEl = window.document.querySelector('#listing-developer-guides .list');
-    if (!listingTargetEl) {
-      // No listing discovered, do not attach.
-      return; 
-    }
-
-    const options = {
-      valueNames: ['listing-title','listing-date-modified',{ data: ['index'] },{ data: ['categories'] },{ data: ['listing-date-sort'] },{ data: ['listing-title-sort'] }],
-      
-      searchColumns: ["listing-date","listing-title","listing-author"],
-    };
-
-    window['quarto-listings'] = window['quarto-listings'] || {};
-    window['quarto-listings']['listing-developer-guides'] = new List('listing-developer-guides', options);
-
-    if (window['quarto-listing-loaded']) {
-      window['quarto-listing-loaded']();
-    }
-  });
-
-  window.addEventListener('hashchange',() => {
-    if (window['quarto-listing-loaded']) {
-      window['quarto-listing-loaded']();
-    }
-  })
-  </script>
-
-  <script src="https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=es6"></script>
-  <script defer="" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml-full.js" type="text/javascript"></script>
-
-<script type="text/javascript">
-const typesetMath = (el) => {
-  if (window.MathJax) {
-    // MathJax Typeset
-    window.MathJax.typeset([el]);
-  } else if (window.katex) {
-    // KaTeX Render
-    var mathElements = el.getElementsByClassName("math");
-    var macros = [];
-    for (var i = 0; i < mathElements.length; i++) {
-      var texText = mathElements[i].firstChild;
-      if (mathElements[i].tagName == "SPAN" && texText && texText.data) {
-        window.katex.render(texText.data, mathElements[i], {
-          displayMode: mathElements[i].classList.contains('display'),
-          throwOnError: false,
-          macros: macros,
-          fleqn: false
-        });
-      }
-    }
-  }
-}
-window.Quarto = {
-  typesetMath
-};
-</script>
-
-<link rel="stylesheet" href="_static/css/project.scss">
+<link rel="stylesheet" href="../_static/css/project.scss">
 </head>
 
 <body class="nav-sidebar docked nav-fixed quarto-light">
@@ -171,7 +118,7 @@ window.Quarto = {
     <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
       <div class="navbar-container container-fluid">
       <div class="navbar-brand-container mx-auto">
-    <a class="navbar-brand" href="./index.html">
+    <a class="navbar-brand" href="../index.html">
     <span class="navbar-title">Digitization Toolkit Documentation</span>
     </a>
   </div>
@@ -195,7 +142,7 @@ window.Quarto = {
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./index.html">Home</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">Software Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">SD Card Distribution</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
       <button type="button" class="btn quarto-search-button" aria-label="Search" onclick="window.quartoOpenSearch();">
@@ -217,7 +164,7 @@ window.Quarto = {
     <ul class="list-unstyled mt-1">
         <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./index.html" class="sidebar-item-text sidebar-link active">
+  <a href="../index.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Home</span></a>
   </div>
 </li>
@@ -232,7 +179,7 @@ window.Quarto = {
       <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./users/external-storage.html" class="sidebar-item-text sidebar-link">
+  <a href="../users/external-storage.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">External Storage</span></a>
   </div>
 </li>
@@ -240,13 +187,13 @@ window.Quarto = {
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
  <span class="menu-text">Developer Guides</span></a>
-          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 ">  
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false">
@@ -258,13 +205,13 @@ window.Quarto = {
       <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth2 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link">
+  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Device Setup: Raspberry Pi CM4 with Cameras</span></a>
   </div>
 </li>
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./developers/device_setup_pi5_imx519.html" class="sidebar-item-text sidebar-link">
+  <a href="../developers/device_setup_pi5_imx519.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Device Setup: Raspberry Pi 5 with IMX519 Camera</span></a>
   </div>
 </li>
@@ -272,16 +219,16 @@ window.Quarto = {
   </li>
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
  <span class="menu-text">Software Setup Guides</span></a>
-          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 ">  
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="./developers/sd_card_distribution.html" class="sidebar-item-text sidebar-link">
+  <a href="../developers/sd_card_distribution.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">SD Card Distribution</span></a>
   </div>
 </li>
@@ -299,20 +246,27 @@ window.Quarto = {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#available-documentation" id="toc-available-documentation" class="nav-link active" data-scroll-target="#available-documentation">Available Documentation</a>
+  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link active" data-scroll-target="#how-it-works">How It Works</a></li>
+  <li><a href="#preparing-the-master-image" id="toc-preparing-the-master-image" class="nav-link" data-scroll-target="#preparing-the-master-image">Preparing the Master Image</a>
   <ul class="collapse">
-  <li><a href="#user-guides" id="toc-user-guides" class="nav-link" data-scroll-target="#user-guides">User Guides</a></li>
-  <li><a href="#developer-guides" id="toc-developer-guides" class="nav-link" data-scroll-target="#developer-guides">Developer Guides</a></li>
+  <li><a href="#set-a-meaningful-hostname" id="toc-set-a-meaningful-hostname" class="nav-link" data-scroll-target="#set-a-meaningful-hostname">1. Set a meaningful hostname</a></li>
+  <li><a href="#confirm-avahi-is-running" id="toc-confirm-avahi-is-running" class="nav-link" data-scroll-target="#confirm-avahi-is-running">2. Confirm Avahi is running</a></li>
+  <li><a href="#update-.env-to-use-the-hostname" id="toc-update-.env-to-use-the-hostname" class="nav-link" data-scroll-target="#update-.env-to-use-the-hostname">3. Update <code>.env</code> to use the hostname</a></li>
+  <li><a href="#rebuild-and-verify-the-frontend-container" id="toc-rebuild-and-verify-the-frontend-container" class="nav-link" data-scroll-target="#rebuild-and-verify-the-frontend-container">4. Rebuild and verify the frontend container</a></li>
+  <li><a href="#image-the-sd-card" id="toc-image-the-sd-card" class="nav-link" data-scroll-target="#image-the-sd-card">5. Image the SD card</a></li>
   </ul></li>
+  <li><a href="#flashing-and-delivering-the-image" id="toc-flashing-and-delivering-the-image" class="nav-link" data-scroll-target="#flashing-and-delivering-the-image">Flashing and Delivering the Image</a></li>
+  <li><a href="#what-the-recipient-needs-to-do" id="toc-what-the-recipient-needs-to-do" class="nav-link" data-scroll-target="#what-the-recipient-needs-to-do">What the Recipient Needs to Do</a></li>
+  <li><a href="#troubleshooting" id="toc-troubleshooting" class="nav-link" data-scroll-target="#troubleshooting">Troubleshooting</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default">
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">Software Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">SD Card Distribution</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Digitization Toolkit Documentation</h1>
+<h1 class="title">SD Card Distribution</h1>
 </div>
 
 
@@ -327,6 +281,12 @@ window.Quarto = {
     </div>
   </div>
   
+    <div>
+    <div class="quarto-title-meta-heading">Modified</div>
+    <div class="quarto-title-meta-contents">
+      <p class="date-modified">May 29, 2026</p>
+    </div>
+  </div>
     
   </div>
   
@@ -335,132 +295,124 @@ window.Quarto = {
 </header>
 
 
-<p>Welcome to the <strong>Digitization Toolkit Documentation</strong>! This site provides comprehensive guides and references for setting up and using the Digitization Toolkit software and hardware components.</p>
-<section id="available-documentation" class="level2">
-<h2 class="anchored" data-anchor-id="available-documentation">Available Documentation</h2>
-<section id="user-guides" class="level3">
-<h3 class="anchored" data-anchor-id="user-guides">User Guides</h3>
-<div id="listing-user-guides" class="quarto-listing quarto-listing-container-table">
-<div class="listing-actions-group">
-   <div class="input-group input-group-sm quarto-listing-sort">
-    <span class="input-group-text"><i class="bi bi-sort-down"></i></span>
-    <select id="listing-user-guides-sort" class="form-select" aria-label="Order By" onchange="window['quarto-listings']['listing-user-guides'].sort(this.options[this.selectedIndex].value, { order: this.options[this.selectedIndex].getAttribute('data-direction')})">
-      <option value="" disabled="" selected="" hidden="">Order By</option>
-      <option value="index" data-direction="asc">Default</option>
-      <option value="listing-title-sort" data-direction="asc">
-        Guide
-      </option>
-    </select>
-  </div>
-    <div class="input-group input-group-sm quarto-listing-filter">
-      <span class="input-group-text"><i class="bi bi-search"></i></span>
-      <input type="text" class="search form-control" placeholder="Filter">
-    </div>
-</div>
-<table class="quarto-listing-table table">
-<thead>
-<tr>
-
-<th>
-<a class="sort" data-sort="listing-title-sort" onclick="if (this.classList.contains('sort-asc')) { this.classList.add('sort-desc'); this.classList.remove('sort-asc') } else { this.classList.add('sort-asc'); this.classList.remove('sort-desc')} return false;">Guide</a>
-</th>
-
-<th>
-Last Updated
-</th>
-
-</tr>
-</thead>
-<tbody class="list">
-
-<tr data-index="0" data-listing-date-sort="1780091596000" data-listing-file-modified-sort="1780091596153" data-listing-date-modified-sort="1780091596000" data-listing-reading-time-sort="4" data-listing-word-count-sort="703" data-listing-title-sort="External Storage" data-listing-filename-sort="external-storage.qmd">
-<td>
-<a href="./users/external-storage.html" class="title listing-title">External Storage</a>
-</td>
-<td>
-<span class="listing-date-modified">May 29, 2026</span>
-</td>
-
-</tr>
-
-</tbody>
-</table>
-<div class="listing-no-matching d-none">No matching items</div>
-</div>
+<hr>
+<p>This guide explains how to prepare and ship a Raspberry Pi SD card image with the Digitization Toolkit pre-installed, so the recipient can plug it in and access the application from any device on the same network — without any manual IP configuration.</p>
+<hr>
+<section id="how-it-works" class="level2">
+<h2 class="anchored" data-anchor-id="how-it-works">How It Works</h2>
+<p>The Raspberry Pi broadcasts its hostname over the local network using <strong>mDNS</strong> (via the Avahi daemon, pre-installed on Raspberry Pi OS). This means any device on the same network can reach the Pi at <code>http://&lt;hostname&gt;.local</code> without knowing its IP address.</p>
+<p>The application is configured to use this hostname instead of a hardcoded IP, so the image works on any network regardless of what IP the router assigns.</p>
+<hr>
 </section>
-<section id="developer-guides" class="level3">
-<h3 class="anchored" data-anchor-id="developer-guides">Developer Guides</h3>
-<div id="listing-developer-guides" class="quarto-listing quarto-listing-container-table">
-<div class="listing-actions-group">
-   <div class="input-group input-group-sm quarto-listing-sort">
-    <span class="input-group-text"><i class="bi bi-sort-down"></i></span>
-    <select id="listing-developer-guides-sort" class="form-select" aria-label="Order By" onchange="window['quarto-listings']['listing-developer-guides'].sort(this.options[this.selectedIndex].value, { order: this.options[this.selectedIndex].getAttribute('data-direction')})">
-      <option value="" disabled="" selected="" hidden="">Order By</option>
-      <option value="index" data-direction="asc">Default</option>
-      <option value="listing-title-sort" data-direction="asc">
-        Guide
-      </option>
-    </select>
-  </div>
-    <div class="input-group input-group-sm quarto-listing-filter">
-      <span class="input-group-text"><i class="bi bi-search"></i></span>
-      <input type="text" class="search form-control" placeholder="Filter">
-    </div>
-</div>
-<table class="quarto-listing-table table">
-<thead>
-<tr>
-
-<th>
-<a class="sort" data-sort="listing-title-sort" onclick="if (this.classList.contains('sort-asc')) { this.classList.add('sort-desc'); this.classList.remove('sort-asc') } else { this.classList.add('sort-asc'); this.classList.remove('sort-desc')} return false;">Guide</a>
-</th>
-
-<th>
-Last Updated
-</th>
-
-</tr>
-</thead>
-<tbody class="list">
-
-<tr data-index="0" data-listing-date-sort="1771405065000" data-listing-file-modified-sort="1771405065275" data-listing-date-modified-sort="1771405065000" data-listing-reading-time-sort="3" data-listing-word-count-sort="558" data-listing-title-sort="Raspberry Pi 5 IMX519 Camera Setup" data-listing-filename-sort="device_setup_pi5_imx519.qmd">
-<td>
-<a href="./developers/device_setup_pi5_imx519.html" class="title listing-title">Raspberry Pi 5 IMX519 Camera Setup</a>
-</td>
-<td>
-<span class="listing-date-modified">Feb 18, 2026</span>
-</td>
-
-</tr>
-
-<tr data-index="1" data-listing-date-sort="1771405065000" data-listing-file-modified-sort="1771405065275" data-listing-date-modified-sort="1771405065000" data-listing-reading-time-sort="3" data-listing-word-count-sort="420" data-listing-title-sort="Raspberry Pi Compute Module 4 Dual Camera Setup" data-listing-filename-sort="device_setup_CM4.qmd">
-<td>
-<a href="./developers/device_setup_CM4.html" class="title listing-title">Raspberry Pi Compute Module 4 Dual Camera Setup</a>
-</td>
-<td>
-<span class="listing-date-modified">Feb 18, 2026</span>
-</td>
-
-</tr>
-
-<tr data-index="2" data-listing-date-sort="1780093089000" data-listing-file-modified-sort="1780093089823" data-listing-date-modified-sort="1780093089000" data-listing-reading-time-sort="3" data-listing-word-count-sort="567" data-listing-title-sort="SD Card Distribution" data-listing-filename-sort="sd_card_distribution.qmd">
-<td>
-<a href="./developers/sd_card_distribution.html" class="title listing-title">SD Card Distribution</a>
-</td>
-<td>
-<span class="listing-date-modified">May 29, 2026</span>
-</td>
-
-</tr>
-
-</tbody>
-</table>
-<div class="listing-no-matching d-none">No matching items</div>
-</div>
-
-
-
+<section id="preparing-the-master-image" class="level2">
+<h2 class="anchored" data-anchor-id="preparing-the-master-image">Preparing the Master Image</h2>
+<section id="set-a-meaningful-hostname" class="level3">
+<h3 class="anchored" data-anchor-id="set-a-meaningful-hostname">1. Set a meaningful hostname</h3>
+<p>Choose a hostname that identifies the device. The current convention is <code>digitool</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> hostnamectl set-hostname digitool</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Verify:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">hostname</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co"># digitool</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The Pi will be reachable at <code>http://digitool.local</code> on the destination network.</p>
 </section>
+<section id="confirm-avahi-is-running" class="level3">
+<h3 class="anchored" data-anchor-id="confirm-avahi-is-running">2. Confirm Avahi is running</h3>
+<p>Avahi (mDNS) is pre-installed on Raspberry Pi OS. Confirm it is active:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-enabled avahi-daemon</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-active avahi-daemon</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Both should return <code>enabled</code> / <code>active</code>. If not:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl enable <span class="at">--now</span> avahi-daemon</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="update-.env-to-use-the-hostname" class="level3">
+<h3 class="anchored" data-anchor-id="update-.env-to-use-the-hostname">3. Update <code>.env</code> to use the hostname</h3>
+<p>In <code>/home/pi/dtk/.env</code>, set <code>HOST_IP</code> to the <code>.local</code> hostname:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="va">HOST_IP</span><span class="op">=</span>digitool.local</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="va">CORS_ORIGINS</span><span class="op">=</span><span class="pp">[</span><span class="st">"http://digitool.local:5173"</span><span class="ss">,</span><span class="st">"http://digitool.local:3000"</span><span class="ss">,</span><span class="st">"http://localhost:5173"</span><span class="ss">,</span><span class="st">"http://localhost:3000"</span><span class="pp">]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>PUBLIC_API_BASE</code> resolves automatically from <code>HOST_IP</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="va">PUBLIC_API_BASE</span><span class="op">=</span>http://<span class="va">${HOST_IP}</span>:8000</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="rebuild-and-verify-the-frontend-container" class="level3">
+<h3 class="anchored" data-anchor-id="rebuild-and-verify-the-frontend-container">4. Rebuild and verify the frontend container</h3>
+<p>The <code>PUBLIC_API_BASE</code> variable is baked into the compiled frontend at build time. After editing <code>.env</code>, rebuild:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /home/pi/dtk</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose <span class="at">-f</span> docker-compose.yml <span class="at">-f</span> docker-compose.pi.yml up <span class="at">-d</span> <span class="at">--build</span> <span class="at">--force-recreate</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Open <code>http://digitool.local:3000</code> from another device on the same network to confirm it loads.</p>
+</section>
+<section id="image-the-sd-card" class="level3">
+<h3 class="anchored" data-anchor-id="image-the-sd-card">5. Image the SD card</h3>
+<p>Once the system is working correctly, shut down the Pi cleanly and image the SD card from another machine:</p>
+<p><strong>macOS / Linux:</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Identify the SD card device (e.g. /dev/disk4 or /dev/sdb)</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">diskutil</span> list           <span class="co"># macOS</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">lsblk</span>                   <span class="co"># Linux</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Create compressed image</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> dd if=/dev/sdX bs=4M status=progress <span class="kw">|</span> <span class="fu">gzip</span> <span class="op">&gt;</span> dtk-<span class="va">$(</span><span class="fu">date</span> +%Y%m%d<span class="va">)</span>.img.gz</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><strong>Windows:</strong> Use <a href="https://www.raspberrypi.com/software/">Raspberry Pi Imager</a> or <a href="https://win32diskimager.org/">Win32DiskImager</a> to read the card to a <code>.img</code> file.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Tip</span>Shrink before imaging
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Tools like <a href="https://github.com/Drewsif/PiShrink">PiShrink</a> can reduce the image size significantly before compression by trimming unused filesystem space.</p>
+</div>
+</div>
+<hr>
+</section>
+</section>
+<section id="flashing-and-delivering-the-image" class="level2">
+<h2 class="anchored" data-anchor-id="flashing-and-delivering-the-image">Flashing and Delivering the Image</h2>
+<p>Flash the image onto a new SD card:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Linux / macOS</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">gzip</span> <span class="at">-dc</span> dtk-YYYYMMDD.img.gz <span class="kw">|</span> <span class="fu">sudo</span> dd of=/dev/sdX bs=4M status=progress</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Or use Raspberry Pi Imager → <em>Use custom image</em> → select the <code>.img.gz</code> file.</p>
+<hr>
+</section>
+<section id="what-the-recipient-needs-to-do" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-recipient-needs-to-do">What the Recipient Needs to Do</h2>
+<p>Nothing, in most cases. They:</p>
+<ol type="1">
+<li>Insert the SD card and power on the Pi.</li>
+<li>Connect the Pi to their local network (Ethernet or Wi-Fi configured before imaging).</li>
+<li>Open <code>http://digitool.local:3000</code> from any browser on the same network.</li>
+</ol>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Wi-Fi pre-configuration
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>If the destination uses Wi-Fi (not Ethernet), configure the network credentials on the SD card <strong>before</strong> shipping. The easiest way is via Raspberry Pi Imager’s <em>Advanced options</em> when flashing, or by placing a <code>wpa_supplicant.conf</code> in the <code>/boot</code> partition after flashing.</p>
+</div>
+</div>
+<hr>
+</section>
+<section id="troubleshooting" class="level2">
+<h2 class="anchored" data-anchor-id="troubleshooting">Troubleshooting</h2>
+<p><strong><code>digitool.local</code> doesn’t resolve</strong></p>
+<ul>
+<li>Windows requires <a href="https://support.apple.com/kb/DL999">Bonjour</a> (installed automatically with iTunes or iCloud). Windows 10 (1803+) supports mDNS natively.</li>
+<li>Try pinging: <code>ping digitool.local</code></li>
+<li>As a fallback, find the IP via the router’s DHCP client list and use it directly.</li>
+</ul>
+<p><strong>CORS errors in the browser</strong></p>
+<p>The frontend origin must match <code>CORS_ORIGINS</code> in <code>.env</code>. If you changed the hostname or port, update that list and restart the backend:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /home/pi/dtk/backend <span class="kw">&amp;&amp;</span> <span class="ex">pixi</span> run dev</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><strong>Two Pis on the same network</strong></p>
+<p>mDNS hostnames must be unique per network. Change the hostname on one of them:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> hostnamectl set-hostname digitool-2</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>And update <code>HOST_IP</code> and <code>CORS_ORIGINS</code> in <code>.env</code> accordingly, then rebuild the frontend container.</p>
+
+
 </section>
 
 </main> <!-- /main -->

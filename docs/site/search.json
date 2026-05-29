@@ -213,9 +213,81 @@
     "href": "index.html#available-documentation",
     "title": "Digitization Toolkit Documentation",
     "section": "Available Documentation",
-    "text": "Available Documentation\n\nUser Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nExternal Storage\n\n\nMay 19, 2026\n\n\n\n\n\n\nNo matching items\n\n\n\nDeveloper Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nRaspberry Pi 5 IMX519 Camera Setup\n\n\nFeb 18, 2026\n\n\n\n\n\n\nRaspberry Pi Compute Module 4 Dual Camera Setup\n\n\nFeb 18, 2026\n\n\n\n\n\n\nNo matching items",
+    "text": "Available Documentation\n\nUser Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nExternal Storage\n\n\nMay 29, 2026\n\n\n\n\n\n\nNo matching items\n\n\n\nDeveloper Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nRaspberry Pi 5 IMX519 Camera Setup\n\n\nFeb 18, 2026\n\n\n\n\n\n\nRaspberry Pi Compute Module 4 Dual Camera Setup\n\n\nFeb 18, 2026\n\n\n\n\n\n\nSD Card Distribution\n\n\nMay 29, 2026\n\n\n\n\n\n\nNo matching items",
     "crumbs": [
       "Home"
+    ]
+  },
+  {
+    "objectID": "developers/sd_card_distribution.html",
+    "href": "developers/sd_card_distribution.html",
+    "title": "SD Card Distribution",
+    "section": "",
+    "text": "This guide explains how to prepare and ship a Raspberry Pi SD card image with the Digitization Toolkit pre-installed, so the recipient can plug it in and access the application from any device on the same network — without any manual IP configuration.",
+    "crumbs": [
+      "Developer Guides",
+      "Software Setup Guides",
+      "SD Card Distribution"
+    ]
+  },
+  {
+    "objectID": "developers/sd_card_distribution.html#how-it-works",
+    "href": "developers/sd_card_distribution.html#how-it-works",
+    "title": "SD Card Distribution",
+    "section": "How It Works",
+    "text": "How It Works\nThe Raspberry Pi broadcasts its hostname over the local network using mDNS (via the Avahi daemon, pre-installed on Raspberry Pi OS). This means any device on the same network can reach the Pi at http://&lt;hostname&gt;.local without knowing its IP address.\nThe application is configured to use this hostname instead of a hardcoded IP, so the image works on any network regardless of what IP the router assigns.",
+    "crumbs": [
+      "Developer Guides",
+      "Software Setup Guides",
+      "SD Card Distribution"
+    ]
+  },
+  {
+    "objectID": "developers/sd_card_distribution.html#preparing-the-master-image",
+    "href": "developers/sd_card_distribution.html#preparing-the-master-image",
+    "title": "SD Card Distribution",
+    "section": "Preparing the Master Image",
+    "text": "Preparing the Master Image\n\n1. Set a meaningful hostname\nChoose a hostname that identifies the device. The current convention is digitool:\nsudo hostnamectl set-hostname digitool\nVerify:\nhostname\n# digitool\nThe Pi will be reachable at http://digitool.local on the destination network.\n\n\n2. Confirm Avahi is running\nAvahi (mDNS) is pre-installed on Raspberry Pi OS. Confirm it is active:\nsystemctl is-enabled avahi-daemon\nsystemctl is-active avahi-daemon\nBoth should return enabled / active. If not:\nsudo systemctl enable --now avahi-daemon\n\n\n3. Update .env to use the hostname\nIn /home/pi/dtk/.env, set HOST_IP to the .local hostname:\nHOST_IP=digitool.local\nCORS_ORIGINS=[\"http://digitool.local:5173\",\"http://digitool.local:3000\",\"http://localhost:5173\",\"http://localhost:3000\"]\nPUBLIC_API_BASE resolves automatically from HOST_IP:\nPUBLIC_API_BASE=http://${HOST_IP}:8000\n\n\n4. Rebuild and verify the frontend container\nThe PUBLIC_API_BASE variable is baked into the compiled frontend at build time. After editing .env, rebuild:\ncd /home/pi/dtk\ndocker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build --force-recreate\nOpen http://digitool.local:3000 from another device on the same network to confirm it loads.\n\n\n5. Image the SD card\nOnce the system is working correctly, shut down the Pi cleanly and image the SD card from another machine:\nmacOS / Linux:\n# Identify the SD card device (e.g. /dev/disk4 or /dev/sdb)\ndiskutil list           # macOS\nlsblk                   # Linux\n\n# Create compressed image\nsudo dd if=/dev/sdX bs=4M status=progress | gzip &gt; dtk-$(date +%Y%m%d).img.gz\nWindows: Use Raspberry Pi Imager or Win32DiskImager to read the card to a .img file.\n\n\n\n\n\n\nTipShrink before imaging\n\n\n\nTools like PiShrink can reduce the image size significantly before compression by trimming unused filesystem space.",
+    "crumbs": [
+      "Developer Guides",
+      "Software Setup Guides",
+      "SD Card Distribution"
+    ]
+  },
+  {
+    "objectID": "developers/sd_card_distribution.html#flashing-and-delivering-the-image",
+    "href": "developers/sd_card_distribution.html#flashing-and-delivering-the-image",
+    "title": "SD Card Distribution",
+    "section": "Flashing and Delivering the Image",
+    "text": "Flashing and Delivering the Image\nFlash the image onto a new SD card:\n# Linux / macOS\ngzip -dc dtk-YYYYMMDD.img.gz | sudo dd of=/dev/sdX bs=4M status=progress\nOr use Raspberry Pi Imager → Use custom image → select the .img.gz file.",
+    "crumbs": [
+      "Developer Guides",
+      "Software Setup Guides",
+      "SD Card Distribution"
+    ]
+  },
+  {
+    "objectID": "developers/sd_card_distribution.html#what-the-recipient-needs-to-do",
+    "href": "developers/sd_card_distribution.html#what-the-recipient-needs-to-do",
+    "title": "SD Card Distribution",
+    "section": "What the Recipient Needs to Do",
+    "text": "What the Recipient Needs to Do\nNothing, in most cases. They:\n\nInsert the SD card and power on the Pi.\nConnect the Pi to their local network (Ethernet or Wi-Fi configured before imaging).\nOpen http://digitool.local:3000 from any browser on the same network.\n\n\n\n\n\n\n\nNoteWi-Fi pre-configuration\n\n\n\nIf the destination uses Wi-Fi (not Ethernet), configure the network credentials on the SD card before shipping. The easiest way is via Raspberry Pi Imager’s Advanced options when flashing, or by placing a wpa_supplicant.conf in the /boot partition after flashing.",
+    "crumbs": [
+      "Developer Guides",
+      "Software Setup Guides",
+      "SD Card Distribution"
+    ]
+  },
+  {
+    "objectID": "developers/sd_card_distribution.html#troubleshooting",
+    "href": "developers/sd_card_distribution.html#troubleshooting",
+    "title": "SD Card Distribution",
+    "section": "Troubleshooting",
+    "text": "Troubleshooting\ndigitool.local doesn’t resolve\n\nWindows requires Bonjour (installed automatically with iTunes or iCloud). Windows 10 (1803+) supports mDNS natively.\nTry pinging: ping digitool.local\nAs a fallback, find the IP via the router’s DHCP client list and use it directly.\n\nCORS errors in the browser\nThe frontend origin must match CORS_ORIGINS in .env. If you changed the hostname or port, update that list and restart the backend:\ncd /home/pi/dtk/backend && pixi run dev\nTwo Pis on the same network\nmDNS hostnames must be unique per network. Change the hostname on one of them:\nsudo hostnamectl set-hostname digitool-2\nAnd update HOST_IP and CORS_ORIGINS in .env accordingly, then rebuild the frontend container.",
+    "crumbs": [
+      "Developer Guides",
+      "Software Setup Guides",
+      "SD Card Distribution"
     ]
   }
 ]
