@@ -1,0 +1,50 @@
+---
+title: "Setting Up gPhoto2-Compatible Cameras"
+date-modified: last-modified
+format: html
+lightbox: true
+---
+
+::: {.callout-note appearance="simple" collapse="true"}
+## List of gPhoto2 compatible cameras
+
+For a comprehensive list of gPhoto2-supported cameras, visit the [official support page](http://gphoto.org/proj/libgphoto2/support.php).
+
+To be fully compatible with the Digitization Toolkit software, cameras should support all of the following capabilities: Image Capture, Trigger Capture, Live View, and Configuration.
+:::
+
+## Connect the cameras to the Raspberry Pi
+
+- **Requirements**:
+    - 2 x USB 2.0 Type-A to Mini-B (5-pin) cables
+
+- **Connections**:
+    - Camera side: Plug into the middle port (marked with the USB trident icon).
+    - Raspberry Pi side: Plug into any USB-A port (preferably a blue USB 3.0 port).
+
+![USB connection from the camera side](../../_static/imgs/cannon-EOS-RebelT7-usb4cam.JPG){width=400}
+
+![USB connection to the Raspberry Pi - dual camera setup in ports USB 3.0](../../_static/imgs/cannon_EOS-RebelT7-usb2RPi.JPG){width=400}
+
+## Canon EOS Rebel T7
+
+- Set the focus mode to "Manual Focus": On the lens switch, set the focus mode to MF (Manual Focus).
+
+![Canon EF-S 18-55mm lens attached to a DSLR camera body](../../_static/imgs/cannon-EOS-RebelT7-lensMF.jpg){width=400}
+
+- Set the mode to Manual: rotate the mode dial to M (Manual).
+
+![Canon EOS camera mode dial in manual mode](../../_static/imgs/cannon-EOS-RebelT7-Mode.jpg){width=400}
+
+- Retract the built-in flash: If the flash pops up after turning on the camera, push the flash head down into the closed position.
+
+![Canon EOS camera built-in flash in closed position](../../_static/imgs/cannon-EOS-RebelT7-flash.jpg){width=400}
+
+- Set Auto power off: From the camera menu, find the Auto power off setting and set it to 15 minutes.
+
+![Canon EOS camera menu screen auto power off](../../_static/imgs/cannon-EOS-RebelT7-config-menu.jpg){width=400}
+
+::: {.callout-caution appearance="simple"}
+Disabling Auto power off can result in lens damage. The software will try to power off the camera after 15 minutes of inactivity to prevent this. However, if the Raspberry Pi crashes or is inadvertently powered off while Auto power off is disabled, the camera could remain on indefinitely.
+:::
+

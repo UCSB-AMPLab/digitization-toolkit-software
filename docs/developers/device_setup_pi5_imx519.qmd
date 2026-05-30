@@ -2,6 +2,7 @@
 title: "Raspberry Pi 5 IMX519 Camera Setup"
 date-modified: last-modified
 format: html
+lightbox: true
 ---
 
 ***

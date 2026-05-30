@@ -1,57 +1,58 @@
 [
   {
-    "objectID": "users/external-storage.html",
-    "href": "users/external-storage.html",
-    "title": "External Storage",
+    "objectID": "users/setting-up-gphoto2-cams.html",
+    "href": "users/setting-up-gphoto2-cams.html",
+    "title": "Setting Up gPhoto2-Compatible Cameras",
     "section": "",
-    "text": "The Digitization Toolkit can save captured images to an external USB drive or SD card instead of the device’s internal storage. This is useful when digitizing large collections that would exceed the capacity of the built-in microSD card.",
+    "text": "NoteList of gPhoto2 compatible cameras\n\n\n\n\n\nFor a comprehensive list of gPhoto2-supported cameras, visit the official support page.\nTo be fully compatible with the Digitization Toolkit software, cameras should support all of the following capabilities: Image Capture, Trigger Capture, Live View, and Configuration.",
     "crumbs": [
       "User Guides",
-      "External Storage"
+      "Cameras Setup",
+      "Setting Up gPhoto2-Compatible Cameras"
     ]
   },
   {
-    "objectID": "users/external-storage.html#how-it-works",
-    "href": "users/external-storage.html#how-it-works",
-    "title": "External Storage",
-    "section": "How it works",
-    "text": "How it works\nWhen an external drive is activated, new projects are saved to a dtk-projects/ folder on that drive. Existing projects already stored on the internal card are unaffected and remain accessible. Only one external location can be active at a time.",
+    "objectID": "users/setting-up-gphoto2-cams.html#connect-the-cameras-to-the-raspberry-pi",
+    "href": "users/setting-up-gphoto2-cams.html#connect-the-cameras-to-the-raspberry-pi",
+    "title": "Setting Up gPhoto2-Compatible Cameras",
+    "section": "Connect the cameras to the Raspberry Pi",
+    "text": "Connect the cameras to the Raspberry Pi\n\nRequirements:\n\n2 x USB 2.0 Type-A to Mini-B (5-pin) cables\n\nConnections:\n\nCamera side: Plug into the middle port (marked with the USB trident icon).\nRaspberry Pi side: Plug into any USB-A port (preferably a blue USB 3.0 port).\n\n\n\n\n\nUSB connection from the camera side\n\n\n\n\n\nUSB connection to the Raspberry Pi - dual camera setup in ports USB 3.0",
     "crumbs": [
       "User Guides",
-      "External Storage"
+      "Cameras Setup",
+      "Setting Up gPhoto2-Compatible Cameras"
     ]
   },
   {
-    "objectID": "users/external-storage.html#supported-formats",
-    "href": "users/external-storage.html#supported-formats",
-    "title": "External Storage",
-    "section": "Preparing the drive",
-    "text": "Preparing the drive\n\nRecommended format: exFAT\nexFAT is the recommended format for external drives used with the toolkit. It is:\n\nCompatible with Linux, Windows, and macOS (no drivers needed on any platform)\nSupports files larger than 4 GB (important for high-resolution image sets)\nWell-supported on Raspberry Pi OS\n\n\n\nHow to format a drive as exFAT\n\nLinux / Raspberry PiWindowsmacOS\n\n\n# Install the exFAT tools if not already present\nsudo apt install exfatprogs\n\n# Identify the drive (look for your USB device — e.g. /dev/sda2)\nlsblk\n\n# Format the partition (replace /dev/sdXN with your actual partition)\nsudo mkfs.exfat /dev/sdXN\n\n\n\n\n\n\nCaution\n\n\n\nDouble-check the device path with lsblk before running mkfs. Formatting the wrong partition will permanently erase its contents.\n\n\n\n\n\nOpen File Explorer and right-click the drive → Format…\nSet File system to exFAT\nClick Start\n\n\n\n\nOpen Disk Utility (Applications → Utilities → Disk Utility)\nSelect the drive in the left panel\nClick Erase, set Format to ExFAT, then click Erase\n\n\n\n\n\n\nFormat compatibility summary\n\n\n\nFormat\nWorks with DTK\nNotes\n\n\n\n\nexFAT\n✅ Recommended\nBest cross-platform choice\n\n\next4\n✅ Supported\nLinux-only; slightly faster\n\n\nFAT32 (vfat)\n✅ Supported\n4 GB file size limit\n\n\nNTFS\n⚠️ May work\nRequires ntfs-3g; not guaranteed\n\n\nAPFS\n❌ Not supported\nmacOS-only filesystem\n\n\nHFS+\n❌ Not supported\nmacOS-only filesystem",
+    "objectID": "users/setting-up-gphoto2-cams.html#canon-eos-rebel-t7",
+    "href": "users/setting-up-gphoto2-cams.html#canon-eos-rebel-t7",
+    "title": "Setting Up gPhoto2-Compatible Cameras",
+    "section": "Canon EOS Rebel T7",
+    "text": "Canon EOS Rebel T7\n\nSet the focus mode to “Manual Focus”: On the lens switch, set the focus mode to MF (Manual Focus).\n\n\n\n\nCanon EF-S 18-55mm lens attached to a DSLR camera body\n\n\n\nSet the mode to Manual: rotate the mode dial to M (Manual).\n\n\n\n\nCanon EOS camera mode dial in manual mode\n\n\n\nRetract the built-in flash: If the flash pops up after turning on the camera, push the flash head down into the closed position.\n\n\n\n\nCanon EOS camera built-in flash in closed position\n\n\n\nSet Auto power off: From the camera menu, find the Auto power off setting and set it to 15 minutes.\n\n\n\n\nCanon EOS camera menu screen auto power off\n\n\n\n\n\n\n\n\nDisabling Auto power off can result in lens damage. The software will try to power off the camera after 15 minutes of inactivity to prevent this. However, if the Raspberry Pi crashes or is inadvertently powered off while Auto power off is disabled, the camera could remain on indefinitely.",
     "crumbs": [
       "User Guides",
-      "External Storage"
+      "Cameras Setup",
+      "Setting Up gPhoto2-Compatible Cameras"
     ]
   },
   {
-    "objectID": "users/external-storage.html#using-external-storage-in-the-ui",
-    "href": "users/external-storage.html#using-external-storage-in-the-ui",
-    "title": "External Storage",
-    "section": "Using external storage in the UI",
-    "text": "Using external storage in the UI\nNavigate to Configuración (the gear icon in the sidebar) and expand the Unidad de almacenamiento section.\n\nStep 1 — Connect the drive\nPlug the USB drive or SD card into the Raspberry Pi. The drive does not need to be mounted beforehand.\n\n\nStep 2 — Mount the drive\nThe device list shows all detected partitions. Unmounted partitions have a Montar (Mount) button.\n\nFind the partition you want to use in the list\nClick Montar\nThe toolkit mounts the drive and the button changes to Activar\n\n\n\nStep 3 — Activate the drive\nClick Activar next to the mounted partition. The toolkit:\n\nCreates a dtk-projects/ directory on the drive (if it does not exist)\nSets that directory as the active projects location\nShows a green activo badge on the device row and a banner confirming the active path\n\nNew projects created after this point are stored on the external drive.\n\n\nDeactivating / reverting to internal storage\nClick Restaurar predeterminado in the override banner to switch back to the internal storage. The external drive is not unmounted — existing projects on it remain intact and accessible.\n\n\nSafely removing the drive\nBefore physically unplugging the drive:\n\nIf it is the active storage location, click Restaurar predeterminado first\nClick Desmontar next to the partition\nWait for the success message\nUnplug the drive\n\n\n\n\n\n\n\nImportant\n\n\n\nAlways click Desmontar before unplugging. Removing a drive while it is mounted can corrupt the filesystem and cause data loss.",
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Digitization Toolkit Documentation",
+    "section": "",
+    "text": "Welcome to the Digitization Toolkit Documentation! This site provides comprehensive guides and references for setting up and using the Digitization Toolkit software and hardware components.",
     "crumbs": [
-      "User Guides",
-      "External Storage"
+      "Home"
     ]
   },
   {
-    "objectID": "users/external-storage.html#troubleshooting",
-    "href": "users/external-storage.html#troubleshooting",
-    "title": "External Storage",
-    "section": "Troubleshooting",
-    "text": "Troubleshooting\n\nDrive not appearing in the list\n\nThe toolkit only shows partitions on removable devices that are not part of the operating system. Try clicking Actualizar lista. If the drive still does not appear, check that it is properly connected and recognised by the OS (lsblk in a terminal).\n\n“Montar” returns an error\n\nThe drive may use an unsupported format (APFS, HFS+) or require additional kernel modules (NTFS). Reformat the drive as exFAT and try again.\n\n“Activar” fails with a permission error\n\nThis can happen on freshly formatted ext4 drives where the filesystem root is owned by root. The toolkit attempts a fallback using elevated privileges. If it still fails, reformat the drive as exFAT.\n\nDrive mounted but read-only\n\nSome drives enforce read-only mode when almost full or when the filesystem has errors. Check available space and run sudo fsck /dev/sdXN (with the drive unmounted) to repair any filesystem errors.",
+    "objectID": "index.html#available-documentation",
+    "href": "index.html#available-documentation",
+    "title": "Digitization Toolkit Documentation",
+    "section": "Available Documentation",
+    "text": "Available Documentation\n\nUser Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nExternal Storage\n\n\nMay 29, 2026\n\n\n\n\n\n\nSetting Up gPhoto2-Compatible Cameras\n\n\nMay 30, 2026\n\n\n\n\n\n\nNo matching items\n\n\n\nDeveloper Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nRaspberry Pi 5 IMX519 Camera Setup\n\n\nMay 30, 2026\n\n\n\n\n\n\nRaspberry Pi Compute Module 4 Dual Camera Setup\n\n\nMay 30, 2026\n\n\n\n\n\n\nSD Card Distribution\n\n\nMay 30, 2026\n\n\n\n\n\n\nNo matching items",
     "crumbs": [
-      "User Guides",
-      "External Storage"
+      "Home"
     ]
   },
   {
@@ -199,26 +200,6 @@
     ]
   },
   {
-    "objectID": "index.html",
-    "href": "index.html",
-    "title": "Digitization Toolkit Documentation",
-    "section": "",
-    "text": "Welcome to the Digitization Toolkit Documentation! This site provides comprehensive guides and references for setting up and using the Digitization Toolkit software and hardware components.",
-    "crumbs": [
-      "Home"
-    ]
-  },
-  {
-    "objectID": "index.html#available-documentation",
-    "href": "index.html#available-documentation",
-    "title": "Digitization Toolkit Documentation",
-    "section": "Available Documentation",
-    "text": "Available Documentation\n\nUser Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nExternal Storage\n\n\nMay 29, 2026\n\n\n\n\n\n\nNo matching items\n\n\n\nDeveloper Guides\n\n\n   \n    \n    \n      Order By\n      Default\n      \n        Guide\n      \n    \n  \n    \n      \n      \n    \n\n\n\n\n\n\nGuide\n\n\n\nLast Updated\n\n\n\n\n\n\n\n\nRaspberry Pi 5 IMX519 Camera Setup\n\n\nFeb 18, 2026\n\n\n\n\n\n\nRaspberry Pi Compute Module 4 Dual Camera Setup\n\n\nFeb 18, 2026\n\n\n\n\n\n\nSD Card Distribution\n\n\nMay 29, 2026\n\n\n\n\n\n\nNo matching items",
-    "crumbs": [
-      "Home"
-    ]
-  },
-  {
     "objectID": "developers/sd_card_distribution.html",
     "href": "developers/sd_card_distribution.html",
     "title": "SD Card Distribution",
@@ -288,6 +269,61 @@
       "Developer Guides",
       "Software Setup Guides",
       "SD Card Distribution"
+    ]
+  },
+  {
+    "objectID": "users/external-storage.html",
+    "href": "users/external-storage.html",
+    "title": "External Storage",
+    "section": "",
+    "text": "The Digitization Toolkit can save captured images to an external USB drive or SD card instead of the device’s internal storage. This is useful when digitizing large collections that would exceed the capacity of the built-in microSD card.",
+    "crumbs": [
+      "User Guides",
+      "External Storage"
+    ]
+  },
+  {
+    "objectID": "users/external-storage.html#how-it-works",
+    "href": "users/external-storage.html#how-it-works",
+    "title": "External Storage",
+    "section": "How it works",
+    "text": "How it works\nWhen an external drive is activated, new projects are saved to a dtk-projects/ folder on that drive. Existing projects already stored on the internal card are unaffected and remain accessible. Only one external location can be active at a time.",
+    "crumbs": [
+      "User Guides",
+      "External Storage"
+    ]
+  },
+  {
+    "objectID": "users/external-storage.html#supported-formats",
+    "href": "users/external-storage.html#supported-formats",
+    "title": "External Storage",
+    "section": "Preparing the drive",
+    "text": "Preparing the drive\n\nRecommended format: exFAT\nexFAT is the recommended format for external drives used with the toolkit. It is:\n\nCompatible with Linux, Windows, and macOS (no drivers needed on any platform)\nSupports files larger than 4 GB (important for high-resolution image sets)\nWell-supported on Raspberry Pi OS\n\n\n\nHow to format a drive as exFAT\n\nLinux / Raspberry PiWindowsmacOS\n\n\n# Install the exFAT tools if not already present\nsudo apt install exfatprogs\n\n# Identify the drive (look for your USB device — e.g. /dev/sda2)\nlsblk\n\n# Format the partition (replace /dev/sdXN with your actual partition)\nsudo mkfs.exfat /dev/sdXN\n\n\n\n\n\n\nCaution\n\n\n\nDouble-check the device path with lsblk before running mkfs. Formatting the wrong partition will permanently erase its contents.\n\n\n\n\n\nOpen File Explorer and right-click the drive → Format…\nSet File system to exFAT\nClick Start\n\n\n\n\nOpen Disk Utility (Applications → Utilities → Disk Utility)\nSelect the drive in the left panel\nClick Erase, set Format to ExFAT, then click Erase\n\n\n\n\n\n\nFormat compatibility summary\n\n\n\nFormat\nWorks with DTK\nNotes\n\n\n\n\nexFAT\n✅ Recommended\nBest cross-platform choice\n\n\next4\n✅ Supported\nLinux-only; slightly faster\n\n\nFAT32 (vfat)\n✅ Supported\n4 GB file size limit\n\n\nNTFS\n⚠️ May work\nRequires ntfs-3g; not guaranteed\n\n\nAPFS\n❌ Not supported\nmacOS-only filesystem\n\n\nHFS+\n❌ Not supported\nmacOS-only filesystem",
+    "crumbs": [
+      "User Guides",
+      "External Storage"
+    ]
+  },
+  {
+    "objectID": "users/external-storage.html#using-external-storage-in-the-ui",
+    "href": "users/external-storage.html#using-external-storage-in-the-ui",
+    "title": "External Storage",
+    "section": "Using external storage in the UI",
+    "text": "Using external storage in the UI\nNavigate to Configuración (the gear icon in the sidebar) and expand the Unidad de almacenamiento section.\n\nStep 1 — Connect the drive\nPlug the USB drive or SD card into the Raspberry Pi. The drive does not need to be mounted beforehand.\n\n\nStep 2 — Mount the drive\nThe device list shows all detected partitions. Unmounted partitions have a Montar (Mount) button.\n\nFind the partition you want to use in the list\nClick Montar\nThe toolkit mounts the drive and the button changes to Activar\n\n\n\nStep 3 — Activate the drive\nClick Activar next to the mounted partition. The toolkit:\n\nCreates a dtk-projects/ directory on the drive (if it does not exist)\nSets that directory as the active projects location\nShows a green activo badge on the device row and a banner confirming the active path\n\nNew projects created after this point are stored on the external drive.\n\n\nDeactivating / reverting to internal storage\nClick Restaurar predeterminado in the override banner to switch back to the internal storage. The external drive is not unmounted — existing projects on it remain intact and accessible.\n\n\nSafely removing the drive\nBefore physically unplugging the drive:\n\nIf it is the active storage location, click Restaurar predeterminado first\nClick Desmontar next to the partition\nWait for the success message\nUnplug the drive\n\n\n\n\n\n\n\nImportant\n\n\n\nAlways click Desmontar before unplugging. Removing a drive while it is mounted can corrupt the filesystem and cause data loss.",
+    "crumbs": [
+      "User Guides",
+      "External Storage"
+    ]
+  },
+  {
+    "objectID": "users/external-storage.html#troubleshooting",
+    "href": "users/external-storage.html#troubleshooting",
+    "title": "External Storage",
+    "section": "Troubleshooting",
+    "text": "Troubleshooting\n\nDrive not appearing in the list\n\nThe toolkit only shows partitions on removable devices that are not part of the operating system. Try clicking Actualizar lista. If the drive still does not appear, check that it is properly connected and recognised by the OS (lsblk in a terminal).\n\n“Montar” returns an error\n\nThe drive may use an unsupported format (APFS, HFS+) or require additional kernel modules (NTFS). Reformat the drive as exFAT and try again.\n\n“Activar” fails with a permission error\n\nThis can happen on freshly formatted ext4 drives where the filesystem root is owned by root. The toolkit attempts a fallback using elevated privileges. If it still fails, reformat the drive as exFAT.\n\nDrive mounted but read-only\n\nSome drives enforce read-only mode when almost full or when the filesystem has errors. Check available space and run sudo fsck /dev/sdXN (with the drive unmounted) to repair any filesystem errors.",
+    "crumbs": [
+      "User Guides",
+      "External Storage"
     ]
   }
 ]

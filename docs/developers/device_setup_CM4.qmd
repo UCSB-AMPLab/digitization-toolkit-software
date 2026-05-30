@@ -2,6 +2,7 @@
 title: "Raspberry Pi Compute Module 4 Dual Camera Setup"
 date-modified: last-modified
 format: html
+lightbox: true
 ---
 
 ***
