@@ -9,3 +9,27 @@ services:
       # Override portable folders with appliance paths
       - /var/lib/dtk:/var/lib/dtk
       - /var/log/dtk:/var/log/dtk
+
+  frontend:
+    environment:
+      # Route browser-side API calls through Nginx (same-origin, fixes Chrome PNA policy)
+      # http://digitool.local/api/* → Nginx strips /api → backend:8000/*
+      - PUBLIC_API_BASE=http://${HOST_IP:-localhost}/api
+      # ORIGIN must match the URL users open (port 80 via Nginx, no explicit port)
+      - ORIGIN=http://${HOST_IP:-localhost}
+
+  # ── Nginx reverse proxy ────────────────────────────────────────────────────
+  # Puts frontend (:3000) and backend (:8000) behind a single origin (port 80).
+  # This eliminates the cross-port request that Chrome's Private Network Access
+  # (PNA) policy blocks when the client is on a .local HTTP address.
+  # Access the app at: http://digitool.local  (instead of :3000)
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - frontend

@@ -27,6 +27,9 @@ website:
         contents:
           - href: users/external-storage.qmd
             text: "External Storage"
+          - section: "Cameras Setup"
+            contents:
+              - href: users/setting-up-gphoto2-cams.qmd
       - section: "Developer Guides"
         contents:
           - section: "Hardware Setup Guides"
@@ -35,6 +38,10 @@ website:
                 text: "Device Setup: Raspberry Pi CM4 with Cameras"
               - href: developers/device_setup_pi5_imx519.qmd
                 text: "Device Setup: Raspberry Pi 5 with IMX519 Camera"
+          - section: "Software Setup Guides"
+            contents:
+              - href: developers/sd_card_distribution.qmd
+                text: "SD Card Distribution"
   page-footer:
     center: "Documentation site built: {{< meta date >}}"
 

@@ -112,7 +112,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Database initialisation & migrations
+# 6. Installing packages and binaries for cameras
+# ---------------------------------------------------------------------------
+
+# gPhoto2
+if sudo apt install -y gphoto2
+    echo "gPhoto2 package installed"
+    echo ""
+else
+    echo "gPhoto2 package not available in apt package manager."
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Database initialisation & migrations
 # ---------------------------------------------------------------------------
 cd "$PROJECT_ROOT"
 echo "→ Starting database for migration..."

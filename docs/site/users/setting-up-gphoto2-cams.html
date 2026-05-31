@@ -8,7 +8,7 @@
 
 <meta name="dcterms.date" content="2026-05-30">
 
-<title>Raspberry Pi Compute Module 4 Dual Camera Setup – Digitization Toolkit Documentation</title>
+<title>Setting Up gPhoto2-Compatible Cameras – Digitization Toolkit Documentation</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -23,41 +23,6 @@ ul.task-list li input[type="checkbox"] {
   width: 0.8em;
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
-}
-/* CSS for syntax highlighting */
-html { -webkit-text-size-adjust: 100%; }
-pre > code.sourceCode { white-space: pre; position: relative; }
-pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
-pre > code.sourceCode > span:empty { height: 1.2em; }
-.sourceCode { overflow: visible; }
-code.sourceCode > span { color: inherit; text-decoration: inherit; }
-div.sourceCode { margin: 1em 0; }
-pre.sourceCode { margin: 0; }
-@media screen {
-div.sourceCode { overflow: auto; }
-}
-@media print {
-pre > code.sourceCode { white-space: pre-wrap; }
-pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
-}
-pre.numberSource code
-  { counter-reset: source-line 0; }
-pre.numberSource code > span
-  { position: relative; left: -4em; counter-increment: source-line; }
-pre.numberSource code > span > a:first-child::before
-  { content: counter(source-line);
-    position: relative; left: -1em; text-align: right; vertical-align: baseline;
-    border: none; display: inline-block;
-    -webkit-touch-callout: none; -webkit-user-select: none;
-    -khtml-user-select: none; -moz-user-select: none;
-    -ms-user-select: none; user-select: none;
-    padding: 0 4px; width: 4em;
-  }
-pre.numberSource { margin-left: 3em;  padding-left: 4px; }
-div.sourceCode
-  {   }
-@media screen {
-pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
 }
 </style>
 
@@ -145,7 +110,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Device Setup: Raspberry Pi CM4 with Cameras</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../users/external-storage.html">User Guides</a></li><li class="breadcrumb-item"><a href="../users/setting-up-gphoto2-cams.html">Cameras Setup</a></li><li class="breadcrumb-item"><a href="../users/setting-up-gphoto2-cams.html">Setting Up gPhoto2-Compatible Cameras</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
       <button type="button" class="btn quarto-search-button" aria-label="Search" onclick="window.quartoOpenSearch();">
@@ -173,13 +138,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
  <span class="menu-text">User Guides</span></a>
-          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="false" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 ">  
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../users/external-storage.html" class="sidebar-item-text sidebar-link">
@@ -188,16 +153,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </li>
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
  <span class="menu-text">Cameras Setup</span></a>
-          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth2 ">  
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth2 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../users/setting-up-gphoto2-cams.html" class="sidebar-item-text sidebar-link">
+  <a href="../users/setting-up-gphoto2-cams.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Setting Up gPhoto2-Compatible Cameras</span></a>
   </div>
 </li>
@@ -207,25 +172,25 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false">
  <span class="menu-text">Developer Guides</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="false" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 ">  
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false">
  <span class="menu-text">Hardware Setup Guides</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 show">  
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link active">
+  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Device Setup: Raspberry Pi CM4 with Cameras</span></a>
   </div>
 </li>
@@ -266,19 +231,17 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#hardware-setup" id="toc-hardware-setup" class="nav-link active" data-scroll-target="#hardware-setup">1. Hardware Setup</a></li>
-  <li><a href="#firmware-configuration" id="toc-firmware-configuration" class="nav-link" data-scroll-target="#firmware-configuration">2. Firmware Configuration</a></li>
-  <li><a href="#test-cameras" id="toc-test-cameras" class="nav-link" data-scroll-target="#test-cameras">3. Test Cameras</a></li>
-  <li><a href="#tips-troubleshooting" id="toc-tips-troubleshooting" class="nav-link" data-scroll-target="#tips-troubleshooting">Tips &amp; Troubleshooting</a></li>
+  <li><a href="#connect-the-cameras-to-the-raspberry-pi" id="toc-connect-the-cameras-to-the-raspberry-pi" class="nav-link active" data-scroll-target="#connect-the-cameras-to-the-raspberry-pi">Connect the cameras to the Raspberry Pi</a></li>
+  <li><a href="#canon-eos-rebel-t7" id="toc-canon-eos-rebel-t7" class="nav-link" data-scroll-target="#canon-eos-rebel-t7">Canon EOS Rebel T7</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Device Setup: Raspberry Pi CM4 with Cameras</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="../users/external-storage.html">User Guides</a></li><li class="breadcrumb-item"><a href="../users/setting-up-gphoto2-cams.html">Cameras Setup</a></li><li class="breadcrumb-item"><a href="../users/setting-up-gphoto2-cams.html">Setting Up gPhoto2-Compatible Cameras</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Raspberry Pi Compute Module 4 Dual Camera Setup</h1>
+<h1 class="title">Setting Up gPhoto2-Compatible Cameras</h1>
 </div>
 
 
@@ -307,131 +270,97 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </header>
 
 
-<hr>
-<p>This guide explains how to connect and configure two cameras on the <strong>Raspberry Pi CM4 IO Board</strong>, and how to test simultaneous still captures with shell scripts.</p>
-<section id="hardware-setup" class="level2">
-<h2 class="anchored" data-anchor-id="hardware-setup">1. Hardware Setup</h2>
-<p><strong>Required Hardware</strong></p>
+<div class="callout callout-style-simple callout-note callout-titled">
+<div class="callout-header d-flex align-content-center collapsed" data-bs-toggle="collapse" data-bs-target=".callout-1-contents" aria-controls="callout-1" aria-expanded="false" aria-label="Toggle callout">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>List of gPhoto2 compatible cameras
+</div>
+<div class="callout-btn-toggle d-inline-block border-0 py-1 ps-1 pe-0 float-end"><i class="callout-toggle"></i></div>
+</div>
+<div id="callout-1" class="callout-1-contents callout-collapse collapse">
+<div class="callout-body-container callout-body">
+<p>For a comprehensive list of gPhoto2-supported cameras, visit the <a href="http://gphoto.org/proj/libgphoto2/support.php">official support page</a>.</p>
+<p>To be fully compatible with the Digitization Toolkit software, cameras should support all of the following capabilities: Image Capture, Trigger Capture, Live View, and Configuration.</p>
+</div>
+</div>
+</div>
+<section id="connect-the-cameras-to-the-raspberry-pi" class="level2">
+<h2 class="anchored" data-anchor-id="connect-the-cameras-to-the-raspberry-pi">Connect the cameras to the Raspberry Pi</h2>
 <ul>
-<li>Raspberry Pi Compute Module 4 (CM4)</li>
-<li>CM4 IO Board</li>
-<li>2 × Arducam 64MP (or other libcamera-compatible CSI-2 cameras)</li>
-<li>2 × CSI ribbon cables</li>
-<li>2 × jumper caps</li>
-</ul>
-<p><strong>Step 1: Attach the cameras</strong></p>
+<li><strong>Requirements</strong>:
 <ul>
-<li>Plug one ribbon cable into CAM0 (near the HDMI ports).</li>
-<li>Plug the other into CAM1 (near the USB ports).</li>
-<li>Ensure the ribbon contacts face the correct orientation (usually silver contacts toward the HDMI/USB connectors).</li>
-</ul>
-<p><strong>Step 2: Add J6 jumpers</strong></p>
+<li>2 x USB 2.0 Type-A to Mini-B (5-pin) cables</li>
+</ul></li>
+<li><strong>Connections</strong>:
 <ul>
-<li>Locate header J6 on the IO board.</li>
-<li>Place two jumper caps in a vertical orientation (bridging the same column).</li>
-<li>This connects I²C and control lines for CAM0.</li>
+<li>Camera side: Plug into the middle port (marked with the USB trident icon).</li>
+<li>Raspberry Pi side: Plug into any USB-A port (preferably a blue USB 3.0 port).</li>
+</ul></li>
 </ul>
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
-<p><a href="../_static/imgs/CM4_cameras_setup.jpg" class="lightbox" data-gallery="quarto-lightbox-gallery-1" title="alt"><img src="../_static/imgs/CM4_cameras_setup.jpg" class="img-fluid figure-img" alt="alt"></a></p>
-<figcaption>alt</figcaption>
+<p><a href="../../_static/imgs/cannon-EOS-RebelT7-usb4cam.JPG" class="lightbox" data-gallery="quarto-lightbox-gallery-1" title="USB connection from the camera side"><img src="../../_static/imgs/cannon-EOS-RebelT7-usb4cam.JPG" class="img-fluid figure-img" width="400" alt="USB connection from the camera side"></a></p>
+<figcaption>USB connection from the camera side</figcaption>
 </figure>
 </div>
-<p><strong>Step 3: Boot the system and check I²C</strong></p>
-<p>Install <code>i2c-tools</code> if not already present:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get update</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get install <span class="at">-y</span> i2c-tools</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>List buses:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">i2cdetect</span> <span class="at">-l</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>You should see:</p>
-<ul>
-<li><code>i2c-0</code> → mux channel 0</li>
-<li><code>i2c-10</code> → mux channel 1</li>
-</ul>
-<p>Probe each:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> i2cdetect <span class="at">-y</span> 0</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> i2cdetect <span class="at">-y</span> 10</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Each should show <code>0x1a</code> (camera sensor) and <code>0x0c</code> (VCM driver).</p>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../../_static/imgs/cannon_EOS-RebelT7-usb2RPi.JPG" class="lightbox" data-gallery="quarto-lightbox-gallery-2" title="USB connection to the Raspberry Pi - dual camera setup in ports USB 3.0"><img src="../../_static/imgs/cannon_EOS-RebelT7-usb2RPi.JPG" class="img-fluid figure-img" width="400" alt="USB connection to the Raspberry Pi - dual camera setup in ports USB 3.0"></a></p>
+<figcaption>USB connection to the Raspberry Pi - dual camera setup in ports USB 3.0</figcaption>
+</figure>
+</div>
 </section>
-<section id="firmware-configuration" class="level2">
-<h2 class="anchored" data-anchor-id="firmware-configuration">2. Firmware Configuration</h2>
-<p><strong>Step 1: Disable auto-detect</strong></p>
-<p>Edit <code>/boot/firmware/config.txt</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> nano /boot/firmware/config.txt</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Add at the end:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="va">camera_auto_detect</span><span class="op">=</span>0</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="va">dtoverlay</span><span class="op">=</span>arducam-64mp,cam0   <span class="co"># enables CAM0</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="va">dtoverlay</span><span class="op">=</span>arducam-64mp        <span class="co"># enables CAM1</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Save and reboot</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> reboot</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong>Step 2: Verify cameras</strong></p>
-<p>After reboot</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--list</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><em><strong>Expected output: two cameras listed</strong></em></p>
-</section>
-<section id="test-cameras" class="level2">
-<h2 class="anchored" data-anchor-id="test-cameras">3. Test Cameras</h2>
-<p><strong>Test Single Camera</strong></p>
-<p>Try a preview:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 0 <span class="at">-t</span> 2000</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 1 <span class="at">-t</span> 2000</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Capture stills</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-still</span> <span class="at">--camera</span> 0 <span class="at">-o</span> cam0.jpg</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-still</span> <span class="at">--camera</span> 1 <span class="at">-o</span> cam1.jpg</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong>Test Dual Camera Capture</strong></p>
-<p>This script tries both cameras at once. If high resolution fails, it falls back to lower resolutions.</p>
-<p>Save as <code>dual_snap.sh</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="va">OUTDIR</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">:-</span>captures<span class="va">}</span><span class="st">"</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">"</span><span class="va">$OUTDIR</span><span class="st">"</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="va">SIZES</span><span class="op">=</span><span class="va">(</span><span class="st">"4624x3472"</span> <span class="st">"3840x2160"</span> <span class="st">"2312x1736"</span><span class="va">)</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="va">TIMEOUT_MS</span><span class="op">=</span>1500</span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="va">EXTRA_OPTS</span><span class="op">=</span><span class="st">"--thumb none --buffer-count 2"</span></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="va">STAMP</span><span class="op">=</span><span class="st">"</span><span class="va">$(</span><span class="fu">date</span> +<span class="st">'%Y%m%d_%H%M%S_%3N'</span><span class="va">)</span><span class="st">"</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="va">F0</span><span class="op">=</span><span class="st">"</span><span class="va">$OUTDIR</span><span class="st">/</span><span class="va">${STAMP}</span><span class="st">_cam0.jpg"</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="va">F1</span><span class="op">=</span><span class="st">"</span><span class="va">$OUTDIR</span><span class="st">/</span><span class="va">${STAMP}</span><span class="st">_cam1.jpg"</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="fu">try_capture ()</span> <span class="kw">{</span></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>  <span class="bu">local</span> <span class="va">W</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">%</span>x<span class="pp">*</span><span class="va">}</span><span class="st">"</span> <span class="va">H</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">#</span><span class="pp">*</span>x<span class="va">}</span><span class="st">"</span></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="st">"Trying </span><span class="va">$W</span><span class="st"> x </span><span class="va">$H</span><span class="st"> ..."</span></span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="ex">rpicam-still</span> <span class="at">--camera</span> 0 <span class="at">-t</span> <span class="st">"</span><span class="va">$TIMEOUT_MS</span><span class="st">"</span> <span class="at">-n</span> <span class="at">--width</span> <span class="st">"</span><span class="va">$W</span><span class="st">"</span> <span class="at">--height</span> <span class="st">"</span><span class="va">$H</span><span class="st">"</span> <span class="at">-o</span> <span class="st">"</span><span class="va">$F0</span><span class="st">"</span> <span class="va">$EXTRA_OPTS</span> <span class="kw">&amp;</span></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  <span class="va">PID0</span><span class="op">=</span><span class="va">$!</span></span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">sleep</span> 0.02</span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="ex">rpicam-still</span> <span class="at">--camera</span> 1 <span class="at">-t</span> <span class="st">"</span><span class="va">$TIMEOUT_MS</span><span class="st">"</span> <span class="at">-n</span> <span class="at">--width</span> <span class="st">"</span><span class="va">$W</span><span class="st">"</span> <span class="at">--height</span> <span class="st">"</span><span class="va">$H</span><span class="st">"</span> <span class="at">-o</span> <span class="st">"</span><span class="va">$F1</span><span class="st">"</span> <span class="va">$EXTRA_OPTS</span> <span class="kw">&amp;</span></span>
-<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">PID1</span><span class="op">=</span><span class="va">$!</span></span>
-<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>  <span class="bu">wait</span> <span class="st">"</span><span class="va">$PID0</span><span class="st">"</span> <span class="kw">&amp;&amp;</span> <span class="bu">wait</span> <span class="st">"</span><span class="va">$PID1</span><span class="st">"</span></span>
-<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
-<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> sz <span class="kw">in</span> <span class="st">"</span><span class="va">${SIZES</span><span class="op">[@]</span><span class="va">}</span><span class="st">"</span><span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="ex">try_capture</span> <span class="st">"</span><span class="va">$sz</span><span class="st">"</span><span class="kw">;</span> <span class="cf">then</span></span>
-<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"Success at </span><span class="va">$sz</span><span class="st">"</span></span>
-<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"Saved:"</span></span>
-<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"  </span><span class="va">$F0</span><span class="st">"</span></span>
-<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"  </span><span class="va">$F1</span><span class="st">"</span></span>
-<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>    <span class="bu">exit</span> 0</span>
-<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">fi</span></span>
-<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Usage:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> +x dual_snap.sh</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./dual_snap.sh</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-</section>
-<section id="tips-troubleshooting" class="level2">
-<h2 class="anchored" data-anchor-id="tips-troubleshooting">Tips &amp; Troubleshooting</h2>
+<section id="canon-eos-rebel-t7" class="level2">
+<h2 class="anchored" data-anchor-id="canon-eos-rebel-t7">Canon EOS Rebel T7</h2>
 <ul>
-<li><strong>Memory errors</strong>: capturing two full-res images in parallel may fail. Stick to 3840×2160 for stability.</li>
-<li><strong>Permissions</strong>: ensure your user is in the video group:</li>
+<li>Set the focus mode to “Manual Focus”: On the lens switch, set the focus mode to MF (Manual Focus).</li>
 </ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> usermod <span class="at">-aG</span> video <span class="va">$USER</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../../_static/imgs/cannon-EOS-RebelT7-lensMF.jpg" class="lightbox" data-gallery="quarto-lightbox-gallery-3" title="Canon EF-S 18-55mm lens attached to a DSLR camera body"><img src="../../_static/imgs/cannon-EOS-RebelT7-lensMF.jpg" class="img-fluid figure-img" width="400" alt="Canon EF-S 18-55mm lens attached to a DSLR camera body"></a></p>
+<figcaption>Canon EF-S 18-55mm lens attached to a DSLR camera body</figcaption>
+</figure>
+</div>
 <ul>
-<li><strong>Color/exposure match</strong>: use fixed settings:</li>
+<li>Set the mode to Manual: rotate the mode dial to M (Manual).</li>
 </ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="va">EXTRA_OPTS</span><span class="op">=</span><span class="st">"--shutter 10000 --gain 1.5 --awbgains 2.0,1.5"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../../_static/imgs/cannon-EOS-RebelT7-Mode.jpg" class="lightbox" data-gallery="quarto-lightbox-gallery-4" title="Canon EOS camera mode dial in manual mode"><img src="../../_static/imgs/cannon-EOS-RebelT7-Mode.jpg" class="img-fluid figure-img" width="400" alt="Canon EOS camera mode dial in manual mode"></a></p>
+<figcaption>Canon EOS camera mode dial in manual mode</figcaption>
+</figure>
+</div>
 <ul>
-<li><strong>Truly simultaneous capture</strong>: requires external trigger/sync hardware. Software methods give ms-level offsets.</li>
+<li>Retract the built-in flash: If the flash pops up after turning on the camera, push the flash head down into the closed position.</li>
 </ul>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../../_static/imgs/cannon-EOS-RebelT7-flash.jpg" class="lightbox" data-gallery="quarto-lightbox-gallery-5" title="Canon EOS camera built-in flash in closed position"><img src="../../_static/imgs/cannon-EOS-RebelT7-flash.jpg" class="img-fluid figure-img" width="400" alt="Canon EOS camera built-in flash in closed position"></a></p>
+<figcaption>Canon EOS camera built-in flash in closed position</figcaption>
+</figure>
+</div>
+<ul>
+<li>Set Auto power off: From the camera menu, find the Auto power off setting and set it to 15 minutes.</li>
+</ul>
+<div class="quarto-figure quarto-figure-center">
+<figure class="figure">
+<p><a href="../../_static/imgs/cannon-EOS-RebelT7-config-menu.jpg" class="lightbox" data-gallery="quarto-lightbox-gallery-6" title="Canon EOS camera menu screen auto power off"><img src="../../_static/imgs/cannon-EOS-RebelT7-config-menu.jpg" class="img-fluid figure-img" width="400" alt="Canon EOS camera menu screen auto power off"></a></p>
+<figcaption>Canon EOS camera menu screen auto power off</figcaption>
+</figure>
+</div>
+<div class="callout callout-style-simple callout-caution">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>Disabling Auto power off can result in lens damage. The software will try to power off the camera after 15 minutes of inactivity to prevent this. However, if the Raspberry Pi crashes or is inadvertently powered off while Auto power off is disabled, the camera could remain on indefinitely.</p>
+</div>
+</div>
+</div>
 
 
 </section>

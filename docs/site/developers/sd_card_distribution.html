@@ -8,7 +8,7 @@
 
 <meta name="dcterms.date" content="2026-05-30">
 
-<title>Raspberry Pi Compute Module 4 Dual Camera Setup – Digitization Toolkit Documentation</title>
+<title>SD Card Distribution – Digitization Toolkit Documentation</title>
 <style>
 /* Default styles provided by pandoc.
 ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
@@ -79,9 +79,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="../site_libs/bootstrap/bootstrap-2832c693f0fd49d84288d2c01aa32519.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
-<script src="../site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
-<link href="../site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet">
-<link href="../site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -145,7 +142,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
         <i class="bi bi-layout-text-sidebar-reverse"></i>
       </button>
-        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Device Setup: Raspberry Pi CM4 with Cameras</a></li></ol></nav>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">Software Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">SD Card Distribution</a></li></ol></nav>
         <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
         </a>
       <button type="button" class="btn quarto-search-button" aria-label="Search" onclick="window.quartoOpenSearch();">
@@ -216,16 +213,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false">
  <span class="menu-text">Hardware Setup Guides</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 show">  
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 ">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link active">
+  <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Device Setup: Raspberry Pi CM4 with Cameras</span></a>
   </div>
 </li>
@@ -239,16 +236,16 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </li>
           <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false">
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true">
  <span class="menu-text">Software Setup Guides</span></a>
-          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false" aria-label="Toggle section">
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth2 ">  
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth2 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
-  <a href="../developers/sd_card_distribution.html" class="sidebar-item-text sidebar-link">
+  <a href="../developers/sd_card_distribution.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">SD Card Distribution</span></a>
   </div>
 </li>
@@ -266,19 +263,27 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#hardware-setup" id="toc-hardware-setup" class="nav-link active" data-scroll-target="#hardware-setup">1. Hardware Setup</a></li>
-  <li><a href="#firmware-configuration" id="toc-firmware-configuration" class="nav-link" data-scroll-target="#firmware-configuration">2. Firmware Configuration</a></li>
-  <li><a href="#test-cameras" id="toc-test-cameras" class="nav-link" data-scroll-target="#test-cameras">3. Test Cameras</a></li>
-  <li><a href="#tips-troubleshooting" id="toc-tips-troubleshooting" class="nav-link" data-scroll-target="#tips-troubleshooting">Tips &amp; Troubleshooting</a></li>
+  <li><a href="#how-it-works" id="toc-how-it-works" class="nav-link active" data-scroll-target="#how-it-works">How It Works</a></li>
+  <li><a href="#preparing-the-master-image" id="toc-preparing-the-master-image" class="nav-link" data-scroll-target="#preparing-the-master-image">Preparing the Master Image</a>
+  <ul class="collapse">
+  <li><a href="#set-a-meaningful-hostname" id="toc-set-a-meaningful-hostname" class="nav-link" data-scroll-target="#set-a-meaningful-hostname">1. Set a meaningful hostname</a></li>
+  <li><a href="#confirm-avahi-is-running" id="toc-confirm-avahi-is-running" class="nav-link" data-scroll-target="#confirm-avahi-is-running">2. Confirm Avahi is running</a></li>
+  <li><a href="#update-.env-to-use-the-hostname" id="toc-update-.env-to-use-the-hostname" class="nav-link" data-scroll-target="#update-.env-to-use-the-hostname">3. Update <code>.env</code> to use the hostname</a></li>
+  <li><a href="#rebuild-and-verify-the-frontend-container" id="toc-rebuild-and-verify-the-frontend-container" class="nav-link" data-scroll-target="#rebuild-and-verify-the-frontend-container">4. Rebuild and verify the frontend container</a></li>
+  <li><a href="#image-the-sd-card" id="toc-image-the-sd-card" class="nav-link" data-scroll-target="#image-the-sd-card">5. Image the SD card</a></li>
+  </ul></li>
+  <li><a href="#flashing-and-delivering-the-image" id="toc-flashing-and-delivering-the-image" class="nav-link" data-scroll-target="#flashing-and-delivering-the-image">Flashing and Delivering the Image</a></li>
+  <li><a href="#what-the-recipient-needs-to-do" id="toc-what-the-recipient-needs-to-do" class="nav-link" data-scroll-target="#what-the-recipient-needs-to-do">What the Recipient Needs to Do</a></li>
+  <li><a href="#troubleshooting" id="toc-troubleshooting" class="nav-link" data-scroll-target="#troubleshooting">Troubleshooting</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
 <main class="content" id="quarto-document-content">
 
-<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Hardware Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/device_setup_CM4.html">Device Setup: Raspberry Pi CM4 with Cameras</a></li></ol></nav>
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item">Developer Guides</li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">Software Setup Guides</a></li><li class="breadcrumb-item"><a href="../developers/sd_card_distribution.html">SD Card Distribution</a></li></ol></nav>
 <div class="quarto-title">
-<h1 class="title">Raspberry Pi Compute Module 4 Dual Camera Setup</h1>
+<h1 class="title">SD Card Distribution</h1>
 </div>
 
 
@@ -308,130 +313,121 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 
 <hr>
-<p>This guide explains how to connect and configure two cameras on the <strong>Raspberry Pi CM4 IO Board</strong>, and how to test simultaneous still captures with shell scripts.</p>
-<section id="hardware-setup" class="level2">
-<h2 class="anchored" data-anchor-id="hardware-setup">1. Hardware Setup</h2>
-<p><strong>Required Hardware</strong></p>
-<ul>
-<li>Raspberry Pi Compute Module 4 (CM4)</li>
-<li>CM4 IO Board</li>
-<li>2 × Arducam 64MP (or other libcamera-compatible CSI-2 cameras)</li>
-<li>2 × CSI ribbon cables</li>
-<li>2 × jumper caps</li>
-</ul>
-<p><strong>Step 1: Attach the cameras</strong></p>
-<ul>
-<li>Plug one ribbon cable into CAM0 (near the HDMI ports).</li>
-<li>Plug the other into CAM1 (near the USB ports).</li>
-<li>Ensure the ribbon contacts face the correct orientation (usually silver contacts toward the HDMI/USB connectors).</li>
-</ul>
-<p><strong>Step 2: Add J6 jumpers</strong></p>
-<ul>
-<li>Locate header J6 on the IO board.</li>
-<li>Place two jumper caps in a vertical orientation (bridging the same column).</li>
-<li>This connects I²C and control lines for CAM0.</li>
-</ul>
-<div class="quarto-figure quarto-figure-center">
-<figure class="figure">
-<p><a href="../_static/imgs/CM4_cameras_setup.jpg" class="lightbox" data-gallery="quarto-lightbox-gallery-1" title="alt"><img src="../_static/imgs/CM4_cameras_setup.jpg" class="img-fluid figure-img" alt="alt"></a></p>
-<figcaption>alt</figcaption>
-</figure>
+<p>This guide explains how to prepare and ship a Raspberry Pi SD card image with the Digitization Toolkit pre-installed, so the recipient can plug it in and access the application from any device on the same network — without any manual IP configuration.</p>
+<hr>
+<section id="how-it-works" class="level2">
+<h2 class="anchored" data-anchor-id="how-it-works">How It Works</h2>
+<p>The Raspberry Pi broadcasts its hostname over the local network using <strong>mDNS</strong> (via the Avahi daemon, pre-installed on Raspberry Pi OS). This means any device on the same network can reach the Pi at <code>http://&lt;hostname&gt;.local</code> without knowing its IP address.</p>
+<p>The application is configured to use this hostname instead of a hardcoded IP, so the image works on any network regardless of what IP the router assigns.</p>
+<hr>
+</section>
+<section id="preparing-the-master-image" class="level2">
+<h2 class="anchored" data-anchor-id="preparing-the-master-image">Preparing the Master Image</h2>
+<section id="set-a-meaningful-hostname" class="level3">
+<h3 class="anchored" data-anchor-id="set-a-meaningful-hostname">1. Set a meaningful hostname</h3>
+<p>Choose a hostname that identifies the device. The current convention is <code>digitool</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> hostnamectl set-hostname digitool</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Verify:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">hostname</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="co"># digitool</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>The Pi will be reachable at <code>http://digitool.local</code> on the destination network.</p>
+</section>
+<section id="confirm-avahi-is-running" class="level3">
+<h3 class="anchored" data-anchor-id="confirm-avahi-is-running">2. Confirm Avahi is running</h3>
+<p>Avahi (mDNS) is pre-installed on Raspberry Pi OS. Confirm it is active:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-enabled avahi-daemon</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">systemctl</span> is-active avahi-daemon</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Both should return <code>enabled</code> / <code>active</code>. If not:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl enable <span class="at">--now</span> avahi-daemon</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="update-.env-to-use-the-hostname" class="level3">
+<h3 class="anchored" data-anchor-id="update-.env-to-use-the-hostname">3. Update <code>.env</code> to use the hostname</h3>
+<p>In <code>/home/pi/dtk/.env</code>, set <code>HOST_IP</code> to the <code>.local</code> hostname:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="va">HOST_IP</span><span class="op">=</span>digitool.local</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="va">CORS_ORIGINS</span><span class="op">=</span><span class="pp">[</span><span class="st">"http://digitool.local:5173"</span><span class="ss">,</span><span class="st">"http://digitool.local:3000"</span><span class="ss">,</span><span class="st">"http://localhost:5173"</span><span class="ss">,</span><span class="st">"http://localhost:3000"</span><span class="pp">]</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><code>PUBLIC_API_BASE</code> resolves automatically from <code>HOST_IP</code>:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="va">PUBLIC_API_BASE</span><span class="op">=</span>http://<span class="va">${HOST_IP}</span>:8000</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</section>
+<section id="rebuild-and-verify-the-frontend-container" class="level3">
+<h3 class="anchored" data-anchor-id="rebuild-and-verify-the-frontend-container">4. Rebuild and verify the frontend container</h3>
+<p>The <code>PUBLIC_API_BASE</code> variable is baked into the compiled frontend at build time. After editing <code>.env</code>, rebuild:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /home/pi/dtk</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose <span class="at">-f</span> docker-compose.yml <span class="at">-f</span> docker-compose.pi.yml up <span class="at">-d</span> <span class="at">--build</span> <span class="at">--force-recreate</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Open <code>http://digitool.local:3000</code> from another device on the same network to confirm it loads.</p>
+</section>
+<section id="image-the-sd-card" class="level3">
+<h3 class="anchored" data-anchor-id="image-the-sd-card">5. Image the SD card</h3>
+<p>Once the system is working correctly, shut down the Pi cleanly and image the SD card from another machine:</p>
+<p><strong>macOS / Linux:</strong></p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Identify the SD card device (e.g. /dev/disk4 or /dev/sdb)</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">diskutil</span> list           <span class="co"># macOS</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">lsblk</span>                   <span class="co"># Linux</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="co"># Create compressed image</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> dd if=/dev/sdX bs=4M status=progress <span class="kw">|</span> <span class="fu">gzip</span> <span class="op">&gt;</span> dtk-<span class="va">$(</span><span class="fu">date</span> +%Y%m%d<span class="va">)</span>.img.gz</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><strong>Windows:</strong> Use <a href="https://www.raspberrypi.com/software/">Raspberry Pi Imager</a> or <a href="https://win32diskimager.org/">Win32DiskImager</a> to read the card to a <code>.img</code> file.</p>
+<div class="callout callout-style-default callout-tip callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
 </div>
-<p><strong>Step 3: Boot the system and check I²C</strong></p>
-<p>Install <code>i2c-tools</code> if not already present:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get update</span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt-get install <span class="at">-y</span> i2c-tools</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>List buses:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">i2cdetect</span> <span class="at">-l</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>You should see:</p>
-<ul>
-<li><code>i2c-0</code> → mux channel 0</li>
-<li><code>i2c-10</code> → mux channel 1</li>
-</ul>
-<p>Probe each:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> i2cdetect <span class="at">-y</span> 0</span>
-<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> i2cdetect <span class="at">-y</span> 10</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Each should show <code>0x1a</code> (camera sensor) and <code>0x0c</code> (VCM driver).</p>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Tip</span>Shrink before imaging
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>Tools like <a href="https://github.com/Drewsif/PiShrink">PiShrink</a> can reduce the image size significantly before compression by trimming unused filesystem space.</p>
+</div>
+</div>
+<hr>
 </section>
-<section id="firmware-configuration" class="level2">
-<h2 class="anchored" data-anchor-id="firmware-configuration">2. Firmware Configuration</h2>
-<p><strong>Step 1: Disable auto-detect</strong></p>
-<p>Edit <code>/boot/firmware/config.txt</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> nano /boot/firmware/config.txt</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Add at the end:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="va">camera_auto_detect</span><span class="op">=</span>0</span>
-<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="va">dtoverlay</span><span class="op">=</span>arducam-64mp,cam0   <span class="co"># enables CAM0</span></span>
-<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="va">dtoverlay</span><span class="op">=</span>arducam-64mp        <span class="co"># enables CAM1</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Save and reboot</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> reboot</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong>Step 2: Verify cameras</strong></p>
-<p>After reboot</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--list</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><em><strong>Expected output: two cameras listed</strong></em></p>
 </section>
-<section id="test-cameras" class="level2">
-<h2 class="anchored" data-anchor-id="test-cameras">3. Test Cameras</h2>
-<p><strong>Test Single Camera</strong></p>
-<p>Try a preview:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 0 <span class="at">-t</span> 2000</span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-hello</span> <span class="at">--camera</span> 1 <span class="at">-t</span> 2000</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Capture stills</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-still</span> <span class="at">--camera</span> 0 <span class="at">-o</span> cam0.jpg</span>
-<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">rpicam-still</span> <span class="at">--camera</span> 1 <span class="at">-o</span> cam1.jpg</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><strong>Test Dual Camera Capture</strong></p>
-<p>This script tries both cameras at once. If high resolution fails, it falls back to lower resolutions.</p>
-<p>Save as <code>dual_snap.sh</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/usr/bin/env bash</span></span>
-<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="bu">set</span> <span class="at">-euo</span> pipefail</span>
-<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="va">OUTDIR</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">:-</span>captures<span class="va">}</span><span class="st">"</span></span>
-<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> <span class="st">"</span><span class="va">$OUTDIR</span><span class="st">"</span></span>
-<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="va">SIZES</span><span class="op">=</span><span class="va">(</span><span class="st">"4624x3472"</span> <span class="st">"3840x2160"</span> <span class="st">"2312x1736"</span><span class="va">)</span></span>
-<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="va">TIMEOUT_MS</span><span class="op">=</span>1500</span>
-<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="va">EXTRA_OPTS</span><span class="op">=</span><span class="st">"--thumb none --buffer-count 2"</span></span>
-<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-10"><a href="#cb10-10" aria-hidden="true" tabindex="-1"></a><span class="va">STAMP</span><span class="op">=</span><span class="st">"</span><span class="va">$(</span><span class="fu">date</span> +<span class="st">'%Y%m%d_%H%M%S_%3N'</span><span class="va">)</span><span class="st">"</span></span>
-<span id="cb10-11"><a href="#cb10-11" aria-hidden="true" tabindex="-1"></a><span class="va">F0</span><span class="op">=</span><span class="st">"</span><span class="va">$OUTDIR</span><span class="st">/</span><span class="va">${STAMP}</span><span class="st">_cam0.jpg"</span></span>
-<span id="cb10-12"><a href="#cb10-12" aria-hidden="true" tabindex="-1"></a><span class="va">F1</span><span class="op">=</span><span class="st">"</span><span class="va">$OUTDIR</span><span class="st">/</span><span class="va">${STAMP}</span><span class="st">_cam1.jpg"</span></span>
-<span id="cb10-13"><a href="#cb10-13" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-14"><a href="#cb10-14" aria-hidden="true" tabindex="-1"></a><span class="fu">try_capture ()</span> <span class="kw">{</span></span>
-<span id="cb10-15"><a href="#cb10-15" aria-hidden="true" tabindex="-1"></a>  <span class="bu">local</span> <span class="va">W</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">%</span>x<span class="pp">*</span><span class="va">}</span><span class="st">"</span> <span class="va">H</span><span class="op">=</span><span class="st">"</span><span class="va">${1</span><span class="op">#</span><span class="pp">*</span>x<span class="va">}</span><span class="st">"</span></span>
-<span id="cb10-16"><a href="#cb10-16" aria-hidden="true" tabindex="-1"></a>  <span class="bu">echo</span> <span class="st">"Trying </span><span class="va">$W</span><span class="st"> x </span><span class="va">$H</span><span class="st"> ..."</span></span>
-<span id="cb10-17"><a href="#cb10-17" aria-hidden="true" tabindex="-1"></a>  <span class="ex">rpicam-still</span> <span class="at">--camera</span> 0 <span class="at">-t</span> <span class="st">"</span><span class="va">$TIMEOUT_MS</span><span class="st">"</span> <span class="at">-n</span> <span class="at">--width</span> <span class="st">"</span><span class="va">$W</span><span class="st">"</span> <span class="at">--height</span> <span class="st">"</span><span class="va">$H</span><span class="st">"</span> <span class="at">-o</span> <span class="st">"</span><span class="va">$F0</span><span class="st">"</span> <span class="va">$EXTRA_OPTS</span> <span class="kw">&amp;</span></span>
-<span id="cb10-18"><a href="#cb10-18" aria-hidden="true" tabindex="-1"></a>  <span class="va">PID0</span><span class="op">=</span><span class="va">$!</span></span>
-<span id="cb10-19"><a href="#cb10-19" aria-hidden="true" tabindex="-1"></a>  <span class="fu">sleep</span> 0.02</span>
-<span id="cb10-20"><a href="#cb10-20" aria-hidden="true" tabindex="-1"></a>  <span class="ex">rpicam-still</span> <span class="at">--camera</span> 1 <span class="at">-t</span> <span class="st">"</span><span class="va">$TIMEOUT_MS</span><span class="st">"</span> <span class="at">-n</span> <span class="at">--width</span> <span class="st">"</span><span class="va">$W</span><span class="st">"</span> <span class="at">--height</span> <span class="st">"</span><span class="va">$H</span><span class="st">"</span> <span class="at">-o</span> <span class="st">"</span><span class="va">$F1</span><span class="st">"</span> <span class="va">$EXTRA_OPTS</span> <span class="kw">&amp;</span></span>
-<span id="cb10-21"><a href="#cb10-21" aria-hidden="true" tabindex="-1"></a>  <span class="va">PID1</span><span class="op">=</span><span class="va">$!</span></span>
-<span id="cb10-22"><a href="#cb10-22" aria-hidden="true" tabindex="-1"></a>  <span class="bu">wait</span> <span class="st">"</span><span class="va">$PID0</span><span class="st">"</span> <span class="kw">&amp;&amp;</span> <span class="bu">wait</span> <span class="st">"</span><span class="va">$PID1</span><span class="st">"</span></span>
-<span id="cb10-23"><a href="#cb10-23" aria-hidden="true" tabindex="-1"></a><span class="kw">}</span></span>
-<span id="cb10-24"><a href="#cb10-24" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb10-25"><a href="#cb10-25" aria-hidden="true" tabindex="-1"></a><span class="cf">for</span> sz <span class="kw">in</span> <span class="st">"</span><span class="va">${SIZES</span><span class="op">[@]</span><span class="va">}</span><span class="st">"</span><span class="kw">;</span> <span class="cf">do</span></span>
-<span id="cb10-26"><a href="#cb10-26" aria-hidden="true" tabindex="-1"></a>  <span class="cf">if</span> <span class="ex">try_capture</span> <span class="st">"</span><span class="va">$sz</span><span class="st">"</span><span class="kw">;</span> <span class="cf">then</span></span>
-<span id="cb10-27"><a href="#cb10-27" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"Success at </span><span class="va">$sz</span><span class="st">"</span></span>
-<span id="cb10-28"><a href="#cb10-28" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"Saved:"</span></span>
-<span id="cb10-29"><a href="#cb10-29" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"  </span><span class="va">$F0</span><span class="st">"</span></span>
-<span id="cb10-30"><a href="#cb10-30" aria-hidden="true" tabindex="-1"></a>    <span class="bu">echo</span> <span class="st">"  </span><span class="va">$F1</span><span class="st">"</span></span>
-<span id="cb10-31"><a href="#cb10-31" aria-hidden="true" tabindex="-1"></a>    <span class="bu">exit</span> 0</span>
-<span id="cb10-32"><a href="#cb10-32" aria-hidden="true" tabindex="-1"></a>  <span class="cf">fi</span></span>
-<span id="cb10-33"><a href="#cb10-33" aria-hidden="true" tabindex="-1"></a><span class="cf">done</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Usage:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">chmod</span> +x dual_snap.sh</span>
-<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ex">./dual_snap.sh</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="flashing-and-delivering-the-image" class="level2">
+<h2 class="anchored" data-anchor-id="flashing-and-delivering-the-image">Flashing and Delivering the Image</h2>
+<p>Flash the image onto a new SD card:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Linux / macOS</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="fu">gzip</span> <span class="at">-dc</span> dtk-YYYYMMDD.img.gz <span class="kw">|</span> <span class="fu">sudo</span> dd of=/dev/sdX bs=4M status=progress</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Or use Raspberry Pi Imager → <em>Use custom image</em> → select the <code>.img.gz</code> file.</p>
+<hr>
 </section>
-<section id="tips-troubleshooting" class="level2">
-<h2 class="anchored" data-anchor-id="tips-troubleshooting">Tips &amp; Troubleshooting</h2>
+<section id="what-the-recipient-needs-to-do" class="level2">
+<h2 class="anchored" data-anchor-id="what-the-recipient-needs-to-do">What the Recipient Needs to Do</h2>
+<p>Nothing, in most cases. They:</p>
+<ol type="1">
+<li>Insert the SD card and power on the Pi.</li>
+<li>Connect the Pi to their local network (Ethernet or Wi-Fi configured before imaging).</li>
+<li>Open <code>http://digitool.local:3000</code> from any browser on the same network.</li>
+</ol>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Wi-Fi pre-configuration
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>If the destination uses Wi-Fi (not Ethernet), configure the network credentials on the SD card <strong>before</strong> shipping. The easiest way is via Raspberry Pi Imager’s <em>Advanced options</em> when flashing, or by placing a <code>wpa_supplicant.conf</code> in the <code>/boot</code> partition after flashing.</p>
+</div>
+</div>
+<hr>
+</section>
+<section id="troubleshooting" class="level2">
+<h2 class="anchored" data-anchor-id="troubleshooting">Troubleshooting</h2>
+<p><strong><code>digitool.local</code> doesn’t resolve</strong></p>
 <ul>
-<li><strong>Memory errors</strong>: capturing two full-res images in parallel may fail. Stick to 3840×2160 for stability.</li>
-<li><strong>Permissions</strong>: ensure your user is in the video group:</li>
+<li>Windows requires <a href="https://support.apple.com/kb/DL999">Bonjour</a> (installed automatically with iTunes or iCloud). Windows 10 (1803+) supports mDNS natively.</li>
+<li>Try pinging: <code>ping digitool.local</code></li>
+<li>As a fallback, find the IP via the router’s DHCP client list and use it directly.</li>
 </ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb12"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> usermod <span class="at">-aG</span> video <span class="va">$USER</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<ul>
-<li><strong>Color/exposure match</strong>: use fixed settings:</li>
-</ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb13"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="va">EXTRA_OPTS</span><span class="op">=</span><span class="st">"--shutter 10000 --gain 1.5 --awbgains 2.0,1.5"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<ul>
-<li><strong>Truly simultaneous capture</strong>: requires external trigger/sync hardware. Software methods give ms-level offsets.</li>
-</ul>
+<p><strong>CORS errors in the browser</strong></p>
+<p>The frontend origin must match <code>CORS_ORIGINS</code> in <code>.env</code>. If you changed the hostname or port, update that list and restart the backend:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> /home/pi/dtk/backend <span class="kw">&amp;&amp;</span> <span class="ex">pixi</span> run dev</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p><strong>Two Pis on the same network</strong></p>
+<p>mDNS hostnames must be unique per network. Change the hostname on one of them:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb11"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> hostnamectl set-hostname digitool-2</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>And update <code>HOST_IP</code> and <code>CORS_ORIGINS</code> in <code>.env</code> accordingly, then rebuild the frontend container.</p>
 
 
 </section>
@@ -851,38 +847,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     </div>
   </div>
 </footer>
-<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
-(function() {
-  let previousOnload = window.onload;
-  window.onload = () => {
-    if (previousOnload) {
-      previousOnload();
-    }
-    lightboxQuarto.on('slide_before_load', (data) => {
-      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
-      const href = trigger.getAttribute('href');
-      if (href !== null) {
-        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
-        if (imgEl !== null) {
-          const srcAttr = imgEl.getAttribute("src");
-          if (srcAttr && srcAttr.startsWith("data:")) {
-            slideConfig.href = srcAttr;
-          }
-        }
-      } 
-    });
-  
-    lightboxQuarto.on('slide_after_load', (data) => {
-      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
-      if (window.Quarto?.typesetMath) {
-        window.Quarto.typesetMath(slideNode);
-      }
-    });
-  
-  };
-  
-})();
-          </script>
 
 
 

@@ -28,7 +28,11 @@ _logs/
 temp/
 
 # Working files
-docs/RP-008156-DS-2-picamera2-manual.txt
+docs/*.txt
 
 # External tools
 fisqua/
+
+# Symlinks
+dtk-sym
+logs-sym

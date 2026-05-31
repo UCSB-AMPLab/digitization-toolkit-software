@@ -1,0 +1,4 @@
+# Exclude pre-rendered output and cache from build context.
+# The Dockerfile re-renders docs fresh with `quarto render`.
+.quarto/
+**/*.quarto_ipynb

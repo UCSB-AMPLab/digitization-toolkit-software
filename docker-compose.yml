@@ -84,6 +84,15 @@ services:
       - NODE_ENV=production
     # No depends_on db — the frontend is a Node.js API proxy and never connects
     # to Postgres directly. Removing this lets db and frontend start in parallel.
+    # No depends_on db — the frontend is a Node.js API proxy and never connects
+    # to Postgres directly. Removing this lets db and frontend start in parallel.
+
+  docs:
+    build:
+      context: ./docs
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
 
 volumes:
   postgres_data:

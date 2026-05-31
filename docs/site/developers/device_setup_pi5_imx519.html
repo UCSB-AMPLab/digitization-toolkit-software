@@ -6,7 +6,7 @@
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
-<meta name="dcterms.date" content="2026-02-18">
+<meta name="dcterms.date" content="2026-05-30">
 
 <title>Raspberry Pi 5 IMX519 Camera Setup – Digitization Toolkit Documentation</title>
 <style>
@@ -79,6 +79,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <script src="../site_libs/bootstrap/bootstrap.min.js"></script>
 <link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
 <link href="../site_libs/bootstrap/bootstrap-2832c693f0fd49d84288d2c01aa32519.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script src="../site_libs/quarto-contrib/glightbox/glightbox.min.js"></script>
+<link href="../site_libs/quarto-contrib/glightbox/glightbox.min.css" rel="stylesheet">
+<link href="../site_libs/quarto-contrib/glightbox/lightbox.css" rel="stylesheet">
 <script id="quarto-search-options" type="application/json">{
   "location": "navbar",
   "copy-button": false,
@@ -183,26 +186,43 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
  <span class="menu-text">External Storage</span></a>
   </div>
 </li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false">
+ <span class="menu-text">Cameras Setup</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../users/setting-up-gphoto2-cams.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Setting Up gPhoto2-Compatible Cameras</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
       </ul>
   </li>
         <li class="sidebar-item sidebar-item-section">
       <div class="sidebar-item-container"> 
-            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
- <span class="menu-text">Developer Guides</span></a>
-          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
-            <i class="bi bi-chevron-right ms-2"></i>
-          </a> 
-      </div>
-      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
-          <li class="sidebar-item sidebar-item-section">
-      <div class="sidebar-item-container"> 
             <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true">
- <span class="menu-text">Hardware Setup Guides</span></a>
+ <span class="menu-text">Developer Guides</span></a>
           <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
             <i class="bi bi-chevron-right ms-2"></i>
           </a> 
       </div>
-      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth2 show">  
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true">
+ <span class="menu-text">Hardware Setup Guides</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 show">  
           <li class="sidebar-item">
   <div class="sidebar-item-container"> 
   <a href="../developers/device_setup_CM4.html" class="sidebar-item-text sidebar-link">
@@ -213,6 +233,23 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <div class="sidebar-item-container"> 
   <a href="../developers/device_setup_pi5_imx519.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Device Setup: Raspberry Pi 5 with IMX519 Camera</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false">
+ <span class="menu-text">Software Setup Guides</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../developers/sd_card_distribution.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">SD Card Distribution</span></a>
   </div>
 </li>
       </ul>
@@ -259,14 +296,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
     <div>
     <div class="quarto-title-meta-heading">Published</div>
     <div class="quarto-title-meta-contents">
-      <p class="date">February 18, 2026</p>
+      <p class="date">May 30, 2026</p>
     </div>
   </div>
   
     <div>
     <div class="quarto-title-meta-heading">Modified</div>
     <div class="quarto-title-meta-contents">
-      <p class="date-modified">February 18, 2026</p>
+      <p class="date-modified">May 30, 2026</p>
     </div>
   </div>
     
@@ -298,14 +335,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="camera-connection">Camera Connection</h3>
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
-<p><img src="https://docs.arducam.com/Raspberry-Pi-Camera/Low-Light/picture/arducam_wiki_rpi_imx708_hardware_picture_1.png" class="img-fluid figure-img"></p>
+<p><a href="https://docs.arducam.com/Raspberry-Pi-Camera/Low-Light/picture/arducam_wiki_rpi_imx708_hardware_picture_1.png" class="lightbox" data-gallery="quarto-lightbox-gallery-1" title="Camera Connection"><img src="https://docs.arducam.com/Raspberry-Pi-Camera/Low-Light/picture/arducam_wiki_rpi_imx708_hardware_picture_1.png" class="img-fluid figure-img" alt="Camera Connection"></a></p>
 <figcaption>Camera Connection</figcaption>
 </figure>
 </div>
 <p>The actual camera connection looks like this:</p>
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
-<p><img src="../_static/imgs/imx519_ribbon_connection.JPG" class="img-fluid figure-img"></p>
+<p><a href="../_static/imgs/imx519_ribbon_connection.JPG" class="lightbox" data-gallery="quarto-lightbox-gallery-2" title="Camera Connection Actual"><img src="../_static/imgs/imx519_ribbon_connection.JPG" class="img-fluid figure-img" alt="Camera Connection Actual"></a></p>
 <figcaption>Camera Connection Actual</figcaption>
 </figure>
 </div>
@@ -319,7 +356,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </blockquote>
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
-<p><img src="../_static/imgs/rpi5_camera_ribbon_connection.JPG" class="img-fluid figure-img"></p>
+<p><a href="../_static/imgs/rpi5_camera_ribbon_connection.JPG" class="lightbox" data-gallery="quarto-lightbox-gallery-3" title="Dual Camera Connection"><img src="../_static/imgs/rpi5_camera_ribbon_connection.JPG" class="img-fluid figure-img" alt="Dual Camera Connection"></a></p>
 <figcaption>Dual Camera Connection</figcaption>
 </figure>
 </div>
@@ -329,7 +366,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>After connecting the cameras, ensure everything is securely in place. Attach any necessary heatsinks or cooling solutions, and insert the microSD card with Raspberry Pi OS installed. Finally, connect the power supply to boot up the Raspberry Pi 5. Attach peripherals (keyboard, mouse, monitor) or set up SSH for headless operation.</p>
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
-<p><img src="../_static/imgs/rpi5_imx519_B0371_setup.JPG" class="img-fluid figure-img"></p>
+<p><a href="../_static/imgs/rpi5_imx519_B0371_setup.JPG" class="lightbox" data-gallery="quarto-lightbox-gallery-4" title="Final Assembly"><img src="../_static/imgs/rpi5_imx519_B0371_setup.JPG" class="img-fluid figure-img" alt="Final Assembly"></a></p>
 <figcaption>Final Assembly</figcaption>
 </figure>
 </div>
@@ -827,13 +864,45 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
       &nbsp;
     </div>   
     <div class="nav-footer-center">
-<p>Documentation site built: February 18, 2026</p>
+<p>Documentation site built: May 30, 2026</p>
 </div>
     <div class="nav-footer-right">
       &nbsp;
     </div>
   </div>
 </footer>
+<script>var lightboxQuarto = GLightbox({"closeEffect":"zoom","descPosition":"bottom","loop":false,"openEffect":"zoom","selector":".lightbox"});
+(function() {
+  let previousOnload = window.onload;
+  window.onload = () => {
+    if (previousOnload) {
+      previousOnload();
+    }
+    lightboxQuarto.on('slide_before_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      const href = trigger.getAttribute('href');
+      if (href !== null) {
+        const imgEl = window.document.querySelector(`a[href="${href}"] img`);
+        if (imgEl !== null) {
+          const srcAttr = imgEl.getAttribute("src");
+          if (srcAttr && srcAttr.startsWith("data:")) {
+            slideConfig.href = srcAttr;
+          }
+        }
+      } 
+    });
+  
+    lightboxQuarto.on('slide_after_load', (data) => {
+      const { slideIndex, slideNode, slideConfig, player, trigger } = data;
+      if (window.Quarto?.typesetMath) {
+        window.Quarto.typesetMath(slideNode);
+      }
+    });
+  
+  };
+  
+})();
+          </script>
 
 
 
