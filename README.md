@@ -21,6 +21,10 @@ An open-source, modular digitization toolkit designed for low-cost, high-quality
 > Project currently in development. Kick-off: September 2025
 > Alpha prototype planned for deployment at SBMAL in June 2026.
 
+## Release History
+
+See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
+
 ***
 
 ## Quick Start
