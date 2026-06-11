@@ -130,6 +130,11 @@ sudo ./scripts/installkb.sh
 sudo ./scripts/install-service.sh
 sudo systemctl start dtk
 
+# 3.1 Apply the docker group to the current shell session
+#     (setup.sh added pi to the docker group, but it only takes effect
+#     after a logout/login — newgrp activates it immediately for this session)
+newgrp docker
+
 # 4. Verify the app is running
 curl http://localhost:8000/health   # → {"status":"ok"}
 curl -I http://localhost:3000       # → HTTP 200

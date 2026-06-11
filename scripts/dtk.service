@@ -8,6 +8,7 @@ Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit
 Type=simple
 User=pi
 Group=pi
+SupplementaryGroups=docker
 WorkingDirectory=/home/pi/dtk
 
 # Ensure pixi and docker are on PATH (systemd uses a stripped environment)
