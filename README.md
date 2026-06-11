@@ -114,10 +114,17 @@ sudo sh get-docker.sh
 # For instance
 [Raspberry Pi 5 IMX519 Camera Setup](https://ampl.clair.ucsb.edu/digitization-toolkit-software/developers/device_setup_pi5_imx519.html)
 
+# 1.4. Create the .env file
+cp .env.example .env
+nano .env # edit the values
+
 # 2. Run the one-time provisioning script (internet required here)
 #    Builds Docker images, installs pixi env, applies DB migrations
 sudo chmod +x ./scripts/setup.sh
 sudo ./scripts/setup.sh
+
+# 2.1 Install Wayland kiosk browser
+sudo ./scripts/installkb.sh
 
 # 3. Install and enable the systemd service (auto-start on boot)
 sudo ./scripts/install-service.sh

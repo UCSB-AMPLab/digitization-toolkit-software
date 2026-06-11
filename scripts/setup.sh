@@ -50,6 +50,22 @@ echo "=========================================="
 echo ""
 
 # ---------------------------------------------------------------------------
+# 0. Ensure .env exists (compose + alembic must read the same credentials)
+# ---------------------------------------------------------------------------
+if [ ! -f "$PROJECT_ROOT/.env" ]; then
+    echo "→ Creating .env from .env.example..."
+    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+    chown "$DTK_USER:$DTK_USER" "$PROJECT_ROOT/.env"
+    echo "  .env created  ✓"
+    echo "  IMPORTANT: Edit $PROJECT_ROOT/.env to set a real SECRET_KEY and"
+    echo "  DATABASE_PASSWORD before going into production."
+    echo ""
+else
+    echo "→ .env already exists — skipping copy."
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Stop any running services
 # ---------------------------------------------------------------------------
 echo "→ Stopping any running services..."
@@ -63,9 +79,20 @@ echo "→ Creating system directories..."
 mkdir -p /var/lib/dtk/db/postgres
 mkdir -p /var/lib/dtk/mounts
 mkdir -p /var/log/dtk
-chown -R "$DTK_USER:$DTK_USER" /var/lib/dtk /var/log/dtk 2>/dev/null || true
+# Postgres data dir must remain root-owned so the postgres container can
+# chown it to uid 999 (postgres) during first-time initdb.
+chown -R "$DTK_USER:$DTK_USER" /var/lib/dtk/mounts /var/log/dtk 2>/dev/null || true
 echo "  /var/lib/dtk  ✓"
 echo "  /var/log/dtk  ✓"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 2a. Docker group membership (no sudo needed for docker after first login)
+# ---------------------------------------------------------------------------
+echo "→ Adding $DTK_USER to docker group..."
+usermod -aG docker "$DTK_USER"
+echo "  $DTK_USER added to docker group  ✓"
+echo "  (Log out and back in after setup for this to take effect)"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -137,14 +164,15 @@ echo "→ Starting database for migration..."
 $COMPOSE up -d db
 
 echo "  Waiting for PostgreSQL to be ready..."
-for i in $(seq 1 30); do
+# First-time initdb on a Pi SD card can take 2-3 minutes; wait up to 3 min.
+for i in $(seq 1 90); do
     if $COMPOSE exec -T db pg_isready -U "${DATABASE_USER:-user}" -d "${DATABASE_NAME:-digitization_toolkit}" >/dev/null 2>&1; then
         echo "  Database ready."
         break
     fi
-    if [ "$i" -eq 30 ]; then
-        echo "✗ Database did not become ready after 60s."
-        echo "  Check logs: docker compose logs db"
+    if [ "$i" -eq 90 ]; then
+        echo "✗ Database did not become ready after 180s."
+        echo "  Check logs: docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.pi.yml logs db"
         $COMPOSE down
         exit 1
     fi
