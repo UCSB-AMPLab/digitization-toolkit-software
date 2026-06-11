@@ -36,3 +36,6 @@ fisqua/
 # Symlinks
 dtk-sym
 logs-sym
+
+# Ignore docker-engine installation script
+get-docker.sh
