@@ -102,12 +102,17 @@ echo ""
 # ---------------------------------------------------------------------------
 # 5. Camera system library link (Raspberry Pi only)
 # ---------------------------------------------------------------------------
-if python3 -c "import picamera2" 2>/dev/null || [ -d /usr/lib/python3/dist-packages/picamera2 ]; then
-    echo "→ Linking system camera libraries..."
+echo "→ Installing system camera packages (picamera2 / libcamera)..."
+# python3-picamera2 and python3-libcamera are Raspberry Pi OS system packages.
+# On non-Pi hardware these will simply not be found in apt and the install
+# will fail gracefully — that is expected and OK.
+if apt-get install -y python3-picamera2 python3-libcamera 2>/dev/null; then
+    echo "  python3-picamera2  ✓"
+    echo "→ Linking system camera libraries into pixi environment..."
     run_as_user "$PIXI_BIN" run setup-camera-link
     echo ""
 else
-    echo "→ Skipping camera link (picamera2 not found — OK on non-Pi hardware)"
+    echo "  Skipping camera link (picamera2 not available — OK on non-Pi hardware)"
     echo ""
 fi
 
@@ -116,11 +121,11 @@ fi
 # ---------------------------------------------------------------------------
 
 # gPhoto2
-if sudo apt install -y gphoto2
-    echo "gPhoto2 package installed"
+if apt-get install -y gphoto2; then
+    echo "  gphoto2  ✓"
     echo ""
 else
-    echo "gPhoto2 package not available in apt package manager."
+    echo "  gphoto2 not available in apt — skipping."
     echo ""
 fi
 
