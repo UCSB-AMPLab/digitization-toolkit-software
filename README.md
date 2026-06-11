@@ -86,12 +86,37 @@ The toolkit is designed to ship as a pre-flashed SD card. The end user only need
 ### Building the golden SD card (requires internet, done once)
 
 ```bash
+# 0. Install GIT
+sudo apt update
+sudo apt install git -y
+
+# 0.1. Override dev ssh for submodules
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+```
+
+```bash
 # 1. Clone the repository onto a fresh Raspberry Pi OS installation
 git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit.git ~/dtk
 cd ~/dtk
 
+# 1.1. Install pixi as Python environment manager
+curl -fsSL https://pixi.sh/install.sh | bash
+source ~/.bashrc
+# Verify pixi is installed and sourced
+pixi --version
+
+# 1.2. Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# 1.3. Setup Raspberry pi cameras
+# Select the configuration according with the cameras to be used
+# For instance
+[Raspberry Pi 5 IMX519 Camera Setup](https://ampl.clair.ucsb.edu/digitization-toolkit-software/developers/device_setup_pi5_imx519.html)
+
 # 2. Run the one-time provisioning script (internet required here)
 #    Builds Docker images, installs pixi env, applies DB migrations
+sudo chmod +x ./scripts/setup.sh
 sudo ./scripts/setup.sh
 
 # 3. Install and enable the systemd service (auto-start on boot)
