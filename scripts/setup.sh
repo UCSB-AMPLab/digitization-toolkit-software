@@ -114,7 +114,7 @@ echo ""
 # 3. Docker images
 # ---------------------------------------------------------------------------
 echo "→ Pulling base images and building services..."
-$COMPOSE pull db
+$COMPOSE pull db nginx
 $COMPOSE build frontend
 echo ""
 
