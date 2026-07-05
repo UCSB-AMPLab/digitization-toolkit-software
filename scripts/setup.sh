@@ -116,13 +116,35 @@ fi
 # ---------------------------------------------------------------------------
 
 # gPhoto2
-if sudo apt install -y gphoto2
+if sudo apt install -y gphoto2; then
     echo "gPhoto2 package installed"
     echo ""
 else
     echo "gPhoto2 package not available in apt package manager."
     echo ""
 fi
+
+# ---------------------------------------------------------------------------
+# 6b. System clock hardening (survive power cuts without an RTC)
+# ---------------------------------------------------------------------------
+# Without a battery-backed clock the Pi resumes at the last saved tick after a
+# power cut, which scrambles capture timestamps. fake-hwclock persists the time
+# across reboots; chrony corrects it via NTP whenever the unit is online (such
+# as now, during setup).
+echo "→ Installing clock services (fake-hwclock, chrony)..."
+if sudo apt install -y fake-hwclock chrony; then
+    systemctl enable fake-hwclock 2>/dev/null || true
+    systemctl enable chrony 2>/dev/null || true
+    # Seed the saved clock now, while the time is correct
+    fake-hwclock save 2>/dev/null || true
+    echo "  fake-hwclock + chrony  ✓"
+else
+    echo "  clock services not available in apt — skipping"
+fi
+echo ""
+# Pi 5 hardware RTC (optional, done manually): fit a cell on the RTC header and
+# enable trickle charge by adding 'dtparam=rtc_bbat_vchg=3000000' to
+# /boot/firmware/config.txt, then 'sudo hwclock -w'.
 
 # ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations
