@@ -78,7 +78,6 @@ services:
       - HOST=0.0.0.0
       - PUBLIC_API_BASE=http://${HOST_IP:-localhost}:8000
       - PUBLIC_API_BASE_SSR=http://host.docker.internal:8000
-      - PUBLIC_DEMO_MODE=false
       - PORT=3000
       - ORIGIN=http://${HOST_IP:-localhost}:3000
       - NODE_ENV=production

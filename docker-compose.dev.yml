@@ -12,10 +12,6 @@ services:
       - "5173:5173"
     environment:
       - NODE_ENV=development
-      # Disabled: demo mode is broken (missing `demoUsers` map in login/+page.svelte,
-      # causes "ReferenceError: demoUsers is not defined"). Use a real registered
-      # account via --profile with-backend until the demo map is implemented.
-      - PUBLIC_DEMO_MODE=false
       - NPM_CONFIG_AUDIT=false
       - NPM_CONFIG_FUND=false
     volumes:
