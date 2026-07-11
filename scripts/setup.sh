@@ -147,6 +147,14 @@ echo ""
 # /boot/firmware/config.txt, then 'sudo hwclock -w'.
 
 # ---------------------------------------------------------------------------
+# 6c. Host firewall (venue-LAN hardening)
+# ---------------------------------------------------------------------------
+# Only nginx (port 80), SSH, mDNS, and Tailscale remain reachable from the
+# LAN; the native backend on 8000 stays reachable from the Docker bridge only.
+"$SCRIPT_DIR/setup-firewall.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations
 # ---------------------------------------------------------------------------
 cd "$PROJECT_ROOT"
