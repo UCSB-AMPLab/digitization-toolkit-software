@@ -27,6 +27,8 @@ website:
         contents:
           - href: users/external-storage.qmd
             text: "External Storage"
+          - href: users/operator-card-rionegro.qmd
+            text: "Tarjeta de operación (Rionegro)"
           - section: "Cameras Setup"
             contents:
               - href: users/setting-up-gphoto2-cams.qmd

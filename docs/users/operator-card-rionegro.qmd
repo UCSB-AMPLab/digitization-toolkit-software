@@ -1,0 +1,43 @@
+---
+title: "Captua — Tarjeta de operación (Archivo Histórico de Rionegro)"
+date-modified: last-modified
+format: html
+toc: false
+lang: es
+---
+
+Guía de una página para el personal que opera el equipo de digitalización. Imprímala y déjela junto al equipo.
+
+## Apagar el equipo de forma segura
+
+1. Si la aplicación tiene el botón **«Apagar»** (Configuración → Energía), úselo y confirme.
+2. Si no: presione **Ctrl+Alt+F2** y, en la pantalla de texto, escriba `sudo poweroff` y presione Enter.
+3. Espere a que la pantalla quede negra antes de desconectar la corriente.
+
+::: {.callout-warning appearance="simple"}
+**Nunca desconecte el enchufe con el equipo encendido:** puede dañar la memoria del equipo y perder el trabajo del día.
+:::
+
+## Cambiar de pantalla
+
+- **Ctrl+Alt+F2** → pantalla de texto (recuperación)
+- **Ctrl+Alt+F1** → volver a la aplicación
+
+## Cámaras: enfoque al iniciar la jornada
+
+1. Ponga el selector del lente en **AF** y tome la primera captura (el equipo enfoca solo).
+2. Pase el selector a **MF**. El resto de la jornada queda enfocado — la distancia entre la cámara y el documento no cambia.
+
+Si el lente queda en AF, cada captura tarda unos 12 segundos más y la aplicación muestra una advertencia. El flash queda apagado automáticamente; no hay que tocarlo.
+
+## Si las cámaras no aparecen (o aparece «imx519»)
+
+Cierre la sesión en la aplicación y vuelva a entrar. Casi siempre es suficiente.
+
+## Si la aplicación se congela
+
+Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+
+## Contacto
+
+Escriba a **coordinacion@neogranadina.org**.
