@@ -53,14 +53,16 @@ docker compose build
 
 Or manually:
 ```bash
-# Start database and frontend
-docker compose up -d
+# Start database and frontend behind Nginx (base compose + Pi overlay)
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never
 
-# Start backend with pixi
-cd backend && pixi run dev
+# Start backend natively with pixi (production mode, no --reload)
+cd backend && pixi run start
 ```
 
-**Access (production):** [http://localhost:3000](http://localhost:3000) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+The Pi overlay (`docker-compose.pi.yml`) is required in production: it bind-mounts Postgres at `/var/lib/dtk/db/postgres` (instead of the base compose's `postgres_data` named volume) and adds the Nginx reverse proxy that puts frontend and backend behind one origin on port 80.
+
+**Access (production):** [http://localhost](http://localhost) (Nginx, port 80 — proxies `/` to the frontend and `/api/` to the backend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API, direct)
 **Access (dev):** [http://localhost:5173](http://localhost:5173) (frontend, Vite) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
 
 **Note:** The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
@@ -87,7 +89,7 @@ The toolkit is designed to ship as a pre-flashed SD card. The end user only need
 
 ```bash
 # 1. Clone the repository onto a fresh Raspberry Pi OS installation
-git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit.git ~/dtk
+git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
 cd ~/dtk
 
 # 2. Run the one-time provisioning script (internet required here)
@@ -138,7 +140,7 @@ When cloning, make sure to fetch submodules as well:
 
 ```bash
 # Clone with submodules
-git clone --recurse-submodules git@github.com:UCSB-AMPLab/digitization-toolkit.git
+git clone --recurse-submodules git@github.com:UCSB-AMPLab/digitization-toolkit-software.git
 ```
 
 If you already cloned without `--recurse-submodules`, you can initialize and update submodules manually:
@@ -160,7 +162,7 @@ Do not use `--remote` here: it moves the submodules to their branch tips instead
 
 ## Development Documentation
 
-See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit/wiki) for detailed developer guides and API references.
+See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki) for detailed developer guides and API references.
 
 ## License
 
