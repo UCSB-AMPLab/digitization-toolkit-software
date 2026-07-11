@@ -26,6 +26,17 @@ echo "→ Installing privileged helper..."
 install -o root -g root -m 0755 "$HELPER_SRC" "$HELPER_DST"
 echo "  $HELPER_DST  ✓"
 
+echo "→ Enforcing root-owned mounts root..."
+# OWNERSHIP INVARIANT: /var/lib/dtk/mounts must be root-owned, mode 0755,
+# with the helper as the only writer beneath it. If it were pi-writable, a
+# local pi process could swap a validated mountpoint for a symlink between
+# the helper's realpath check and mount(8) (TOCTOU) and redirect the mount
+# anywhere. This runs after setup.sh's blanket chown of /var/lib/dtk
+# (section 2b follows section 2), so it wins. The backend must not create
+# or remove anything under this directory — the helper owns that lifecycle.
+install -d -o root -g root -m 0755 /var/lib/dtk/mounts
+echo "  /var/lib/dtk/mounts (root:root 0755)  ✓"
+
 echo "→ Configuring scoped sudoers rule..."
 # Write to a temp file and validate with visudo BEFORE moving into place. A
 # malformed file in /etc/sudoers.d bricks sudo for the whole machine, so this

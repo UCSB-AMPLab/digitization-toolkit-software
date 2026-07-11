@@ -46,9 +46,9 @@ echo "→ Copying service file to systemd..."
 cp "$SERVICE_FILE" "$SYSTEMD_DIR/dtk.service"
 
 echo "→ Configuring storage mount permissions..."
+# install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);
+# it must NOT be chowned to pi — see the ownership invariant in that script.
 "$SCRIPT_DIR/install-system-helper.sh"
-mkdir -p /var/lib/dtk/mounts
-chown pi:pi /var/lib/dtk/mounts 2>/dev/null || true
 
 echo "→ Reloading systemd daemon..."
 systemctl daemon-reload

@@ -18,6 +18,16 @@
 # /var/lib/dtk/mounts. Each validation below exists to close one of those
 # escalation paths. The helper FAILS CLOSED: any doubt → error + exit 1.
 #
+# OWNERSHIP INVARIANT (TOCTOU defence): /var/lib/dtk/mounts is root-owned,
+# mode 0755, and this helper is the ONLY writer beneath it (enforced by
+# install-system-helper.sh). If the mounts root were pi-writable, a local pi
+# process could swap a validated mountpoint for a symlink between the
+# realpath check and the mount(8) call, redirecting the mount anywhere.
+# Consequently the helper owns the mountpoint directory lifecycle end to end:
+# it creates the dir on mount (removing it again if the mount fails) and
+# removes it after a successful umount. The backend must NOT pre-create
+# mountpoints or clean them up itself — as `pi` it no longer can.
+#
 # The verb contract is depended on by a coordinated backend change; do not
 # alter verb names, argument order, or exit semantics without updating both.
 
@@ -93,15 +103,22 @@ cmd_mount() {
 
     mountpoint="$(require_mountpoint_under_root "$mp_raw")"
 
-    mkdir -p -- "$mountpoint"
+    # The helper owns the mountpoint dir lifecycle (see OWNERSHIP INVARIANT):
+    # create it here, and remove it again below if the mount itself fails.
+    local created=0
+    if [ ! -d "$mountpoint" ]; then
+        mkdir -p -- "$mountpoint"
+        created=1
+    fi
 
     # Detect the filesystem ourselves rather than trusting a caller-supplied
     # type. For FAT/exFAT (no Unix ownership) map files to the invoking user.
     fstype="$(lsblk -no FSTYPE -- "$device" | head -n1)"
 
-    # nosuid,nodev on every mount: a removable volume must never introduce
-    # setuid binaries or device nodes.
-    local opts="nosuid,nodev"
+    # nosuid,nodev,noexec on every mount: a removable volume must never
+    # introduce setuid binaries, device nodes, or executables — scan-storage
+    # volumes have no legitimate executables.
+    local opts="nosuid,nodev,noexec"
     case "$fstype" in
         vfat|exfat)
             resolve_owner
@@ -109,7 +126,12 @@ cmd_mount() {
             ;;
     esac
 
-    mount -o "$opts" -- "$device" "$mountpoint"
+    if ! mount -o "$opts" -- "$device" "$mountpoint"; then
+        if [ "$created" -eq 1 ]; then
+            rmdir -- "$mountpoint" 2>/dev/null || true
+        fi
+        die "mount failed: $device on $mountpoint"
+    fi
 }
 
 cmd_umount() {
@@ -118,6 +140,9 @@ cmd_umount() {
     reject_newlines "$mp_raw"
     mountpoint="$(require_mountpoint_under_root "$mp_raw")"
     umount -- "$mountpoint"
+    # Helper-owned lifecycle: remove the now-empty mountpoint dir. Best-effort
+    # only — if it is unexpectedly non-empty, leave it in place and succeed.
+    rmdir -- "$mountpoint" 2>/dev/null || true
 }
 
 cmd_prepare_projects() {
