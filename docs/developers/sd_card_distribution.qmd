@@ -58,7 +58,7 @@ In `/home/pi/dtk/.env`, set `HOST_IP` to the `.local` hostname:
 
 ```bash
 HOST_IP=digitool.local
-CORS_ORIGINS=["http://digitool.local","http://localhost:5173","http://localhost:3000"]
+CORS_ORIGINS=["http://digitool.local","http://localhost","http://localhost:5173","http://localhost:3000"]
 ```
 
 In the production stack, everything goes through the Nginx reverse proxy on port 80 (`docker-compose.pi.yml`), so the origin users actually open is `http://digitool.local` with no port. `PUBLIC_API_BASE` resolves automatically from `HOST_IP` and is routed through Nginx's `/api/` location, not straight to the backend port:
@@ -67,14 +67,16 @@ In the production stack, everything goes through the Nginx reverse proxy on port
 PUBLIC_API_BASE=http://${HOST_IP}/api
 ```
 
-### 4. Rebuild and verify the frontend container
+### 4. Apply the new environment and verify
 
-`PUBLIC_API_BASE` is read at runtime by the SvelteKit server (via `$env/dynamic/public`), not compiled into the frontend image — so a plain restart with the updated `.env` picks it up; no image rebuild is required for this variable alone. If other build-time inputs changed, rebuild as usual:
+`PUBLIC_API_BASE` is read at runtime by the SvelteKit server (via `$env/dynamic/public`), not compiled into the frontend image — so recreating the containers with the updated `.env` is enough; no image rebuild is required for `.env` changes:
 
 ```bash
 cd /home/pi/dtk
-docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build --force-recreate
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --force-recreate
 ```
+
+(Only add `--build` if the frontend source itself changed, not for `.env` edits.)
 
 Open `http://digitool.local` from another device on the same network to confirm it loads.
 
