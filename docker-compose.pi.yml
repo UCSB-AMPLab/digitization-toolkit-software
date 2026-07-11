@@ -34,3 +34,8 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - frontend
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

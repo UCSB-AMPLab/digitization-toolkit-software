@@ -27,6 +27,11 @@ services:
       timeout: 5s
       retries: 15
       start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Backend service (optional for Docker-based development)
   # On Raspberry Pi with cameras, run backend natively: cd backend && pixi run dev
@@ -59,6 +64,11 @@ services:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     # Production image: multi-stage build compiles Svelte at build time.
@@ -88,6 +98,11 @@ services:
     # to Postgres directly. Removing this lets db and frontend start in parallel.
     # No depends_on db — the frontend is a Node.js API proxy and never connects
     # to Postgres directly. Removing this lets db and frontend start in parallel.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   postgres_data:
