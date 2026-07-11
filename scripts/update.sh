@@ -88,29 +88,35 @@ echo ""
 # ---------------------------------------------------------------------------
 SERVICE_STOPPED=0
 UPDATE_OK=0
+DB_STARTED_BY_US=0
+DUMP_FILE=""
+BACKUP_VERIFIED=0
 
-restore_previous_stack() {
+restore_service() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "  UPDATE FAILED — restoring the previous version"
+    echo "  UPDATE FAILED — bringing the appliance back up"
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo ""
-    echo "  Something went wrong during the update. Bringing the unit"
-    echo "  back up on the version it was running before..."
+    echo "  Something went wrong during the update. Restarting the unit"
+    echo "  so it is not left dead..."
     echo ""
     # Make sure nothing is half-up before we restart cleanly.
     $COMPOSE down >/dev/null 2>&1 || true
     systemctl start dtk 2>/dev/null || true
     sleep 5
     if systemctl is-active --quiet dtk; then
-        echo "  ✓ The appliance is back online on the OLD (previous) version."
-        echo "    Nothing was migrated or changed permanently."
+        echo "  ✓ The appliance is back online."
     else
         echo "  ✗ The appliance did NOT come back up automatically."
-        echo "    A backup was taken at: $BACKUP_DIR"
-        echo "    To fully roll back, run:  sudo $SCRIPT_DIR/rollback-update.sh"
-        echo "    Then check logs:          journalctl -u dtk -n 50"
+        echo "    Check logs:  journalctl -u dtk -n 50"
     fi
+    echo ""
+    echo "  IMPORTANT: the failure happened after the service was stopped for"
+    echo "  migration, so the database MAY have been partially (or fully)"
+    echo "  migrated. A pre-update backup was saved in: $BACKUP_DIR"
+    echo "  To return fully to the previous version (database and code), run:"
+    echo "    sudo $SCRIPT_DIR/rollback-update.sh"
     echo ""
 }
 
@@ -120,8 +126,20 @@ on_exit() {
         return 0
     fi
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
-        restore_previous_stack
+        restore_service
     else
+        # Pre-stop failure: the running stack was never touched. Clean up only
+        # what this script itself created.
+        if [ -n "$DUMP_FILE" ] && [ "$BACKUP_VERIFIED" -eq 0 ]; then
+            # Never leave a partial/unverified dump behind — rollback-update.sh
+            # picks the newest dump and must not find a broken one.
+            rm -f "$DUMP_FILE"
+        fi
+        if [ "$DB_STARTED_BY_US" -eq 1 ]; then
+            # We started the db container ourselves; stop it again. Nothing
+            # else is touched.
+            $COMPOSE stop db >/dev/null 2>&1 || true
+        fi
         echo ""
         echo "✗ Update aborted before the running service was touched."
         echo "  The appliance is still serving the current version — nothing changed."
@@ -132,11 +150,13 @@ on_exit() {
 trap on_exit EXIT
 
 # ---------------------------------------------------------------------------
-# 1. Record where we are now, so a rollback can return here.
+# 1. Note the commit being installed. Since the operator pulls/checks out the
+#    new code BEFORE running this script (see header), HEAD is the NEW version;
+#    the rollback target is the previously deployed commit, handled in step 5.
 # ---------------------------------------------------------------------------
 mkdir -p "$BACKUP_DIR"
 CURRENT_SHA="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
-echo "→ Current version: $CURRENT_SHA"
+echo "→ Version being installed: $CURRENT_SHA"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -243,6 +263,12 @@ echo ""
 #    a backup failure aborts the update with the appliance untouched.
 # ---------------------------------------------------------------------------
 echo "→ Making sure the database is up so we can back it up..."
+# If the service is running, the db container is already up and we must not
+# touch it (or anything else) on failure — the stack was never stopped. Only
+# if we start db ourselves here do we stop it (and only it) when aborting.
+if ! $COMPOSE ps --services --status running 2>/dev/null | grep -qx db; then
+    DB_STARTED_BY_US=1
+fi
 $COMPOSE up -d db
 
 echo "  Waiting for PostgreSQL to be ready..."
@@ -253,10 +279,8 @@ for i in $(seq 1 30); do
     fi
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s — cannot take a safe backup."
-        echo "  Aborting the update; the appliance is unchanged."
-        $COMPOSE down >/dev/null 2>&1 || true
-        systemctl start dtk 2>/dev/null || true
-        exit 1
+        echo "  Aborting the update; the running appliance was not touched."
+        exit 1   # EXIT trap: pre-stop path, scoped cleanup only
     fi
     sleep 2
 done
@@ -277,16 +301,30 @@ set +o pipefail
 DUMP_BYTES="$(wc -c < "$DUMP_FILE" | tr -d ' ')"
 if [ "${DUMP_BYTES:-0}" -lt 100 ]; then
     echo "✗ Backup looks empty (${DUMP_BYTES} bytes) — pg_dump likely failed."
-    echo "  Refusing to migrate without a real backup. Aborting; appliance unchanged."
-    rm -f "$DUMP_FILE"
-    $COMPOSE down >/dev/null 2>&1 || true
-    systemctl start dtk 2>/dev/null || true
-    exit 1
+    echo "  Refusing to migrate without a real backup. Aborting; the running"
+    echo "  appliance was not touched."
+    exit 1   # EXIT trap: pre-stop path removes the bad dump, scoped cleanup only
 fi
+BACKUP_VERIFIED=1
 echo "  ✓ Backup written (${DUMP_BYTES} bytes)."
 
 # Record the commit to roll back to, next to the dump, for rollback-update.sh.
-echo "$CURRENT_SHA" > "$SHA_FILE"
+# IMPORTANT: this script runs AFTER the operator has already pulled / checked
+# out the new code (see header), so HEAD ($CURRENT_SHA) is the NEW version.
+# The rollback target is the commit that was RUNNING before this update — the
+# one the last successful update recorded in last-deployed-SHA — never HEAD.
+if [ -n "$PREV_DEPLOYED_SHA" ]; then
+    echo "$PREV_DEPLOYED_SHA" > "$SHA_FILE"
+    echo "  Rollback target recorded: $PREV_DEPLOYED_SHA"
+else
+    # No record of the previously deployed version. Writing HEAD here would
+    # make rollback-update.sh "roll back" to the very version being installed,
+    # so record nothing: the DB restore still works without it.
+    rm -f "$SHA_FILE"
+    echo "  ⚠ No record of the previously deployed version — if this update"
+    echo "    needs rolling back, rollback-update.sh will restore the database"
+    echo "    but cannot switch the code back automatically."
+fi
 
 # Retention: keep only the newest $KEEP_DUMPS dumps.
 echo "→ Pruning old backups (keeping newest $KEEP_DUMPS)..."
@@ -299,9 +337,10 @@ done
 echo ""
 
 # ---------------------------------------------------------------------------
-# 6. Stop the service. From HERE the EXIT trap will restart the old stack on
-#    any failure. (The DB container we just started is stopped by systemd's
-#    stop path via docker compose; we bring it back for the migration below.)
+# 6. Stop the service. From HERE the EXIT trap will restart the stack on any
+#    failure. (The db container — whether it was already up under the service
+#    or started by us for the backup — is stopped by systemd's stop path via
+#    docker compose; we bring it back for the migration below.)
 # ---------------------------------------------------------------------------
 echo "→ Stopping service to apply migrations..."
 SERVICE_STOPPED=1

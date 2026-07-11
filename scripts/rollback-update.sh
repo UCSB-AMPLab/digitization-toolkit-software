@@ -38,7 +38,18 @@ for arg in "$@"; do
         -h|--help)
             echo "Usage: sudo ./scripts/rollback-update.sh [--yes] [<dump-file.sql.gz>]"
             exit 0 ;;
-        *) DUMP_ARG="$arg" ;;
+        -*)
+            echo "✗ Unknown option: $arg"
+            echo "Usage: sudo ./scripts/rollback-update.sh [--yes] [<dump-file.sql.gz>]"
+            exit 2 ;;
+        *)
+            if [ -n "$DUMP_ARG" ]; then
+                echo "✗ Too many arguments: got both '$DUMP_ARG' and '$arg'."
+                echo "  Name at most one dump file."
+                echo "Usage: sudo ./scripts/rollback-update.sh [--yes] [<dump-file.sql.gz>]"
+                exit 2
+            fi
+            DUMP_ARG="$arg" ;;
     esac
 done
 
