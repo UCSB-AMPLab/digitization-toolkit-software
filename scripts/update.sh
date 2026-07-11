@@ -1,12 +1,15 @@
 #!/bin/bash
 # Update Digitization Toolkit to the latest committed code.
 #
-# This script is designed to be safe to run on a live Pi at a remote venue,
-# possibly by non-technical staff:
+# This script guards IRREPLACEABLE archival data. It is designed to be safe to
+# run on a live Pi at a remote venue, possibly by non-technical staff:
 #
 #   • All network / compile work (frontend build, pixi install) happens BEFORE
 #     the running service is stopped, so a failure there leaves the old, working
 #     stack untouched and still serving.
+#   • Before any migration a timestamped pg_dump is taken and verified non-empty;
+#     the pre-update superproject commit is recorded so a botched update can be
+#     rolled back with scripts/rollback-update.sh.
 #   • If anything fails after the service is stopped, an EXIT trap restarts the
 #     previous stack and tells the operator the unit is back on the old version.
 #   • Before starting, it checks whether the update changed dependency manifests
@@ -38,8 +41,8 @@ done
 
 # Load DB credentials the same way docker compose does: from the project .env.
 # The bare ${VAR:-default} fallbacks below only apply if .env is absent, so the
-# pg_isready calls talk to the DB with the SAME user the container was created
-# with.
+# pg_dump and pg_isready calls talk to the DB with the SAME user the container
+# was created with.
 if [ -f "$PROJECT_ROOT/.env" ]; then
     set -a
     # shellcheck disable=SC1091
@@ -64,10 +67,11 @@ run_as_user() {
 
 COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.pi.yml"
 
-# State recorded across runs, so the offline check can diff the last good deploy
-# against HEAD.
-STATE_DIR="/var/lib/dtk/backups"
-LAST_DEPLOYED_SHA_FILE="$STATE_DIR/last-deployed-SHA"
+# Backup location (also used by rollback-update.sh — keep these in sync).
+BACKUP_DIR="/var/lib/dtk/backups"
+SHA_FILE="$BACKUP_DIR/pre-update-SHA"
+LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
+KEEP_DUMPS=5
 
 cd "$PROJECT_ROOT"
 
@@ -79,7 +83,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # 0. Safety net: if we fail AFTER stopping the service, bring the old stack
 #    back up so the venue is never left with a dead appliance. Armed just
-#    before we stop the service (see step 4); until then failures are harmless
+#    before we stop the service (see step 6); until then failures are harmless
 #    because the running stack was never touched.
 # ---------------------------------------------------------------------------
 SERVICE_STOPPED=0
@@ -103,7 +107,9 @@ restore_previous_stack() {
         echo "    Nothing was migrated or changed permanently."
     else
         echo "  ✗ The appliance did NOT come back up automatically."
-        echo "    Check logs:  journalctl -u dtk -n 50"
+        echo "    A backup was taken at: $BACKUP_DIR"
+        echo "    To fully roll back, run:  sudo $SCRIPT_DIR/rollback-update.sh"
+        echo "    Then check logs:          journalctl -u dtk -n 50"
     fi
     echo ""
 }
@@ -126,9 +132,9 @@ on_exit() {
 trap on_exit EXIT
 
 # ---------------------------------------------------------------------------
-# 1. Note where we are now.
+# 1. Record where we are now, so a rollback can return here.
 # ---------------------------------------------------------------------------
-mkdir -p "$STATE_DIR"
+mkdir -p "$BACKUP_DIR"
 CURRENT_SHA="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
 echo "→ Current version: $CURRENT_SHA"
 echo ""
@@ -230,8 +236,72 @@ cd "$PROJECT_ROOT"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 5. Stop the service. From HERE the EXIT trap will restart the old stack on
-#    any failure.
+# 5. Pre-migration backup. The old stack is STILL RUNNING and serving, so this
+#    dump is a consistent snapshot of live data before we change anything.
+#    (pg_dump takes a single transactional snapshot, so it is safe to run while
+#    the app is live.) We take and verify the dump BEFORE stopping anything, so
+#    a backup failure aborts the update with the appliance untouched.
+# ---------------------------------------------------------------------------
+echo "→ Making sure the database is up so we can back it up..."
+$COMPOSE up -d db
+
+echo "  Waiting for PostgreSQL to be ready..."
+for i in $(seq 1 30); do
+    if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
+        echo "  Database ready."
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "✗ Database did not become ready after 60s — cannot take a safe backup."
+        echo "  Aborting the update; the appliance is unchanged."
+        $COMPOSE down >/dev/null 2>&1 || true
+        systemctl start dtk 2>/dev/null || true
+        exit 1
+    fi
+    sleep 2
+done
+
+TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
+DUMP_FILE="$BACKUP_DIR/pre-update-$TIMESTAMP.sql.gz"
+echo "→ Backing up the database to:"
+echo "    $DUMP_FILE"
+# Pipe pg_dump through gzip. set -o pipefail so a pg_dump failure fails the line
+# even though gzip exits 0.
+set -o pipefail
+$COMPOSE exec -T db pg_dump -U "$DATABASE_USER" -d "$DATABASE_NAME" | gzip > "$DUMP_FILE"
+set +o pipefail
+
+# A failed pg_dump can still leave a tiny valid gzip (an empty stream gzips to
+# ~20 bytes). Refuse to proceed if the dump looks empty — better to abort than
+# to migrate with no real safety net.
+DUMP_BYTES="$(wc -c < "$DUMP_FILE" | tr -d ' ')"
+if [ "${DUMP_BYTES:-0}" -lt 100 ]; then
+    echo "✗ Backup looks empty (${DUMP_BYTES} bytes) — pg_dump likely failed."
+    echo "  Refusing to migrate without a real backup. Aborting; appliance unchanged."
+    rm -f "$DUMP_FILE"
+    $COMPOSE down >/dev/null 2>&1 || true
+    systemctl start dtk 2>/dev/null || true
+    exit 1
+fi
+echo "  ✓ Backup written (${DUMP_BYTES} bytes)."
+
+# Record the commit to roll back to, next to the dump, for rollback-update.sh.
+echo "$CURRENT_SHA" > "$SHA_FILE"
+
+# Retention: keep only the newest $KEEP_DUMPS dumps.
+echo "→ Pruning old backups (keeping newest $KEEP_DUMPS)..."
+# Filenames are our own fixed timestamped pattern; ls -t sorting is safe here.
+# shellcheck disable=SC2012
+ls -1t "$BACKUP_DIR"/pre-update-*.sql.gz 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | while read -r old; do
+    echo "    removing $old"
+    rm -f "$old"
+done
+echo ""
+
+# ---------------------------------------------------------------------------
+# 6. Stop the service. From HERE the EXIT trap will restart the old stack on
+#    any failure. (The DB container we just started is stopped by systemd's
+#    stop path via docker compose; we bring it back for the migration below.)
 # ---------------------------------------------------------------------------
 echo "→ Stopping service to apply migrations..."
 SERVICE_STOPPED=1
@@ -239,7 +309,7 @@ systemctl stop dtk 2>/dev/null || true
 echo ""
 
 # ---------------------------------------------------------------------------
-# 6. Apply DB migrations.
+# 7. Apply DB migrations.
 # ---------------------------------------------------------------------------
 echo "→ Starting database for migrations..."
 $COMPOSE up -d db
@@ -268,7 +338,7 @@ $COMPOSE down
 echo ""
 
 # ---------------------------------------------------------------------------
-# 7. Restart the service on the new version.
+# 8. Restart the service on the new version.
 # ---------------------------------------------------------------------------
 echo "→ Starting service..."
 systemctl start dtk
@@ -294,6 +364,10 @@ echo " Update complete!"
 echo "=========================================="
 echo ""
 echo "  Now running version: $CURRENT_SHA"
+echo "  A pre-update backup was saved at:"
+echo "    $DUMP_FILE"
+echo "  If something looks wrong, you can roll back with:"
+echo "    sudo $SCRIPT_DIR/rollback-update.sh"
 echo ""
 echo "  Frontend: http://localhost:3000"
 echo "  Backend:  http://localhost:8000/health"
