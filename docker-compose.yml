@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=${DATABASE_USER:-user}
       - POSTGRES_PASSWORD=${DATABASE_PASSWORD:-password}
@@ -64,6 +65,7 @@ services:
     # No npm or source code in the running container → works fully offline
     # after a one-time internet-connected `docker compose build`.
     # For live-reload development use: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+    restart: unless-stopped
     build:
       context: ./frontend
       dockerfile: Dockerfile

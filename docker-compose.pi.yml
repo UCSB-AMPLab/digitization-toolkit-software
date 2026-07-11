@@ -25,6 +25,7 @@ services:
   # Access the app at: http://digitool.local  (instead of :3000)
   nginx:
     image: nginx:1.25-alpine
+    restart: unless-stopped
     ports:
       - "80:80"
     volumes:
