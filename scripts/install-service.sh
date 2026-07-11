@@ -46,14 +46,9 @@ echo "→ Copying service file to systemd..."
 cp "$SERVICE_FILE" "$SYSTEMD_DIR/dtk.service"
 
 echo "→ Configuring storage mount permissions..."
-cat > /etc/sudoers.d/dtk-storage << 'EOF'
-# Digitization Toolkit — allow backend user to mount/unmount removable storage
-Defaults:pi !requiretty
-pi ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /bin/mount, /bin/umount, /usr/bin/mkdir, /bin/mkdir, /usr/bin/chown, /bin/chown
-EOF
-chmod 0440 /etc/sudoers.d/dtk-storage
-mkdir -p /var/lib/dtk/mounts
-chown pi:pi /var/lib/dtk/mounts 2>/dev/null || true
+# install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);
+# it must NOT be chowned to pi — see the ownership invariant in that script.
+"$SCRIPT_DIR/install-system-helper.sh"
 
 echo "→ Reloading systemd daemon..."
 systemctl daemon-reload
