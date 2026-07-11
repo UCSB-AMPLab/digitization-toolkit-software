@@ -29,16 +29,18 @@ cd "$PROJECT_ROOT"
 # services those scripts brought up (base + Pi overlay).
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.pi.yml"
 
-# Bounded poll: up to ~60s (30 tries × 2s) for the containers to settle.
-MAX_TRIES=30
-SLEEP_SECS=2
+# Bounded poll: up to ~60s (30 tries × 2s) by default for the containers to
+# settle. Tunable per hardware/venue via environment (e.g. in a dtk.service
+# drop-in: Environment=DTK_HEALTH_MAX_TRIES=60) without editing this script.
+MAX_TRIES="${DTK_HEALTH_MAX_TRIES:-30}"
+SLEEP_SECS="${DTK_HEALTH_SLEEP_SECS:-2}"
 
 # Is a service defined in this compose config at all? (nginx is Pi-only.)
 service_defined() {
     $COMPOSE config --services 2>/dev/null | grep -qx "$1"
 }
 
-# Print the state of a service's container ("running", "exited", "" if none).
+# Succeed iff the service has a container in the "running" set.
 service_state() {
     $COMPOSE ps --status running --format '{{.Service}}' 2>/dev/null \
         | grep -qx "$1"

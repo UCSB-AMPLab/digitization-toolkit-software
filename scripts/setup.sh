@@ -160,8 +160,11 @@ tee /etc/systemd/journald.conf.d/dtk.conf >/dev/null <<'EOF'
 [Journal]
 SystemMaxUse=100M
 EOF
-systemctl restart systemd-journald 2>/dev/null || true
-echo "  journald SystemMaxUse=100M  ✓"
+if systemctl restart systemd-journald 2>/dev/null; then
+    echo "  journald SystemMaxUse=100M  ✓"
+else
+    echo "  ⚠ journald restart failed — the 100M cap takes effect on next reboot"
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
