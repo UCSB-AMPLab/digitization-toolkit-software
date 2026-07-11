@@ -2,6 +2,7 @@
 title: "Captua — Tarjeta de operación (Archivo Histórico de Rionegro)"
 date-modified: last-modified
 format: html
+toc: false
 lang: es
 ---
 
