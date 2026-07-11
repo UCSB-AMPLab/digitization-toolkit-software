@@ -1,12 +1,13 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=${DATABASE_USER:-user}
       - POSTGRES_PASSWORD=${DATABASE_PASSWORD:-password}
       - POSTGRES_DB=${DATABASE_NAME:-digitization_toolkit}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     command: >
        postgres
        -c listen_addresses='0.0.0.0'
@@ -26,6 +27,11 @@ services:
       timeout: 5s
       retries: 15
       start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # Backend service (optional for Docker-based development)
   # On Raspberry Pi with cameras, run backend natively: cd backend && pixi run dev
@@ -58,19 +64,23 @@ services:
         condition: service_healthy
     command: >
       sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     # Production image: multi-stage build compiles Svelte at build time.
     # No npm or source code in the running container → works fully offline
     # after a one-time internet-connected `docker compose build`.
     # For live-reload development use: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+    restart: unless-stopped
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    env_file:
-      - ./.env
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     # Allow container to reach host services (native backend)
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -84,8 +94,11 @@ services:
       - NODE_ENV=production
     # No depends_on db — the frontend is a Node.js API proxy and never connects
     # to Postgres directly. Removing this lets db and frontend start in parallel.
-    # No depends_on db — the frontend is a Node.js API proxy and never connects
-    # to Postgres directly. Removing this lets db and frontend start in parallel.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   postgres_data:
