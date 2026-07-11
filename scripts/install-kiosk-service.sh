@@ -69,6 +69,9 @@ ExecStart=-/sbin/agetty --autologin $KIOSK_USER --noclear %I \$TERM
 EOF
 sudo systemctl enable getty@tty2 >/dev/null 2>&1 || true
 sudo systemctl daemon-reload
+# Restart (not just enable) so the recovery VT is usable immediately after
+# provisioning, without waiting for a reboot.
+sudo systemctl restart getty@tty2 >/dev/null 2>&1 || true
 
 # ── 2c. VT-escape from the kiosk (triggerhappy) ─────────────────────────────
 # cage does not bind Ctrl+Alt+Fn and puts the keyboard in raw mode, so on a
@@ -81,10 +84,16 @@ echo "→ Installing VT-escape (triggerhappy)..."
 
 # Install triggerhappy only if missing, so offline re-runs never touch the
 # network. It ships with Raspberry Pi OS, so this is usually a no-op.
+# If it IS missing, this must succeed: provisioning happens online, and
+# continuing without thd would silently produce a kiosk with no VT-escape.
 if ! command -v thd >/dev/null 2>&1 && [ ! -x /usr/sbin/thd ]; then
     echo "  triggerhappy not present — installing via apt..."
-    sudo apt-get install -y triggerhappy || \
-        echo "  ⚠ triggerhappy not available via apt (offline?) — install it before relying on Ctrl+Alt+F2"
+    if ! sudo apt-get install -y triggerhappy; then
+        echo "✗ triggerhappy could not be installed — refusing to provision a kiosk"
+        echo "  with no escape path. Connect to the internet (or install the"
+        echo "  triggerhappy package manually) and re-run this script."
+        exit 1
+    fi
 else
     echo "  triggerhappy already installed — skipping apt."
 fi
