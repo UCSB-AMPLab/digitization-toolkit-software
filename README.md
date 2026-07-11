@@ -161,4 +161,11 @@ See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit/wiki) for det
 
 ## License
 
-MIT
+Copyright © 2025 UCSB – Archives, Memory & Preservation Lab.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See [LICENSE](LICENSE) for the full text.
+
+Hardware CAD files and documentation are released under CC BY 4.0.
