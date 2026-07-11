@@ -2,7 +2,7 @@
 Description=Digitization Toolkit
 After=docker.service
 Requires=docker.service
-Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit
+Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit-software
 
 [Service]
 Type=simple
