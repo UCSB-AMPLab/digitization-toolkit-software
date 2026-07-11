@@ -39,3 +39,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# Pin the appliance's compose network to a fixed subnet so the host firewall
+# (scripts/setup-firewall.sh) can allow container→native-backend traffic on
+# port 8000 from exactly this range, instead of the whole 172.16.0.0/12 pool
+# (which a venue LAN could legitimately occupy). Changing this subnet requires
+# updating the firewall rule in the same commit.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24

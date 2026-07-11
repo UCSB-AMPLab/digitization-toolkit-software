@@ -151,7 +151,7 @@ echo ""
 # ---------------------------------------------------------------------------
 # Only nginx (port 80), SSH, mDNS, and Tailscale remain reachable from the
 # LAN; the native backend on 8000 stays reachable from the Docker bridge only.
-"$SCRIPT_DIR/setup-firewall.sh"
+bash "$SCRIPT_DIR/setup-firewall.sh"
 echo ""
 
 # ---------------------------------------------------------------------------
