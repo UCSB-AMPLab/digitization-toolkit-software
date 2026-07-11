@@ -35,7 +35,9 @@ fi
 
 echo ""
 echo "→ Stopping Docker containers..."
-docker compose down
+# Must use the same compose-file pair as start.sh (base + Pi overlay), otherwise
+# services defined only in docker-compose.pi.yml (e.g. nginx) are left orphaned.
+docker compose -f docker-compose.yml -f docker-compose.pi.yml down
 
 echo ""
 echo "✓ All services stopped"
