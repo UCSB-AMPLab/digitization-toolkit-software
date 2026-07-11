@@ -1,6 +1,8 @@
 services:
   db:
-    image: postgres:16-alpine
+    # Pinned by multi-arch index digest for golden-card reproducibility;
+    # refresh deliberately with `docker buildx imagetools inspect <image:tag>` when updating.
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     restart: unless-stopped
     environment:
       - POSTGRES_USER=${DATABASE_USER:-user}
