@@ -147,6 +147,27 @@ bash "$SCRIPT_DIR/setup-firewall.sh"
 echo ""
 
 # ---------------------------------------------------------------------------
+# 6d. Journald size cap (NEH-101)
+# ---------------------------------------------------------------------------
+# This is an SD-card appliance: the journal lives on the root partition, and an
+# unbounded journal (or a crash-looping unit spamming logs) could fill it and
+# brick the device. Cap persistent journald usage at 100M via a drop-in.
+echo "→ Capping journald size (SD-card appliance)..."
+mkdir -p /etc/systemd/journald.conf.d
+tee /etc/systemd/journald.conf.d/dtk.conf >/dev/null <<'EOF'
+# Digitization Toolkit — SD-card appliance.
+# Logs must never fill the root partition, so cap journald's on-disk usage.
+[Journal]
+SystemMaxUse=100M
+EOF
+if systemctl restart systemd-journald 2>/dev/null; then
+    echo "  journald SystemMaxUse=100M  ✓"
+else
+    echo "  ⚠ journald restart failed — the 100M cap takes effect on next reboot"
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations
 # ---------------------------------------------------------------------------
 cd "$PROJECT_ROOT"

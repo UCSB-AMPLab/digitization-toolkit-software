@@ -17,6 +17,16 @@ Environment="PATH=/home/pi/.pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 ExecStart=/home/pi/dtk/scripts/start.sh
 ExecStop=/home/pi/dtk/scripts/stop.sh
 
+# Verify the container half of the stack actually came up (NEH-99). For
+# Type=simple, ExecStartPost runs right after ExecStart forks — it does NOT
+# wait for start.sh to exit — so this polls (bounded) until the db is healthy
+# and the frontend/nginx containers are running. If they never come up (e.g. a
+# container crash-loops at boot faster than Docker can recover), the check
+# exits non-zero, systemd marks the unit failed, and the half-dead stack is
+# visible in `systemctl status dtk`. Covers startup only; a container that dies
+# later is handled by the compose restart policy.
+ExecStartPost=/home/pi/dtk/scripts/check-stack-health.sh
+
 # Restart policy
 Restart=on-failure
 RestartSec=10s
