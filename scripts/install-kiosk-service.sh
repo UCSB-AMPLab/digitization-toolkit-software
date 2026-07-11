@@ -111,6 +111,25 @@ sudo systemctl enable triggerhappy >/dev/null 2>&1 || true
 sudo systemctl restart triggerhappy >/dev/null 2>&1 || true
 echo "  Ctrl+Alt+F2 → tty2 shell, Ctrl+Alt+F1 → kiosk (verify 'ps -o user -C thd' shows root)"
 
+# ── 2d. Chromium managed policy — disable the password manager (NEH-67) ─────
+# The kiosk browser must never offer to save passwords or autofill payment /
+# address data. A managed policy JSON enforces this regardless of the launch
+# flags. Raspberry Pi OS ships Chromium under one of two policy roots depending
+# on the build (chromium vs chromium-browser); installing into both is harmless
+# and covers either. No network access is needed.
+echo "→ Installing Chromium managed policy (disable password manager)..."
+for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
+    sudo mkdir -p "$policy_dir"
+    sudo tee "$policy_dir/dtk-no-password-manager.json" > /dev/null << 'EOF'
+{
+    "PasswordManagerEnabled": false,
+    "AutofillAddressEnabled": false,
+    "AutofillCreditCardEnabled": false
+}
+EOF
+done
+echo "  /etc/chromium{,-browser}/policies/managed/dtk-no-password-manager.json  ✓"
+
 # ── 3. Remove old kiosk.service if present (replaced by .bash_profile) ──────
 if systemctl is-enabled kiosk.service &>/dev/null; then
     echo "→ Disabling legacy kiosk.service..."
