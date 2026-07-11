@@ -69,18 +69,10 @@ echo "  /var/log/dtk  ✓"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 2b. Sudoers rule for storage mounting (no polkit/D-Bus needed)
+# 2b. Scoped privileged helper + sudoers rule (no polkit/D-Bus needed)
 # ---------------------------------------------------------------------------
 echo "→ Configuring storage mount permissions..."
-cat > /etc/sudoers.d/dtk-storage << 'EOF'
-# Digitization Toolkit — allow backend user to mount/unmount removable storage
-# without a password. Required because the backend runs without a login session
-# and polkit cannot perform interactive authentication in that context.
-Defaults:pi !requiretty
-pi ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /bin/mount, /bin/umount, /usr/bin/mkdir, /bin/mkdir, /usr/bin/chown, /bin/chown
-EOF
-chmod 0440 /etc/sudoers.d/dtk-storage
-echo "  /etc/sudoers.d/dtk-storage  ✓"
+"$SCRIPT_DIR/install-system-helper.sh"
 echo ""
 
 # ---------------------------------------------------------------------------
