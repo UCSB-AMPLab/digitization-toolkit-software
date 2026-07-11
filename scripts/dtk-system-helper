@@ -1,0 +1,163 @@
+#!/bin/bash
+# dtk-system-helper — the single privileged entry point for the Digitization
+# Toolkit backend. It is invoked exclusively via a scoped sudoers rule
+# (see install-system-helper.sh), so everything it does runs as root.
+#
+# THREAT MODEL
+# ------------
+# The backend API is reachable on the LAN. The previous design granted the
+# `pi` user open-ended NOPASSWD sudo to mount/umount/mkdir/chown. Any of those
+# is a trivial full-root escalation primitive:
+#   - arbitrary `mount`: bind-mount an attacker-controlled dir over
+#     /etc/sudoers.d (or /etc, /root/.ssh, ...) → instant root.
+#   - arbitrary `chown pi:pi <path>`: take ownership of /etc/shadow,
+#     /etc/sudoers.d, a setuid binary, ... → root.
+#   - arbitrary `mkdir`: create dirs anywhere, e.g. shadowing system paths.
+# This helper removes that primitive by validating every argument BEFORE any
+# privileged action and confining all filesystem effects to
+# /var/lib/dtk/mounts. Each validation below exists to close one of those
+# escalation paths. The helper FAILS CLOSED: any doubt → error + exit 1.
+#
+# The verb contract is depended on by a coordinated backend change; do not
+# alter verb names, argument order, or exit semantics without updating both.
+
+set -euf
+
+# Fixed, minimal PATH so a poisoned caller environment cannot redirect the
+# tools we call (mount, umount, lsblk, mkdir, chown, realpath, systemctl).
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+readonly MOUNTS_ROOT="/var/lib/dtk/mounts"
+readonly DEVICE_RE='^/dev/(sd[a-z][0-9]+|mmcblk[0-9]+p[0-9]+|nvme[0-9]+n[0-9]+p[0-9]+)$'
+
+die() {
+    printf 'dtk-system-helper: %s\n' "$1" >&2
+    exit 1
+}
+
+# Reject any argument containing a newline. realpath/validation below all
+# operate on single lines; an embedded newline could smuggle a second path
+# past a check or corrupt the sudoers file if it ever reached one.
+reject_newlines() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            *$'\n'*) die "argument contains a newline" ;;
+        esac
+    done
+}
+
+# Resolve the invoking user's uid/gid. Under sudo these come from SUDO_UID /
+# SUDO_GID; if unset (e.g. helper run some other way) fall back to the `pi`
+# account so ownership still lands on the intended non-root user.
+resolve_owner() {
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+        OWNER_UID="$SUDO_UID"
+        OWNER_GID="$SUDO_GID"
+    else
+        OWNER_UID="$(id -u pi)"
+        OWNER_GID="$(id -g pi)"
+    fi
+}
+
+# Canonicalize a mountpoint and require it to sit exactly one component deep
+# under MOUNTS_ROOT (e.g. /var/lib/dtk/mounts/sda1 — never the root itself,
+# never nested, never anywhere else). `realpath -m` collapses `..` so
+# traversal like mounts/../../etc is caught here.
+require_mountpoint_under_root() {
+    local raw="$1" canon parent
+    canon="$(realpath -m -- "$raw")" || die "cannot canonicalize path: $raw"
+    case "$canon" in
+        "$MOUNTS_ROOT"/*) : ;;
+        *) die "path not under $MOUNTS_ROOT: $canon" ;;
+    esac
+    parent="$(dirname -- "$canon")"
+    [ "$parent" = "$MOUNTS_ROOT" ] || die "path must be exactly one level under $MOUNTS_ROOT: $canon"
+    [ "$canon" != "$MOUNTS_ROOT" ] || die "refusing to operate on mounts root itself"
+    printf '%s\n' "$canon"
+}
+
+cmd_mount() {
+    [ "$#" -eq 2 ] || die "usage: mount <device> <mountpoint>"
+    local device="$1" mp_raw="$2" mountpoint fstype
+    reject_newlines "$device" "$mp_raw"
+
+    # Device must match the whitelist pattern AND be a real block device.
+    case "$device" in
+        /dev/*) : ;;
+        *) die "invalid device: $device" ;;
+    esac
+    printf '%s' "$device" | grep -Eq "$DEVICE_RE" || die "invalid device: $device"
+    [ -b "$device" ] || die "not a block device: $device"
+
+    mountpoint="$(require_mountpoint_under_root "$mp_raw")"
+
+    mkdir -p -- "$mountpoint"
+
+    # Detect the filesystem ourselves rather than trusting a caller-supplied
+    # type. For FAT/exFAT (no Unix ownership) map files to the invoking user.
+    fstype="$(lsblk -no FSTYPE -- "$device" | head -n1)"
+
+    # nosuid,nodev on every mount: a removable volume must never introduce
+    # setuid binaries or device nodes.
+    local opts="nosuid,nodev"
+    case "$fstype" in
+        vfat|exfat)
+            resolve_owner
+            opts="$opts,uid=$OWNER_UID,gid=$OWNER_GID"
+            ;;
+    esac
+
+    mount -o "$opts" -- "$device" "$mountpoint"
+}
+
+cmd_umount() {
+    [ "$#" -eq 1 ] || die "usage: umount <mountpoint>"
+    local mp_raw="$1" mountpoint
+    reject_newlines "$mp_raw"
+    mountpoint="$(require_mountpoint_under_root "$mp_raw")"
+    umount -- "$mountpoint"
+}
+
+cmd_prepare_projects() {
+    [ "$#" -eq 1 ] || die "usage: prepare-projects <path>"
+    local raw="$1" canon base
+    reject_newlines "$raw"
+    canon="$(realpath -m -- "$raw")" || die "cannot canonicalize path: $raw"
+    case "$canon" in
+        "$MOUNTS_ROOT"/*) : ;;
+        *) die "path not under $MOUNTS_ROOT: $canon" ;;
+    esac
+    base="$(basename -- "$canon")"
+    [ "$base" = "dtk-projects" ] || die "projects dir must be named dtk-projects: $canon"
+    resolve_owner
+    mkdir -p -- "$canon"
+    chown "$OWNER_UID:$OWNER_GID" -- "$canon"
+}
+
+cmd_poweroff() {
+    [ "$#" -eq 0 ] || die "usage: poweroff"
+    systemctl poweroff
+}
+
+cmd_reboot() {
+    [ "$#" -eq 0 ] || die "usage: reboot"
+    systemctl reboot
+}
+
+main() {
+    [ "$#" -ge 1 ] || die "usage: dtk-system-helper <verb> [args...]"
+    local verb="$1"
+    shift
+    case "$verb" in
+        mount)            cmd_mount "$@" ;;
+        umount)           cmd_umount "$@" ;;
+        prepare-projects) cmd_prepare_projects "$@" ;;
+        poweroff)         cmd_poweroff "$@" ;;
+        reboot)           cmd_reboot "$@" ;;
+        *)                die "unknown verb: $verb" ;;
+    esac
+}
+
+main "$@"
