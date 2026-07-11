@@ -79,8 +79,6 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    env_file:
-      - ./.env
     ports:
       - "127.0.0.1:3000:3000"
     # Allow container to reach host services (native backend)
