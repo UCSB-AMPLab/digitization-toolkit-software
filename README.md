@@ -147,11 +147,14 @@ If you already cloned without `--recurse-submodules`, you can initialize and upd
 git submodule update --init --recursive
 ```
 
-To pull the latest changes for submodules after updates:
+To bring the submodules to the exact versions this repo pins (after pulling the superproject):
 
 ```bash
-git submodule update --remote --merge
+git pull
+git submodule update --init --recursive
 ```
+
+Do not use `--remote` here: it moves the submodules to their branch tips instead of the tested commits the superproject records. `--remote` belongs only to the deliberate pointer bump — see the [Git workflow](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki/Git-workflow) wiki.
 
 ***
 

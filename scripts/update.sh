@@ -4,8 +4,8 @@
 # This script is safe to run on a live Pi — it stops the service, applies
 # changes, runs any new DB migrations, then restarts.
 #
-# For a network-connected Pi (pull latest from git):
-#   git submodule update --remote --merge && sudo ./scripts/update.sh
+# For a network-connected Pi (fetch the latest tested code this repo pins):
+#   git pull && git submodule update --init --recursive && sudo ./scripts/update.sh
 #
 # For an offline update from a USB drive, copy the new repo content first,
 # then run this script.
