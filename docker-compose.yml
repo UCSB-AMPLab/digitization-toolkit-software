@@ -10,7 +10,7 @@ services:
       - POSTGRES_DB=${DATABASE_NAME:-digitization_toolkit}
     ports:
       - "127.0.0.1:5432:5432"
-     # Durability kept ON: this appliance can lose power anytime; wal_compression handles SD wear
+    # Durability kept ON: this appliance can lose power anytime; wal_compression handles SD wear
     command: >
        postgres
        -c listen_addresses='0.0.0.0'
