@@ -83,7 +83,10 @@ is_placeholder_dbpass() {
 }
 
 # ── Decide ──────────────────────────────────────────────────────────────────
-if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SERIAL" ]; then
+# The marker fast path still verifies the secrets are real: if .env was ever
+# manually reverted to placeholders, a matching marker must not mask it.
+if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SERIAL" ] \
+   && ! is_placeholder_secret "$SECRET_KEY" && ! is_placeholder_dbpass "$DB_PASSWORD"; then
     log "secrets already generated on this unit — nothing to do"
     exit 0
 fi
