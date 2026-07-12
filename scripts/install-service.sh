@@ -48,7 +48,14 @@ cp "$SERVICE_FILE" "$SYSTEMD_DIR/dtk.service"
 echo "→ Installing per-unit secret generation (first boot / cloned cards)..."
 cp "$SCRIPT_DIR/dtk-secrets.service" "$SYSTEMD_DIR/dtk-secrets.service"
 chmod +x "$SCRIPT_DIR/generate-secrets.sh"
+systemctl daemon-reload
 systemctl enable dtk-secrets.service >/dev/null
+# Run it NOW, not just at next boot: this stamps THIS machine's provenance
+# marker (generating real secrets if .env still has placeholders), so an
+# image taken at any point after install produces clones that detect the
+# serial mismatch and regenerate. Without this, a master imaged before its
+# next boot could spread identical secrets that every clone then adopts.
+systemctl start dtk-secrets.service
 
 echo "→ Configuring storage mount permissions..."
 # install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);
