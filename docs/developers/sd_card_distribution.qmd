@@ -58,25 +58,27 @@ In `/home/pi/dtk/.env`, set `HOST_IP` to the `.local` hostname:
 
 ```bash
 HOST_IP=digitool.local
-CORS_ORIGINS=["http://digitool.local:5173","http://digitool.local:3000","http://localhost:5173","http://localhost:3000"]
+CORS_ORIGINS=["http://digitool.local","http://localhost","http://localhost:5173","http://localhost:3000"]
 ```
 
-`PUBLIC_API_BASE` resolves automatically from `HOST_IP`:
+In the production stack, everything goes through the Nginx reverse proxy on port 80 (`docker-compose.pi.yml`), so the origin users actually open is `http://digitool.local` with no port. `PUBLIC_API_BASE` resolves automatically from `HOST_IP` and is routed through Nginx's `/api/` location, not straight to the backend port:
 
 ```bash
-PUBLIC_API_BASE=http://${HOST_IP}:8000
+PUBLIC_API_BASE=http://${HOST_IP}/api
 ```
 
-### 4. Rebuild and verify the frontend container
+### 4. Apply the new environment and verify
 
-The `PUBLIC_API_BASE` variable is baked into the compiled frontend at build time. After editing `.env`, rebuild:
+`PUBLIC_API_BASE` is read at runtime by the SvelteKit server (via `$env/dynamic/public`), not compiled into the frontend image — so recreating the containers with the updated `.env` is enough; no image rebuild is required for `.env` changes:
 
 ```bash
 cd /home/pi/dtk
-docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --build --force-recreate
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --force-recreate
 ```
 
-Open `http://digitool.local:3000` from another device on the same network to confirm it loads.
+(Only add `--build` if the frontend source itself changed, not for `.env` edits.)
+
+Open `http://digitool.local` from another device on the same network to confirm it loads.
 
 ### 5. Image the SD card
 
@@ -120,11 +122,16 @@ Nothing, in most cases. They:
 
 1. Insert the SD card and power on the Pi.
 2. Connect the Pi to their local network (Ethernet or Wi-Fi configured before imaging).
-3. Open `http://digitool.local:3000` from any browser on the same network.
+3. Open `http://digitool.local` from any browser on the same network.
 
 ::: {.callout-note}
 ## Wi-Fi pre-configuration
-If the destination uses Wi-Fi (not Ethernet), configure the network credentials on the SD card **before** shipping. The easiest way is via Raspberry Pi Imager's *Advanced options* when flashing, or by placing a `wpa_supplicant.conf` in the `/boot` partition after flashing.
+If the destination uses Wi-Fi (not Ethernet), configure the network credentials on the SD card **before** shipping.
+
+Raspberry Pi OS Bookworm replaced `dhcpcd` + `wpa_supplicant` with NetworkManager, so dropping a `wpa_supplicant.conf` on the `/boot` partition **no longer works** — Bookworm ignores that file.
+
+- **Preferred:** use Raspberry Pi Imager's *Advanced options* (gear icon, or `Ctrl+Shift+X`) when flashing to preconfigure the Wi-Fi SSID and password before the card is ever booted.
+- **Post-flash:** configure Wi-Fi via NetworkManager, e.g. `sudo nmcli device wifi connect "<SSID>" password "<password>"`, or by dropping a NetworkManager keyfile connection profile under `/etc/NetworkManager/system-connections/`.
 :::
 
 ---
@@ -139,10 +146,10 @@ If the destination uses Wi-Fi (not Ethernet), configure the network credentials 
 
 **CORS errors in the browser**
 
-The frontend origin must match `CORS_ORIGINS` in `.env`. If you changed the hostname or port, update that list and restart the backend:
+Under the production Nginx setup, the browser talks to a single origin (`http://digitool.local`, port 80) for both the frontend and `/api/` — this same-origin reverse-proxy model means this class of CORS error should not occur in normal production use. If you still see one, the frontend origin most likely does not match `CORS_ORIGINS` in `.env` (for example after renaming the hostname). Update that list and restart the backend in production mode:
 
 ```bash
-cd /home/pi/dtk/backend && pixi run dev
+cd /home/pi/dtk/backend && pixi run start
 ```
 
 **Two Pis on the same network**

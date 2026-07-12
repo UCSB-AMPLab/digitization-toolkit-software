@@ -69,18 +69,10 @@ echo "  /var/log/dtk  ✓"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 2b. Sudoers rule for storage mounting (no polkit/D-Bus needed)
+# 2b. Scoped privileged helper + sudoers rule (no polkit/D-Bus needed)
 # ---------------------------------------------------------------------------
 echo "→ Configuring storage mount permissions..."
-cat > /etc/sudoers.d/dtk-storage << 'EOF'
-# Digitization Toolkit — allow backend user to mount/unmount removable storage
-# without a password. Required because the backend runs without a login session
-# and polkit cannot perform interactive authentication in that context.
-Defaults:pi !requiretty
-pi ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /bin/mount, /bin/umount, /usr/bin/mkdir, /bin/mkdir, /usr/bin/chown, /bin/chown
-EOF
-chmod 0440 /etc/sudoers.d/dtk-storage
-echo "  /etc/sudoers.d/dtk-storage  ✓"
+"$SCRIPT_DIR/install-system-helper.sh"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -116,13 +108,64 @@ fi
 # ---------------------------------------------------------------------------
 
 # gPhoto2
-if sudo apt install -y gphoto2
+if sudo apt install -y gphoto2; then
     echo "gPhoto2 package installed"
     echo ""
 else
     echo "gPhoto2 package not available in apt package manager."
     echo ""
 fi
+
+# ---------------------------------------------------------------------------
+# 6b. System clock hardening (survive power cuts without an RTC)
+# ---------------------------------------------------------------------------
+# Without a battery-backed clock the Pi resumes at the last saved tick after a
+# power cut, which scrambles capture timestamps. fake-hwclock persists the time
+# across reboots; chrony corrects it via NTP whenever the unit is online (such
+# as now, during setup).
+echo "→ Installing clock services (fake-hwclock, chrony)..."
+if sudo apt install -y fake-hwclock chrony; then
+    systemctl enable fake-hwclock 2>/dev/null || true
+    systemctl enable chrony 2>/dev/null || true
+    # Seed the saved clock now, while the time is correct
+    fake-hwclock save 2>/dev/null || true
+    echo "  fake-hwclock + chrony  ✓"
+else
+    echo "  clock services not available in apt — skipping"
+fi
+echo ""
+# Pi 5 hardware RTC (optional, done manually): fit a cell on the RTC header and
+# enable trickle charge by adding 'dtparam=rtc_bbat_vchg=3000000' to
+# /boot/firmware/config.txt, then 'sudo hwclock -w'.
+
+# ---------------------------------------------------------------------------
+# 6c. Host firewall (venue-LAN hardening)
+# ---------------------------------------------------------------------------
+# Only nginx (port 80), SSH, mDNS, and Tailscale remain reachable from the
+# LAN; the native backend on 8000 stays reachable from the Docker bridge only.
+bash "$SCRIPT_DIR/setup-firewall.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 6d. Journald size cap (NEH-101)
+# ---------------------------------------------------------------------------
+# This is an SD-card appliance: the journal lives on the root partition, and an
+# unbounded journal (or a crash-looping unit spamming logs) could fill it and
+# brick the device. Cap persistent journald usage at 100M via a drop-in.
+echo "→ Capping journald size (SD-card appliance)..."
+mkdir -p /etc/systemd/journald.conf.d
+tee /etc/systemd/journald.conf.d/dtk.conf >/dev/null <<'EOF'
+# Digitization Toolkit — SD-card appliance.
+# Logs must never fill the root partition, so cap journald's on-disk usage.
+[Journal]
+SystemMaxUse=100M
+EOF
+if systemctl restart systemd-journald 2>/dev/null; then
+    echo "  journald SystemMaxUse=100M  ✓"
+else
+    echo "  ⚠ journald restart failed — the 100M cap takes effect on next reboot"
+fi
+echo ""
 
 # ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations

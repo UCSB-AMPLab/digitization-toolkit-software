@@ -18,7 +18,9 @@ echo ""
 # Uses docker-compose.pi.yml overlay for proper appliance volume paths (/var/lib/dtk, /var/log/dtk)
 echo "→ Starting database and frontend containers..."
 # --pull never: skip registry checks (device is offline after initial build)
-docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never
+# --wait: block until services report healthy (db) or running (others) before
+# we launch the native backend below, so it doesn't race Postgres startup
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never --wait
 
 echo ""
 echo "→ Starting native backend with pixi..."
