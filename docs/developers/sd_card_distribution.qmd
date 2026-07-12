@@ -101,6 +101,11 @@ sudo dd if=/dev/sdX bs=4M status=progress | gzip > dtk-$(date +%Y%m%d).img.gz
 Tools like [PiShrink](https://github.com/Drewsif/PiShrink) can reduce the image size significantly before compression by trimming unused filesystem space.
 :::
 
+::: {.callout-note}
+## Secrets are per-unit — imaging is safe at any point
+`SECRET_KEY` and `DATABASE_PASSWORD` are regenerated automatically on each physical unit by `dtk-secrets.service` (installed by `install-service.sh`). It records the Pi's hardware serial in `/var/lib/dtk/secrets-provenance`; when a flashed clone boots on a different Pi, the serial mismatch triggers fresh secrets before the backend starts — including rotating the Postgres password inside the cloned data directory. You do **not** need to scrub secrets from the master image, and test-booting the master before imaging is fine.
+:::
+
 ---
 
 ## Flashing and Delivering the Image
