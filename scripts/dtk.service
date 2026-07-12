@@ -1,6 +1,10 @@
 [Unit]
 Description=Digitization Toolkit
-After=docker.service
+# dtk-secrets.service must run first: on a freshly flashed (cloned) card it
+# generates this unit's own SECRET_KEY/DATABASE_PASSWORD before the backend
+# reads .env (NEH-158).
+After=docker.service dtk-secrets.service
+Wants=dtk-secrets.service
 Requires=docker.service
 Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit-software
 

@@ -45,6 +45,11 @@ fi
 echo "→ Copying service file to systemd..."
 cp "$SERVICE_FILE" "$SYSTEMD_DIR/dtk.service"
 
+echo "→ Installing per-unit secret generation (first boot / cloned cards)..."
+cp "$SCRIPT_DIR/dtk-secrets.service" "$SYSTEMD_DIR/dtk-secrets.service"
+chmod +x "$SCRIPT_DIR/generate-secrets.sh"
+systemctl enable dtk-secrets.service >/dev/null
+
 echo "→ Configuring storage mount permissions..."
 # install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);
 # it must NOT be chowned to pi — see the ownership invariant in that script.
