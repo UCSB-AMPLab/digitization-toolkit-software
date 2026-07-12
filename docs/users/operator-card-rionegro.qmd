@@ -26,13 +26,20 @@ Guía de una página para el personal que opera el equipo de digitalización. Im
 ## Cámaras: enfoque al iniciar la jornada
 
 1. Ponga el selector del lente en **AF** y tome la primera captura (el equipo enfoca solo).
-2. Pase el selector a **MF**. El resto de la jornada queda enfocado — la distancia entre la cámara y el documento no cambia.
+2. Pase el selector a **MF**, **en las dos cámaras**. El resto de la jornada queda enfocado — la distancia entre la cámara y el documento no cambia.
 
-Si el lente queda en AF, cada captura tarda unos 12 segundos más y la aplicación muestra una advertencia. El flash queda apagado automáticamente; no hay que tocarlo.
+Si el lente queda en AF, cada captura tarda unos 12 segundos más, la aplicación muestra una advertencia y la cámara puede llegar a bloquearse. Confirme que las dos cámaras quedaron en **MF** antes de empezar a digitalizar. El flash queda apagado automáticamente; no hay que tocarlo.
 
 ## Si las cámaras no aparecen (o aparece «imx519»)
 
 Cierre la sesión en la aplicación y vuelva a entrar. Casi siempre es suficiente.
+
+## Si una cámara deja de responder
+
+1. Revise que el selector del lente esté en **MF** (ver arriba).
+2. Apague y encienda esa cámara.
+3. Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+4. Solo si nada de esto funciona: apague todo de forma segura (ver arriba) y vuelva a encender.
 
 ## Si la aplicación se congela
 
