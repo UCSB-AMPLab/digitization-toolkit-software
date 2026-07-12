@@ -7,14 +7,13 @@ services:
       - POSTGRES_DB=${DATABASE_NAME:-digitization_toolkit}
     ports:
       - "5432:5432"
+    # Durability kept ON (safe defaults): this appliance can lose power anytime; wal_compression handles SD wear
     command: >
        postgres
        -c listen_addresses='0.0.0.0'
        -c shared_buffers=64MB
        -c work_mem=4MB
        -c wal_level=replica
-       -c synchronous_commit=off
-       -c full_page_writes=off
        -c max_wal_size=128MB
        -c min_wal_size=32MB
        -c wal_compression=on
