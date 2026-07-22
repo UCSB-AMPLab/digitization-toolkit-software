@@ -88,7 +88,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Installing backend dependencies (pixi)..."
 cd "$PROJECT_ROOT/backend"
-run_as_user "$PIXI_BIN" install
+run_as_user "$PIXI_BIN" install --locked
 echo ""
 
 # ---------------------------------------------------------------------------
