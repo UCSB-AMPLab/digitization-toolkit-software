@@ -87,20 +87,38 @@ The toolkit is designed to ship as a pre-flashed SD card. The end user only need
 
 ### Building the golden SD card (requires internet, done once)
 
+Flash **Raspberry Pi OS (Legacy, 64-bit) Lite — Debian 12 "Bookworm"** — the tested
+OS. Beware that Raspberry Pi Imager's plain "Raspberry Pi OS Lite (64-bit)" entry
+now installs Debian 13 (Trixie), which this stack has not been validated against.
+In Imager's advanced options set the username to **`pi`** — the service and kiosk
+installers hardcode `User=pi` and `/home/pi/dtk` — and enable SSH if provisioning
+headless.
+
 ```bash
-# 1. Clone the repository onto a fresh Raspberry Pi OS installation
+# 0. Prerequisites — none of these ship with a fresh Raspberry Pi OS Lite
+sudo apt update && sudo apt install -y git
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER          # re-login for this to take effect
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# 1. Clone the repository
 git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
 cd ~/dtk
 
 # 2. Run the one-time provisioning script (internet required here)
-#    Builds Docker images, installs pixi env, applies DB migrations
+#    Creates .env if missing, builds Docker images, installs pixi env,
+#    applies DB migrations
 sudo ./scripts/setup.sh
 
 # 3. Install and enable the systemd service (auto-start on boot)
 sudo ./scripts/install-service.sh
 sudo systemctl start dtk
 
-# 4. Verify the app is running
+# 4. Kiosk mode (fullscreen browser on the attached display)
+sudo ./scripts/installkb.sh
+sudo ./scripts/install-kiosk-service.sh
+
+# 5. Verify the app is running
 curl http://localhost:8000/health   # → {"status":"ok"}
 curl -I http://localhost:3000       # → HTTP 200
 ```
