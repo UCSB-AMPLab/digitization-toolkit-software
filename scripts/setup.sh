@@ -95,6 +95,15 @@ echo "→ Configuring storage mount permissions..."
 echo ""
 
 # ---------------------------------------------------------------------------
+# 2c. Docker group membership (no sudo needed for docker after re-login)
+# ---------------------------------------------------------------------------
+echo "→ Adding $DTK_USER to docker group..."
+usermod -aG docker "$DTK_USER"
+echo "  $DTK_USER added to docker group  ✓"
+echo "  (Log out and back in after setup for this to take effect)"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 3. Docker images
 # ---------------------------------------------------------------------------
 echo "→ Pulling base images and building services..."
@@ -116,12 +125,17 @@ echo ""
 # ---------------------------------------------------------------------------
 # 5. Camera system library link (Raspberry Pi only)
 # ---------------------------------------------------------------------------
-if python3 -c "import picamera2" 2>/dev/null || [ -d /usr/lib/python3/dist-packages/picamera2 ]; then
-    echo "→ Linking system camera libraries..."
+echo "→ Installing system camera packages (picamera2 / libcamera)..."
+# python3-picamera2 and python3-libcamera are Raspberry Pi OS system packages.
+# On non-Pi hardware these will simply not be found in apt and the install
+# will fail gracefully — that is expected and OK.
+if apt-get install -y python3-picamera2 python3-libcamera 2>/dev/null; then
+    echo "  python3-picamera2  ✓"
+    echo "→ Linking system camera libraries into pixi environment..."
     run_as_user "$PIXI_BIN" run setup-camera-link
     echo ""
 else
-    echo "→ Skipping camera link (picamera2 not found — OK on non-Pi hardware)"
+    echo "  Skipping camera link (picamera2 not available — OK on non-Pi hardware)"
     echo ""
 fi
 
