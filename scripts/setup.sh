@@ -50,6 +50,23 @@ echo "=========================================="
 echo ""
 
 # ---------------------------------------------------------------------------
+# 0. Environment file
+# ---------------------------------------------------------------------------
+# Everything below reads .env — compose interpolates the database credentials
+# into the db container's initdb, and Alembic's fallback DATABASE_HOST ("db")
+# only resolves inside the compose network. Running without .env therefore
+# fails late, deep in a psycopg traceback, with a half-initialized data dir.
+if [ ! -f "$PROJECT_ROOT/.env" ]; then
+    echo "→ No .env found — creating it from .env.example..."
+    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+    chown "$DTK_USER:$DTK_USER" "$PROJECT_ROOT/.env" 2>/dev/null || true
+    echo "  Review it (HOST_IP and CORS_ORIGINS in particular)."
+    echo "  SECRET_KEY and DATABASE_PASSWORD may stay as placeholders:"
+    echo "  dtk-secrets.service generates per-unit values on first boot."
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
 # 1. Stop any running services
 # ---------------------------------------------------------------------------
 echo "→ Stopping any running services..."
@@ -79,7 +96,10 @@ echo ""
 # 3. Docker images
 # ---------------------------------------------------------------------------
 echo "→ Pulling base images and building services..."
-$COMPOSE pull db
+# nginx must be pulled here too: the production start path runs with
+# --pull never (offline appliance), so anything not fetched during setup
+# simply does not exist on a shipped card.
+$COMPOSE pull db nginx
 $COMPOSE build frontend
 echo ""
 
@@ -113,6 +133,20 @@ if sudo apt install -y gphoto2; then
     echo ""
 else
     echo "gPhoto2 package not available in apt package manager."
+    echo ""
+fi
+
+# python-gphoto2 must be built from source against the system libgphoto2:
+# the PyPI manylinux wheel bundles its own libgphoto2/libusb stack, whose
+# autodetect finds no cameras on Raspberry Pi OS Bookworm even when the
+# gphoto2 CLI sees them (bench 2026-07-24). Needs pip in the pixi env.
+if run_as_user "$PIXI_BIN" run python -m pip --version >/dev/null 2>&1; then
+    echo "→ Building python-gphoto2 against system libgphoto2..."
+    sudo apt install -y libgphoto2-dev pkg-config gcc
+    run_as_user "$PIXI_BIN" run python -m pip install --no-binary :all: --force-reinstall gphoto2
+    echo ""
+else
+    echo "→ Skipping python-gphoto2 source build (no pip in the pixi env)"
     echo ""
 fi
 
