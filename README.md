@@ -53,14 +53,16 @@ docker compose build
 
 Or manually:
 ```bash
-# Start database and frontend
-docker compose up -d
+# Start database and frontend behind Nginx (base compose + Pi overlay)
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never
 
-# Start backend with pixi
-cd backend && pixi run dev
+# Start backend natively with pixi (production mode, no --reload)
+cd backend && pixi run start
 ```
 
-**Access (production):** [http://localhost:3000](http://localhost:3000) (frontend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
+The Pi overlay (`docker-compose.pi.yml`) is required in production: it bind-mounts Postgres at `/var/lib/dtk/db/postgres` (instead of the base compose's `postgres_data` named volume) and adds the Nginx reverse proxy that puts frontend and backend behind one origin on port 80.
+
+**Access (production):** [http://localhost](http://localhost) (Nginx, port 80 — proxies `/` to the frontend and `/api/` to the backend) | [http://localhost:8000/docs](http://localhost:8000/docs) (API, direct)
 **Access (dev):** [http://localhost:5173](http://localhost:5173) (frontend, Vite) | [http://localhost:8000/docs](http://localhost:8000/docs) (API)
 
 **Note:** The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
@@ -85,57 +87,38 @@ The toolkit is designed to ship as a pre-flashed SD card. The end user only need
 
 ### Building the golden SD card (requires internet, done once)
 
-```bash
-# 0. Install GIT
-sudo apt update
-sudo apt install git -y
-
-# 0.1. Override dev ssh for submodules
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-```
+Flash **Raspberry Pi OS (Legacy, 64-bit) Lite — Debian 12 "Bookworm"** — the tested
+OS. Beware that Raspberry Pi Imager's plain "Raspberry Pi OS Lite (64-bit)" entry
+now installs Debian 13 (Trixie), which this stack has not been validated against.
+In Imager's advanced options set the username to **`pi`** — the service and kiosk
+installers hardcode `User=pi` and `/home/pi/dtk` — and enable SSH if provisioning
+headless.
 
 ```bash
-# 1. Clone the repository onto a fresh Raspberry Pi OS installation
-git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit.git ~/dtk
+# 0. Prerequisites — none of these ship with a fresh Raspberry Pi OS Lite
+sudo apt update && sudo apt install -y git
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER          # re-login for this to take effect
+curl -fsSL https://pixi.sh/install.sh | bash
+
+# 1. Clone the repository
+git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
 cd ~/dtk
 
-# 1.1. Install pixi as Python environment manager
-curl -fsSL https://pixi.sh/install.sh | bash
-source ~/.bashrc
-# Verify pixi is installed and sourced
-pixi --version
-
-# 1.2. Install Docker
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-
-# 1.3. Setup Raspberry pi cameras
-# Select the configuration according with the cameras to be used
-# For instance
-[Raspberry Pi 5 IMX519 Camera Setup](https://ampl.clair.ucsb.edu/digitization-toolkit-software/developers/device_setup_pi5_imx519.html)
-
-# 1.4. Create the .env file
-cp .env.example .env
-nano .env # edit the values
-
 # 2. Run the one-time provisioning script (internet required here)
-#    Builds Docker images, installs pixi env, applies DB migrations
-sudo chmod +x ./scripts/setup.sh
+#    Creates .env if missing, builds Docker images, installs pixi env,
+#    applies DB migrations
 sudo ./scripts/setup.sh
-
-# 2.1 Install Wayland kiosk browser
-sudo ./scripts/installkb.sh
 
 # 3. Install and enable the systemd service (auto-start on boot)
 sudo ./scripts/install-service.sh
 sudo systemctl start dtk
 
-# 3.1 Apply the docker group to the current shell session
-#     (setup.sh added pi to the docker group, but it only takes effect
-#     after a logout/login — newgrp activates it immediately for this session)
-newgrp docker
+# 4. Kiosk mode (fullscreen browser on the attached display)
+sudo ./scripts/installkb.sh
+sudo ./scripts/install-kiosk-service.sh
 
-# 4. Verify the app is running
+# 5. Verify the app is running
 curl http://localhost:8000/health   # → {"status":"ok"}
 curl -I http://localhost:3000       # → HTTP 200
 ```
@@ -175,7 +158,7 @@ When cloning, make sure to fetch submodules as well:
 
 ```bash
 # Clone with submodules
-git clone --recurse-submodules git@github.com:UCSB-AMPLab/digitization-toolkit.git
+git clone --recurse-submodules git@github.com:UCSB-AMPLab/digitization-toolkit-software.git
 ```
 
 If you already cloned without `--recurse-submodules`, you can initialize and update submodules manually:
@@ -184,18 +167,28 @@ If you already cloned without `--recurse-submodules`, you can initialize and upd
 git submodule update --init --recursive
 ```
 
-To pull the latest changes for submodules after updates:
+To bring the submodules to the exact versions this repo pins (after pulling the superproject):
 
 ```bash
-git submodule update --remote --merge
+git pull
+git submodule update --init --recursive
 ```
+
+Do not use `--remote` here: it moves the submodules to their branch tips instead of the tested commits the superproject records. `--remote` belongs only to the deliberate pointer bump — see the [Git workflow](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki/Git-workflow) wiki.
 
 ***
 
 ## Development Documentation
 
-See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit/wiki) for detailed developer guides and API references.
+See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki) for detailed developer guides and API references.
 
 ## License
 
-MIT
+Copyright © 2025 UCSB – Archives, Memory & Preservation Lab.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See [LICENSE](LICENSE) for the full text.
+
+Hardware CAD files and documentation are released under CC BY 4.0.

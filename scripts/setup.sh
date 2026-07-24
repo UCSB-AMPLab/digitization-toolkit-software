@@ -50,18 +50,21 @@ echo "=========================================="
 echo ""
 
 # ---------------------------------------------------------------------------
-# 0. Ensure .env exists (compose + alembic must read the same credentials)
+# 0. Environment file
 # ---------------------------------------------------------------------------
+# Everything below reads .env — compose interpolates the database credentials
+# into the db container's initdb, and Alembic's fallback DATABASE_HOST ("db")
+# only resolves inside the compose network. Running without .env therefore
+# fails late, deep in a psycopg traceback, with a half-initialized data dir.
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
-    echo "→ Creating .env from .env.example..."
-    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-    chown "$DTK_USER:$DTK_USER" "$PROJECT_ROOT/.env"
-    echo "  .env created  ✓"
-    echo "  IMPORTANT: Edit $PROJECT_ROOT/.env to set a real SECRET_KEY and"
-    echo "  DATABASE_PASSWORD before going into production."
-    echo ""
-else
-    echo "→ .env already exists — skipping copy."
+    echo "→ No .env found — creating it from .env.example..."
+    # 0600 from the start: dtk-secrets later writes the real SECRET_KEY and
+    # DB password into this file preserving whatever mode it has.
+    install -m 600 -o "$DTK_USER" -g "$DTK_USER" \
+        "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
+    echo "  Review it (HOST_IP and CORS_ORIGINS in particular)."
+    echo "  SECRET_KEY and DATABASE_PASSWORD may stay as placeholders:"
+    echo "  dtk-secrets.service generates per-unit values on first boot."
     echo ""
 fi
 
@@ -79,15 +82,20 @@ echo "→ Creating system directories..."
 mkdir -p /var/lib/dtk/db/postgres
 mkdir -p /var/lib/dtk/mounts
 mkdir -p /var/log/dtk
-# Postgres data dir must remain root-owned so the postgres container can
-# chown it to uid 999 (postgres) during first-time initdb.
-chown -R "$DTK_USER:$DTK_USER" /var/lib/dtk/mounts /var/log/dtk 2>/dev/null || true
+chown -R "$DTK_USER:$DTK_USER" /var/lib/dtk /var/log/dtk 2>/dev/null || true
 echo "  /var/lib/dtk  ✓"
 echo "  /var/log/dtk  ✓"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 2a. Docker group membership (no sudo needed for docker after first login)
+# 2b. Scoped privileged helper + sudoers rule (no polkit/D-Bus needed)
+# ---------------------------------------------------------------------------
+echo "→ Configuring storage mount permissions..."
+"$SCRIPT_DIR/install-system-helper.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 2c. Docker group membership (no sudo needed for docker after re-login)
 # ---------------------------------------------------------------------------
 echo "→ Adding $DTK_USER to docker group..."
 usermod -aG docker "$DTK_USER"
@@ -96,24 +104,12 @@ echo "  (Log out and back in after setup for this to take effect)"
 echo ""
 
 # ---------------------------------------------------------------------------
-# 2b. Sudoers rule for storage mounting (no polkit/D-Bus needed)
-# ---------------------------------------------------------------------------
-echo "→ Configuring storage mount permissions..."
-cat > /etc/sudoers.d/dtk-storage << 'EOF'
-# Digitization Toolkit — allow backend user to mount/unmount removable storage
-# without a password. Required because the backend runs without a login session
-# and polkit cannot perform interactive authentication in that context.
-Defaults:pi !requiretty
-pi ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /bin/mount, /bin/umount, /usr/bin/mkdir, /bin/mkdir, /usr/bin/chown, /bin/chown
-EOF
-chmod 0440 /etc/sudoers.d/dtk-storage
-echo "  /etc/sudoers.d/dtk-storage  ✓"
-echo ""
-
-# ---------------------------------------------------------------------------
 # 3. Docker images
 # ---------------------------------------------------------------------------
 echo "→ Pulling base images and building services..."
+# nginx must be pulled here too: the production start path runs with
+# --pull never (offline appliance), so anything not fetched during setup
+# simply does not exist on a shipped card.
 $COMPOSE pull db nginx
 $COMPOSE build frontend
 echo ""
@@ -123,7 +119,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Installing backend dependencies (pixi)..."
 cd "$PROJECT_ROOT/backend"
-run_as_user "$PIXI_BIN" install
+run_as_user "$PIXI_BIN" install --locked
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -148,13 +144,82 @@ fi
 # ---------------------------------------------------------------------------
 
 # gPhoto2
-if apt-get install -y gphoto2; then
-    echo "  gphoto2  ✓"
+if sudo apt install -y gphoto2; then
+    echo "gPhoto2 package installed"
     echo ""
 else
-    echo "  gphoto2 not available in apt — skipping."
+    echo "gPhoto2 package not available in apt package manager."
     echo ""
 fi
+
+# python-gphoto2 must be built from source against the system libgphoto2:
+# the PyPI manylinux wheel bundles its own libgphoto2/libusb stack, whose
+# autodetect finds no cameras on Raspberry Pi OS Bookworm even when the
+# gphoto2 CLI sees them (bench 2026-07-24). Needs pip in the pixi env.
+if run_as_user "$PIXI_BIN" run python -m pip --version >/dev/null 2>&1; then
+    echo "→ Building python-gphoto2 against system libgphoto2..."
+    sudo apt install -y libgphoto2-dev pkg-config gcc
+    # Pinned so golden-card builds are reproducible; keep in lockstep with
+    # backend/requirements.txt (gphoto2>=2.6.3,<3). --no-deps because the
+    # binding has no Python dependencies; --no-binary only for the binding.
+    run_as_user "$PIXI_BIN" run python -m pip install \
+        --no-deps --no-binary gphoto2 --force-reinstall "gphoto2==2.6.4"
+    echo ""
+else
+    echo "→ Skipping python-gphoto2 source build (no pip in the pixi env)"
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# 6b. System clock hardening (survive power cuts without an RTC)
+# ---------------------------------------------------------------------------
+# Without a battery-backed clock the Pi resumes at the last saved tick after a
+# power cut, which scrambles capture timestamps. fake-hwclock persists the time
+# across reboots; chrony corrects it via NTP whenever the unit is online (such
+# as now, during setup).
+echo "→ Installing clock services (fake-hwclock, chrony)..."
+if sudo apt install -y fake-hwclock chrony; then
+    systemctl enable fake-hwclock 2>/dev/null || true
+    systemctl enable chrony 2>/dev/null || true
+    # Seed the saved clock now, while the time is correct
+    fake-hwclock save 2>/dev/null || true
+    echo "  fake-hwclock + chrony  ✓"
+else
+    echo "  clock services not available in apt — skipping"
+fi
+echo ""
+# Pi 5 hardware RTC (optional, done manually): fit a cell on the RTC header and
+# enable trickle charge by adding 'dtparam=rtc_bbat_vchg=3000000' to
+# /boot/firmware/config.txt, then 'sudo hwclock -w'.
+
+# ---------------------------------------------------------------------------
+# 6c. Host firewall (venue-LAN hardening)
+# ---------------------------------------------------------------------------
+# Only nginx (port 80), SSH, mDNS, and Tailscale remain reachable from the
+# LAN; the native backend on 8000 stays reachable from the Docker bridge only.
+bash "$SCRIPT_DIR/setup-firewall.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 6d. Journald size cap (NEH-101)
+# ---------------------------------------------------------------------------
+# This is an SD-card appliance: the journal lives on the root partition, and an
+# unbounded journal (or a crash-looping unit spamming logs) could fill it and
+# brick the device. Cap persistent journald usage at 100M via a drop-in.
+echo "→ Capping journald size (SD-card appliance)..."
+mkdir -p /etc/systemd/journald.conf.d
+tee /etc/systemd/journald.conf.d/dtk.conf >/dev/null <<'EOF'
+# Digitization Toolkit — SD-card appliance.
+# Logs must never fill the root partition, so cap journald's on-disk usage.
+[Journal]
+SystemMaxUse=100M
+EOF
+if systemctl restart systemd-journald 2>/dev/null; then
+    echo "  journald SystemMaxUse=100M  ✓"
+else
+    echo "  ⚠ journald restart failed — the 100M cap takes effect on next reboot"
+fi
+echo ""
 
 # ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations
@@ -164,15 +229,14 @@ echo "→ Starting database for migration..."
 $COMPOSE up -d db
 
 echo "  Waiting for PostgreSQL to be ready..."
-# First-time initdb on a Pi SD card can take 2-3 minutes; wait up to 3 min.
-for i in $(seq 1 90); do
+for i in $(seq 1 30); do
     if $COMPOSE exec -T db pg_isready -U "${DATABASE_USER:-user}" -d "${DATABASE_NAME:-digitization_toolkit}" >/dev/null 2>&1; then
         echo "  Database ready."
         break
     fi
-    if [ "$i" -eq 90 ]; then
-        echo "✗ Database did not become ready after 180s."
-        echo "  Check logs: docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.pi.yml logs db"
+    if [ "$i" -eq 30 ]; then
+        echo "✗ Database did not become ready after 60s."
+        echo "  Check logs: docker compose logs db"
         $COMPOSE down
         exit 1
     fi

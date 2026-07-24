@@ -162,7 +162,7 @@ pixi run setup-camera-link  # Raspberry Pi only: links system camera packages
 
 # Common commands
 pixi run dev              # Start dev server
-pixi run test             # Run pytest
+pixi run -e dev test      # Run pytest
 pixi run db-upgrade       # Apply migrations
 pixi add package-name     # Add dependency
 ```
@@ -177,9 +177,9 @@ Legacy venv still works but pixi preferred for new development.
 
 ```bash
 # Backend tests (in backend/ directory)
-pixi run test                  # All tests
-pixi run test-cameras          # Camera-specific integration tests
-pixi run test-verbose          # Pytest with -v
+pixi run -e dev test            # All tests
+pixi run test-cameras           # Camera-specific integration tests
+pixi run -e dev test-verbose    # Pytest with -v
 
 # Check camera hardware detection
 rpicam-hello --list-cameras
@@ -243,7 +243,7 @@ Instead:
 
 **Existing pixi tasks** (defined in backend/pixi.toml):
 - `pixi run dev` - Start development server
-- `pixi run test` - Run tests
+- `pixi run -e dev test` - Run tests
 - `pixi run db-upgrade` - Apply migrations
 - `pixi run db-migrate "message"` - Create migration
 - `pixi run setup-camera-link` - Link system camera packages

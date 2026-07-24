@@ -1,0 +1,50 @@
+---
+title: "Captua — Tarjeta de operación (Archivo Histórico de Rionegro)"
+date-modified: last-modified
+format: html
+toc: false
+lang: es
+---
+
+Guía de una página para el personal que opera el equipo de digitalización. Imprímala y déjela junto al equipo.
+
+## Apagar el equipo de forma segura
+
+1. Si la aplicación tiene el botón **«Apagar»** (Configuración → Energía), úselo y confirme.
+2. Si no: presione **Ctrl+Alt+F2** y, en la pantalla de texto, escriba `sudo poweroff` y presione Enter.
+3. Espere a que la pantalla quede negra antes de desconectar la corriente.
+
+::: {.callout-warning appearance="simple"}
+**Nunca desconecte el enchufe con el equipo encendido:** puede dañar la memoria del equipo y perder el trabajo del día.
+:::
+
+## Cambiar de pantalla
+
+- **Ctrl+Alt+F2** → pantalla de texto (recuperación)
+- **Ctrl+Alt+F1** → volver a la aplicación
+
+## Cámaras: enfoque al iniciar la jornada
+
+1. Ponga el selector del lente en **AF** en las dos cámaras y tome la primera captura (las dos enfocan solas).
+2. Pase el selector a **MF**, también **en las dos cámaras**. El resto de la jornada queda enfocado — la distancia entre la cámara y el documento no cambia.
+
+Si el lente queda en AF, cada captura tarda unos 12 segundos más, la aplicación muestra una advertencia y la cámara puede llegar a bloquearse. Confirme que las dos cámaras quedaron en **MF** antes de empezar a digitalizar. El flash queda apagado automáticamente; no hay que tocarlo.
+
+## Si las cámaras no aparecen (o aparece «imx519»)
+
+Cierre la sesión en la aplicación y vuelva a entrar. Casi siempre es suficiente.
+
+## Si una cámara deja de responder
+
+1. Revise que el selector del lente esté en **MF** (ver arriba).
+2. Apague y encienda esa cámara.
+3. Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+4. Solo si nada de esto funciona: apague todo de forma segura (ver arriba) y vuelva a encender.
+
+## Si la aplicación se congela
+
+Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+
+## Contacto
+
+Escriba a **coordinacion@neogranadina.org**.

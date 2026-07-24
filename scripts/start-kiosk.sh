@@ -28,6 +28,7 @@ exec cage -- chromium-browser \
   --disable-infobars \
   --disable-session-crashed-bubble \
   --disable-features=TranslateUI \
+  --password-store=basic \
   --overscroll-history-navigation=0 \
   --check-for-update-interval=31536000 \
   --no-first-run \
