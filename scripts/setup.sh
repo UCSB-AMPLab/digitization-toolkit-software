@@ -58,8 +58,10 @@ echo ""
 # fails late, deep in a psycopg traceback, with a half-initialized data dir.
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "→ No .env found — creating it from .env.example..."
-    cp "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-    chown "$DTK_USER:$DTK_USER" "$PROJECT_ROOT/.env" 2>/dev/null || true
+    # 0600 from the start: dtk-secrets later writes the real SECRET_KEY and
+    # DB password into this file preserving whatever mode it has.
+    install -m 600 -o "$DTK_USER" -g "$DTK_USER" \
+        "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
     echo "  Review it (HOST_IP and CORS_ORIGINS in particular)."
     echo "  SECRET_KEY and DATABASE_PASSWORD may stay as placeholders:"
     echo "  dtk-secrets.service generates per-unit values on first boot."
@@ -143,7 +145,11 @@ fi
 if run_as_user "$PIXI_BIN" run python -m pip --version >/dev/null 2>&1; then
     echo "→ Building python-gphoto2 against system libgphoto2..."
     sudo apt install -y libgphoto2-dev pkg-config gcc
-    run_as_user "$PIXI_BIN" run python -m pip install --no-binary :all: --force-reinstall gphoto2
+    # Pinned so golden-card builds are reproducible; keep in lockstep with
+    # backend/requirements.txt (gphoto2>=2.6.3,<3). --no-deps because the
+    # binding has no Python dependencies; --no-binary only for the binding.
+    run_as_user "$PIXI_BIN" run python -m pip install \
+        --no-deps --no-binary gphoto2 --force-reinstall "gphoto2==2.6.4"
     echo ""
 else
     echo "→ Skipping python-gphoto2 source build (no pip in the pixi env)"

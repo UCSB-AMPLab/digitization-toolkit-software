@@ -90,7 +90,9 @@ The toolkit is designed to ship as a pre-flashed SD card. The end user only need
 Flash **Raspberry Pi OS (Legacy, 64-bit) Lite — Debian 12 "Bookworm"** — the tested
 OS. Beware that Raspberry Pi Imager's plain "Raspberry Pi OS Lite (64-bit)" entry
 now installs Debian 13 (Trixie), which this stack has not been validated against.
-Enable SSH in Imager's advanced options if provisioning headless.
+In Imager's advanced options set the username to **`pi`** — the service and kiosk
+installers hardcode `User=pi` and `/home/pi/dtk` — and enable SSH if provisioning
+headless.
 
 ```bash
 # 0. Prerequisites — none of these ship with a fresh Raspberry Pi OS Lite
