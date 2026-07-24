@@ -1,29 +1,23 @@
-# Digitization Toolkit
+# Captua
 
-An open-source, modular digitization toolkit designed for low-cost, high-quality scanning using Raspberry Pi Compute Module 4 and 64MP ArduCam cameras. Built for use in low-resource environments and community archives.
+**Captua** is the software of the **Digitization Toolkit**, an integrated toolkit of hardware, software, and documentation that allows lower-resourced institutions, collectives, and communities to digitize their archival collections at low cost.
 
-## Goals
-
-- Empower small institutions and communities to digitize archival materials.
-- Provide an easy-to-use web interface for image capture, metadata entry, and export.
-- Ensure long-term reproducibility through open standards (BagIt, CSV, TIFF).
-- Prioritize modularity and hardware independence for future-proofing.
+The project builds on a decade of community-based digitization work in the Global South. The DIY book-scanning equipment that made that work possible — cheap digital cameras and single-board computers — has become increasingly obsolete or unavailable; the Digitization Toolkit replaces it with sustainable, up-to-date technologies. Captua runs a Raspberry Pi–based capture station driving paired cameras (ArduCam modules or gPhoto2-compatible DSLRs) through a web interface, in Spanish and English, for image capture, metadata entry, and export — designed to work entirely offline. An alpha version will be tested at the Santa Barbara Mission Archive-Library (SBMAL).
 
 ## Tech Stack
 
-- **Hardware**: Raspberry Pi CM4 + CM4IO, Raspberry Pi 5 (dual camera embedded), 2x 64MP ArduCam autofocus cameras, 2 x Cannon EOS Rebel T7 (GPhoto compatible cameras)
+- **Hardware**: Raspberry Pi CM4 + CM4IO, Raspberry Pi 5 (dual camera embedded), 2 × 64MP ArduCam autofocus cameras, 2 × Canon EOS Rebel T7 (or other gPhoto2-compatible DSLRs)
 - **Backend**: Python, FastAPI
 - **Frontend**: Svelte
 - **Database**: PostgreSQL
 
 ## Status
 
-> Project currently in development. Kick-off: September 2025
-> Alpha prototype planned for deployment at SBMAL in June 2026.
+> Captua is in active development and remains **pre-alpha**. Current release: [0.0.0-pre.3](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases).
 
 ## Release History
 
-See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
+See the [GitHub Releases page](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases) for version history and release notes.
 
 ***
 
@@ -67,14 +61,14 @@ The Pi overlay (`docker-compose.pi.yml`) is required in production: it bind-moun
 
 **Note:** The native backend is required for camera access due to Raspberry Pi-specific libraries (libcamera, picamera2).
 
-### 📦 Backend Dependency Management
+### Backend Dependency Management
 
 The backend uses **pixi** for dependency management:
 
 ```bash
 # First time setup
 cd backend
-pixi install
+pixi install --locked
 pixi run setup-camera-link  # Raspberry Pi only
 
 # Start backend
@@ -181,6 +175,16 @@ Do not use `--remote` here: it moves the submodules to their branch tips instead
 ## Development Documentation
 
 See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki) for detailed developer guides and API references.
+
+## Credits and Acknowledgments
+
+Captua is developed by Adelaida Ávila, Juan Cobo Betancourt (grant PI), Jairo Melo Flórez, Santiago Muñoz Arbeláez (grant co-PI), Lucrezia Pograri, and Catalina Salguero at the Archives, Memory, and Preservation Lab of the University of California, Santa Barbara and at the University of Texas at Austin.
+
+Captua has been made possible in part by a major grant from the National Endowment for the Humanities: Democracy demands wisdom. ([NEH Award HAA-304052-25](https://awardsearch.neh.gov/AwardDetail.aspx?gn=HAA-304052-25): "Digitization Toolkit: a Blueprint for Egalitarian Access to Technology in Low-Resource Environments".)
+
+Any views, findings, conclusions, or recommendations expressed in this software do not necessarily represent those of the National Endowment for the Humanities.
+
+<img src="docs/_static/imgs/neh-preferred-seal.jpg" alt="National Endowment for the Humanities" width="250">
 
 ## License
 
