@@ -354,9 +354,11 @@ Project (name, description)
 
 ### Performance Metrics
 
-Measured on a Pi 5 during hardware validation, 23–24 July 2026, at the medium
-preset. Earlier figures in this section were estimates and were roughly double
-the real throughput and six to eight times the real file sizes.
+Measured on a Pi 5 during hardware validation, 23–24 July 2026. The picamera2
+figures are at the medium preset; the presets do not apply to gphoto2, which
+shot at whatever the camera bodies were set to (see the storage note below).
+Earlier figures in this section were estimates, and were roughly double the
+real throughput and six to eight times the real file sizes.
 
 **Dual capture, seconds per pair:**
 
@@ -543,10 +545,10 @@ def configuration_page_flow(token):
 def live_scan_workflow(token, project_name):
     """Workflow for the live scan page: capture → auto-save → optional metadata update.
 
-    project_name must already exist — but only when collection_id is omitted.
-    _resolve_capture_target (cameras.py:43-56) resolves the path from the
-    collection when collection_id is given and never reads project_name at
-    all; otherwise an unmatched name returns 422.
+    project_name must already exist: this example sends no collection_id, and
+    an unmatched name returns 422. (If a capture does send collection_id,
+    _resolve_capture_target resolves the path from the collection and never
+    reads project_name — cameras.py:43-56.)
     """
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -686,12 +688,13 @@ def gallery_view(token):
 8. On logout, clear BOTH keys:
    localStorage.removeItem("access_token")
    localStorage.removeItem("auth_user")
-   The client stores the user alongside the token (stores/auth.ts:78-79).
-   Clearing only the token is not safe: isAuthenticated() checks
-   token !== null alone (stores/auth.ts:113-114, 149-151), so a leftover
-   auth_user leaves the app authenticated with a stale user, while the
-   root route requires both and bounces to login (routes/+page.svelte:24).
-   The two keys hydrate independently, so half-cleared state is reachable.
+   The client stores the user alongside the token (stores/auth.ts:78-79),
+   and the two keys hydrate independently, so half-cleared state is
+   reachable. The hazard is a leftover TOKEN, not a leftover user:
+   isAuthenticated() tests token !== null alone (stores/auth.ts:113-114,
+   149-151), so a session with auth_user removed still reads as
+   authenticated, with userRole silently null. (The root route is
+   stricter, requiring both and bouncing to login — routes/+page.svelte:24.)
 ```
 
 ---
