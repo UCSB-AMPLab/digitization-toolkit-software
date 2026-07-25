@@ -2068,34 +2068,45 @@ def gallery_view(token):
 ### Environment Variables (`.env`)
 
 ```env
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/digitization_toolkit
+# Database — the backend builds its connection URL from these
 DATABASE_USER=user
 DATABASE_PASSWORD=password
 DATABASE_HOST=db
 DATABASE_PORT=5432
 DATABASE_NAME=digitization_toolkit
 
+# Optional, Alembic only: if set, migrations use this verbatim instead of
+# building the URL from the DATABASE_* values above (alembic/env.py).
+# The application itself never reads it. Note the +psycopg driver — a bare
+# postgresql:// URL selects psycopg2, which is not installed.
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/digitization_toolkit
+
 # Security
 SECRET_KEY=change-this-to-a-random-string
 ACCESS_TOKEN_EXPIRE_SECONDS=28800
-
-# Server
-UVICORN_HOST=0.0.0.0
-UVICORN_PORT=8000
-LOG_LEVEL=info
 ```
+
+The repository root `.env.example` is the authoritative list of supported variables; the block above shows only those relevant to the API. Keep the two in step — a variable the backend does not read belongs in neither.
+
+The server host and port are not configurable by environment: the pixi `start` and `dev` tasks hardcode `--host 0.0.0.0 --port 8000`, so the native backend listens on every interface.
+
+What keeps port 8000 off the venue LAN is the host firewall installed by `scripts/setup-firewall.sh`: ufw defaults to deny-inbound and allows 8000/tcp only from the appliance's own compose network (`172.30.0.0/24`), so Nginx can reach the backend and nothing else on the LAN can. Nginx itself is a reverse proxy, not a filter — it restricts nothing on its own. Container ports are handled separately, by loopback binds in `docker-compose.yml`, because Docker's iptables chains sit ahead of ufw's.
+
+Changing the address the backend actually binds to, as opposed to filtering access to it, means editing the uvicorn invocation in `backend/pixi.toml`.
 
 ---
 
 ### CORS Configuration
 
-Currently allows `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
+Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied at `app/main.py:33`. Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
 
-**For production**, update `app/main.py`:
-```python
-allow_origins=["https://yourdomain.com", "https://www.yourdomain.com"]
+```env
+CORS_ORIGINS=["http://digitool.local","http://localhost:5173","http://localhost:3000"]
 ```
+
+Do **not** edit `allow_origins` in `app/main.py` — it reads `settings.CORS_ORIGINS`, so a source edit is overridden by configuration.
+
+In the production stack the browser reaches both the frontend and `/api/` through the Nginx reverse proxy on port 80, so it is a single origin and CORS does not come into play in normal use.
 
 ---
 
