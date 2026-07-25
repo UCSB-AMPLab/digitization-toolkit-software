@@ -168,7 +168,7 @@ The fastest way to test endpoints is using the interactive documentation.
 Recommended order to test the entire API:
 
 1. **Health Check** → `GET /health` (no auth needed)
-2. **Register User** → `POST /auth/register` (first user becomes admin)
+2. **Register User** → `POST /auth/register` (first user becomes admin; admin-only thereafter)
 3. **Login** → `POST /auth/login` (save token)
 4. **Authorize** → Click Authorize button, paste token
 5. **Get Current User** → `GET /users/me` (check your role)
@@ -392,7 +392,7 @@ me_resp = requests.get(f"{BASE_URL}/users/me", headers=headers)
 me = me_resp.json()
 print(f"   Role: {me['role']}")
 
-# 4. Create project (operator+ required)
+# 4. Create project (admin only)
 print("\n4. Creating project...")
 project_resp = requests.post(
     f"{BASE_URL}/projects/",
@@ -597,18 +597,29 @@ def gallery_view(token):
 ### Authentication Flow
 
 ```
-1. POST /auth/register
+1. GET /auth/setup/status                    (no auth)
+   Response: { needs_setup: boolean }
+   → true  = no user exists yet; route to first-run setup
+     false = route to login
+   The shipped frontend calls this before anything else.
+
+2. POST /auth/register
    Request: { username, email, password }
    Response: { id, username, email, role, is_active, created_at }
-   Note: first user becomes admin, all others become reviewer
+   Note: first user becomes admin, all others become reviewer.
+   Note: PUBLIC ONLY FOR THE FIRST USER. Once one account exists this
+         endpoint requires an authenticated admin — 401 without a token,
+         403 for a non-admin. Account creation is invite-only, not
+         self-service. Role is ignored if sent; elevate afterwards with
+         PATCH /auth/users/{id}/role.
 
-2. POST /auth/login
+3. POST /auth/login
    Request: { username, password }
    Response: { access_token, token_type }
 
-3. Store token: localStorage.setItem("token", access_token)
+4. Store token: localStorage.setItem("access_token", access_token)
 
-4. GET /users/me
+5. GET /users/me
    Headers: { Authorization: Bearer <token> }
    Response: { id, username, role, ... }
    → Use role to determine which UI sections to show:
@@ -616,16 +627,16 @@ def gallery_view(token):
      - operator: full dashboard, no user management
      - reviewer: read-only views only
 
-5. Use token in all protected requests:
+6. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
 
-6. Before expiry (~1 hour), refresh:
+7. Before expiry (8 hours by default — ACCESS_TOKEN_EXPIRE_SECONDS), refresh:
    POST /auth/refresh
    Headers: { Authorization: Bearer <old_token> }
    Response: { access_token, token_type }
 
-7. On logout:
-   localStorage.removeItem("token")
+8. On logout:
+   localStorage.removeItem("access_token")
 ```
 
 ---
@@ -705,7 +716,7 @@ def gallery_view(token):
 
 **API Calls:**
 1. `GET /projects/` — List projects (reviewer+)
-2. `POST /projects/` — Create project (operator+)
+2. `POST /projects/` — Create project (admin only)
 3. `POST /projects/{id}/initialize` — Init filesystem (operator+)
 4. `GET /collections/?project_id={id}` — List top-level collections (reviewer+)
 5. `GET /collections/{id}/hierarchy` — Full collection tree (reviewer+)
