@@ -2078,7 +2078,7 @@ DATABASE_NAME=digitization_toolkit
 
 # Security
 SECRET_KEY=change-this-to-a-random-string
-ACCESS_TOKEN_EXPIRE_SECONDS=3600
+ACCESS_TOKEN_EXPIRE_SECONDS=28800
 
 # Server
 UVICORN_HOST=0.0.0.0
@@ -2101,7 +2101,9 @@ allow_origins=["https://yourdomain.com", "https://www.yourdomain.com"]
 
 ### Token Expiration
 
-Default: 1 hour (3600 seconds). Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`.
+Default: 8 hours (28800 seconds), per `ACCESS_TOKEN_EXPIRE_SECONDS` in `app/core/config.py`. Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`.
+
+This is the bound on how long a deactivated user keeps a working session, so shorten it on units in shared spaces.
 
 ---
 
