@@ -106,6 +106,23 @@ Tools like [PiShrink](https://github.com/Drewsif/PiShrink) can reduce the image 
 `SECRET_KEY` and `DATABASE_PASSWORD` are regenerated automatically on each physical unit by `dtk-secrets.service` (installed by `install-service.sh`). It records the Pi's hardware serial in `/var/lib/dtk/secrets-provenance`; when a flashed clone boots on a different Pi, the serial mismatch triggers fresh secrets before the backend starts — including rotating the Postgres password inside the cloned data directory. You do **not** need to scrub secrets from the master image, and test-booting the master before imaging is fine.
 :::
 
+::: {.callout-warning}
+## Never add a credential to `.env` by hand
+The per-unit generation above covers `SECRET_KEY` and `DATABASE_PASSWORD`. It does not cover anything you add yourself while preparing a card — and whatever sits in `.env` at imaging time is copied into every clone of that image. The Rionegro card shipped with a live GitHub personal access token in plaintext in `~/dtk/.env`. It was unused and has been revoked, but nothing in the software put it there.
+
+Provisioning never needs a token: the repositories are public and `setup.sh` clones them anonymously. If a private fetch is ever required, read the token from a prompt so it never appears on the command line, then clear it:
+
+```bash
+read -rs -p "Token: " GH_TOKEN && export GH_TOKEN
+gh repo clone UCSB-AMPLab/<repo>
+unset GH_TOKEN
+```
+
+Do **not** pass it inline as `GH_TOKEN=… gh …`: that writes the token verbatim into `~/.bash_history`, which sits on the card and is copied into the image along with everything else. For the same reason, never embed a token in a remote URL — it persists in `.git/config` and travels with the image.
+
+Before imaging a master card, diff `.env` against `.env.example`: it should carry no keys the template does not have.
+:::
+
 ---
 
 ## Flashing and Delivering the Image
