@@ -137,6 +137,7 @@ Raspberry Pi OS Bookworm replaced `dhcpcd` + `wpa_supplicant` with NetworkManage
 
 - **Preferred:** use Raspberry Pi Imager's *Advanced options* (gear icon, or `Ctrl+Shift+X`) when flashing to preconfigure the Wi-Fi SSID and password before the card is ever booted.
 - **Post-flash:** configure Wi-Fi via NetworkManager, e.g. `sudo nmcli device wifi connect "<SSID>" password "<password>"`, or by dropping a NetworkManager keyfile connection profile under `/etc/NetworkManager/system-connections/`.
+- **Enable SSH in the same *Advanced options* screen** (public-key auth if possible). Headless provisioning is impossible without it: on a fresh Raspberry Pi OS Lite install SSH is off by default, and there is no way in afterwards short of attaching a keyboard and display.
 :::
 
 ---
