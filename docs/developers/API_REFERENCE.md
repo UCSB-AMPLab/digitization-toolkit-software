@@ -6,23 +6,16 @@ Documentation of the backend API endpoints, data models, implementation details,
 
 1. [Quick Start](#1-quick-start)
 2. [Key Resources](#2-key-resources)
-3. [API Endpoints Overview](#3-api-endpoints-overview)
+3. [API Reference](#3-api-reference)
 4. [Testing the API](#4-testing-the-api)
-   - [Option 1: Interactive Docs on Swagger UI (Recommended)](#41-option-1-interactive-docs-on-swagger-ui-recommended)
+   - [Option 1: Interactive Docs on Swagger UI](#41-option-1-interactive-docs-on-swagger-ui)
    - [Option 2: Complete Testing Workflow in Swagger UI](#42-option-2-complete-testing-workflow-in-swagger-ui)
    - [Option 3: Run Test Suite](#43-option-3-run-test-suite)
-5. [Authentication & User Management](#5-authentication--user-management)
-6. [Records](#6-records)
-7. [Projects](#7-projects)
-8. [Collections](#8-collections)
-9. [Cameras](#9-cameras)
-10. [System](#10-system)
-11. [Health Check](#11-health-check)
-12. [Data Models](#12-data-models)
-13. [Error Handling](#13-error-handling)
-14. [Code Examples](#14-code-examples)
-15. [Frontend Integration](#15-frontend-integration)
-16. [Configuration](#16-configuration)
+   - [Option 4: Manual Testing (cURL)](#option-4-manual-testing-curl)
+5. [File Storage Architecture](#5-file-storage-architecture)
+6. [Code Examples](#6-code-examples)
+7. [Frontend Integration](#7-frontend-integration)
+8. [Configuration](#8-configuration)
 
 ---
 
@@ -32,51 +25,49 @@ Documentation of the backend API endpoints, data models, implementation details,
 
 How to get the backend running:
 
+The backend runs **in Docker for development** and **natively through pixi on the Raspberry Pi**. A legacy virtualenv + `pip install -r requirements.txt` still works on Linux, but pixi is preferred for new development (`.github/copilot-instructions.md`).
+
+It does **not** work on Windows or macOS: `backend/requirements.txt` pins `picamera2` and `gphoto2`, which are Linux/Pi camera libraries, and `backend/pixi.toml` declares only `linux-aarch64` and `linux-64`. Use Docker on those platforms.
+
+**Development — any machine, no cameras attached:**
+
 ```bash
-# 1. Navigate to backend folder
-cd backend
-
-# 2. Create/Activate virtual environment
-python -m venv .venv
-.venv\Scripts\Activate.ps1  # Windows PowerShell
-# or: source .venv/bin/activate  # Linux/macOS
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Run development server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+./scripts/start-dev.sh
 ```
+
+This brings the whole stack up in Docker — PostgreSQL, the FastAPI backend and the SvelteKit dev server — and applies Alembic migrations on startup. It is shorthand for:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile with-backend up --build
+```
+
+**Production — on the Pi:** `./scripts/start.sh` runs the database and frontend in Docker and the backend natively via pixi, because camera access needs Pi-specific libraries (libcamera, picamera2) that cannot run in a container.
+
+See `backend/DEVELOPMENT.md` for the dependency-manifest rules that follow from this split.
 
 ### Verify it works:
 
+After `start-dev.sh` (development):
+
+- **Frontend**: http://localhost:5173 (Vite dev server)
 - **Interactive API Docs**: http://localhost:8000/docs (Swagger UI)
 - **Health Check**: http://localhost:8000/health
 - **ReDoc**: http://localhost:8000/redoc
 
+After `start.sh` (production on the Pi), there is no Vite server: Nginx serves the UI and proxies the API on **port 80** — `http://<hostname>.local`. Port 8000 is not open to the LAN (see §3).
+
 ### Test everything:
 
-```bash
-cd backend
+Tests run inside the backend container:
 
+```bash
 # Run all tests
-python -m pytest
+docker compose exec backend python -m pytest
 
 # Or run specific test suites:
-python -m pytest tests/unit/          # Unit tests
-python -m pytest tests/integration/   # Integration tests
-python tests/validate_system.py       # System validation
-```
-
-Expected output:
-```
-==================== test session results ====================
-platform win32 -- Python 3.x.x
-collected X items
-
-tests/unit/test_api.py ......                        [100%]
-
-==================== X passed in X.XXs =====================
+docker compose exec backend python -m pytest tests/unit/
+docker compose exec backend python -m pytest tests/integration/
+docker compose exec backend python tests/validate_system.py
 ```
 
 ---
@@ -85,8 +76,8 @@ tests/unit/test_api.py ......                        [100%]
 
 | Resource | Location | Purpose |
 |----------|----------|---------|
-| **API Reference** | This document | Complete endpoint documentation with examples |
-| **Backend Setup** | [../../../backend/README.md](../../../backend/README.md) | Quick start and environment setup |
+| **Endpoint reference** | `http://localhost:8000/docs` | Generated from the code; always current |
+| **Backend Setup** | [../../backend/README.md](../../backend/README.md) | Quick start and environment setup |
 | **Configuration Example** | [Code Examples](#complete-workflow-registration-to-gallery) | How to build configuration page |
 | **Live Scan Example** | [Code Examples](#live-scan-page-example) | How to build live scan page |
 | **Gallery Example** | [Code Examples](#galleryview-page-example) | How to build gallery page |
@@ -94,125 +85,28 @@ tests/unit/test_api.py ......                        [100%]
 
 ---
 
-## 3. API Endpoints Overview
+## 3. API Reference
 
-The Digitization Toolkit API consists of **49 endpoints** organized into **7 routers**.
-All endpoints run on: [`http://localhost:8000`](http://localhost:8000).
+The endpoint list, path and query parameters, and request/response schemas are **generated from the code** and served by the running backend:
 
-### **Auth & Users Routers** (`/auth`, `/users`)
+| | |
+|---|---|
+| **Swagger UI** | [`http://localhost:8000/docs`](http://localhost:8000/docs) — interactive; send real requests, including authenticated ones |
+| **ReDoc** | [`http://localhost:8000/redoc`](http://localhost:8000/redoc) — readable single-page reference |
+| **OpenAPI schema** | [`http://localhost:8000/openapi.json`](http://localhost:8000/openapi.json) — machine-readable, for client generation |
 
-User authentication, session management, and user administration.
+FastAPI derives these from the routers themselves, so they cannot fall out of step with the implementation. This document deliberately does not duplicate them.
 
-- Registration, login, token refresh, password change
-- `GET /users/me` for the current user's profile and role
-- Admin-only endpoints to list users, change roles, and deactivate accounts
+Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: FastAPI adds a `422` with an `HTTPValidationError` body automatically wherever a route validates input, but no route in `backend/app/api/` declares `responses=`, so **the application's own error codes — 400, 401, 403, 404, 409, 413, 501, 502, 503 — do not appear**. For those, read the route: `HTTPException` calls are explicit and easy to follow.
 
-### **Records Router** (`/records`)
+It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
-Full CRUD for archival records and their captured images.
+What remains here is what a schema cannot express: how to get the stack running, how to test it, how storage is laid out, worked examples, and the reasoning behind the architecture.
 
-A **Record** represents a physical object being digitized (book, map, document, etc.). Each Record can have multiple **RecordImages** — individual scans or photographs.
-
-Supported typologies:
-- `book`, `dossier`, `document`, `map`, `planimetry`, `other`
-
-### **Projects Router** (`/projects`)
-
-Project-based organization for grouping records.
-
-- Create, update, delete projects
-- Add/remove records from projects
-- Initialize project filesystem structure on the device
-
-### **Collections Router** (`/collections`)
-
-Nested collection hierarchy within projects.
-
-- Create top-level collections inside a project
-- Create sub-collections nested inside other collections
-- Full hierarchy traversal
-
-### **Cameras Router** (`/cameras`)
-
-Camera device management, capture control, and calibration.
-
-- Device enumeration with hardware detection
-- Single and dual camera capture with automatic database record creation
-- Focus and white balance calibration
-- Camera settings management per record image
-
-### **System Router** (`/system`)
-
-Hardware monitoring endpoints (temperature, etc.).
-
-### **Health Check** (`/health`)
-
-Simple system status endpoint for monitoring and validation.
+**Reaching the schema on a deployed appliance.** A development stack is the easiest place to explore the API. On a provisioned unit, `scripts/setup-firewall.sh` allows port 8000 from the appliance's own compose network (`172.30.0.0/24`) and over `tailscale0`, but not from the venue LAN — so it is reachable for remote support, not from a laptop in the room. Note also that the proxied `/api/docs` path does not render Swagger UI, because the page requests `/openapi.json` at the site root and Nginx routes `/` to the frontend; `/api/openapi.json` does proxy correctly, so the raw schema is retrievable that way.
 
 ---
 
-Endpoints are grouped by functionality and implemented using FastAPI routers.
-Below is a **complete endpoint reference overview**.
-
-> **Legend:**
-> - `public` — no authentication required
-> - `reviewer+` — any authenticated user (reviewer, operator, or admin)
-> - `operator+` — operator or admin only
-> - `admin` — admin only
-
-| Method | Endpoint | Role | Purpose |
-|--------|----------|------|---------|
-| POST | `/auth/register` | public | Register new user |
-| POST | `/auth/login` | public | Login, get token |
-| POST | `/auth/refresh` | reviewer+ | Refresh token |
-| POST | `/auth/password-reset` | reviewer+ | Change own password |
-| GET | `/users/me` | reviewer+ | Get current user's profile and role |
-| GET | `/auth/users` | admin | List all users |
-| GET | `/auth/users/{id}` | admin | Get user by ID |
-| PATCH | `/auth/users/{id}/role` | admin | Change user's role |
-| PATCH | `/auth/users/{id}/active` | admin | Activate/deactivate user |
-| DELETE | `/auth/{id}` | admin | Delete user |
-| POST | `/records/` | operator+ | Create record |
-| GET | `/records/` | reviewer+ | List records |
-| GET | `/records/{id}` | reviewer+ | Get record with images |
-| PATCH | `/records/{id}` | operator+ | Update record metadata |
-| DELETE | `/records/{id}` | operator+ | Delete record |
-| POST | `/records/{id}/images` | operator+ | Upload image to record |
-| GET | `/records/{id}/images` | reviewer+ | List images of a record |
-| GET | `/records/images/{img_id}` | reviewer+ | Get image metadata |
-| PATCH | `/records/images/{img_id}` | operator+ | Update image metadata |
-| DELETE | `/records/images/{img_id}` | operator+ | Delete image |
-| GET | `/records/images/{img_id}/file` | reviewer+ | Download image file |
-| GET | `/records/images/{img_id}/thumbnail` | reviewer+ | Get image thumbnail |
-| POST | `/projects/` | operator+ | Create project |
-| GET | `/projects/` | reviewer+ | List projects |
-| GET | `/projects/{id}` | reviewer+ | Get project |
-| PUT | `/projects/{id}` | operator+ | Update project |
-| DELETE | `/projects/{id}` | operator+ | Delete project |
-| POST | `/projects/{id}/initialize` | operator+ | Initialize project filesystem |
-| POST | `/projects/{id}/add_record/{rec_id}` | operator+ | Add record to project |
-| POST | `/projects/{id}/remove_record/{rec_id}` | operator+ | Remove record from project |
-| GET | `/projects/{id}/records` | reviewer+ | List project's records |
-| POST | `/collections/` | operator+ | Create collection |
-| GET | `/collections/` | reviewer+ | List collections |
-| GET | `/collections/{id}` | reviewer+ | Get collection |
-| GET | `/collections/{id}/hierarchy` | reviewer+ | Get collection with nested children |
-| PATCH | `/collections/{id}` | operator+ | Update collection |
-| DELETE | `/collections/{id}` | operator+ | Delete collection |
-| GET | `/cameras/devices` | reviewer+ | List detected camera devices |
-| POST | `/cameras/capture` | operator+ | Single camera capture |
-| POST | `/cameras/capture/dual` | operator+ | Dual camera capture |
-| POST | `/cameras/calibrate` | operator+ | Calibrate autofocus |
-| POST | `/cameras/calibrate/white-balance` | operator+ | Calibrate white balance |
-| POST | `/cameras/` | operator+ | Create camera settings |
-| GET | `/cameras/` | reviewer+ | List camera settings |
-| GET | `/cameras/{id}` | reviewer+ | Get camera settings |
-| PUT | `/cameras/settings/{id}` | operator+ | Update camera settings |
-| DELETE | `/cameras/settings/{id}` | operator+ | Delete camera settings |
-| GET | `/system/temperature` | reviewer+ | Get device CPU temperature |
-| GET | `/health` | public | Health check |
-
----
 
 ## 4. Testing the API
 
@@ -274,38 +168,42 @@ The fastest way to test endpoints is using the interactive documentation.
 Recommended order to test the entire API:
 
 1. **Health Check** → `GET /health` (no auth needed)
-2. **Register User** → `POST /auth/register` (first user becomes admin)
-3. **Login** → `POST /auth/login` (save token)
-4. **Authorize** → Click Authorize button, paste token
-5. **Get Current User** → `GET /users/me` (check your role)
-6. **Create Project** → `POST /projects/`
-7. **Create Record** → `POST /records/`
-8. **Upload Image** → `POST /records/{id}/images`
-9. **Add to Project** → `POST /projects/{id}/add_record/{rec_id}`
-10. **Get Record** → `GET /records/{id}`
-11. **Delete Record** → `DELETE /records/{id}`
+2. **Check setup state** → `GET /auth/setup/status` (no auth needed)
+3. **Bootstrap, only if `needs_setup` is true** → `POST /auth/register`. This first user becomes admin. If an account already exists, skip this step: registration then requires an admin token and returns 401 without one.
+4. **Login** → `POST /auth/login` (save token)
+5. **Authorize** → Click Authorize button, paste token
+6. **Get Current User** → `GET /users/me` (check your role)
+7. **Create Project** → `POST /projects/` (admin only)
+8. **Create Record** → `POST /records/`
+9. **Upload Image** → `POST /records/{id}/images`
+10. **Add to Project** → `POST /projects/{id}/add_record/{rec_id}`
+11. **Get Record** → `GET /records/{id}`
+12. **Delete Record** → `DELETE /records/{id}`
 
 ---
 
 ### 4.3 Option 3: Run Test Suite
 
 ```bash
-cd backend
-
 # Run all tests with pytest
-python -m pytest
+docker compose exec backend python -m pytest
 
 # Run specific test categories
-python -m pytest tests/unit/          # Unit tests (API, models, schemas)
-python -m pytest tests/integration/   # Integration tests (capture workflow)
-python -m pytest tests/test_cameras.py -m camera  # Camera tests (requires hardware)
+docker compose exec backend python -m pytest tests/unit/          # API, models, schemas
+docker compose exec backend python -m pytest tests/integration/   # capture workflow
+# Camera tests need real hardware AND the native pixi environment on the Pi;
+# the dev container has no camera devices and no libcamera (Dockerfile.dev
+# installs none) — see backend/DEPENDENCIES.md. On the Pi, in backend/:
+#   pixi run -e dev pytest tests/test_cameras.py -m camera
+# Note: the `test-cameras` pixi task is currently broken — it points at
+# test/test_cameras.py, and the file is tests/test_cameras.py (NEH-195).
 
 # Run with verbose output
-python -m pytest -v
+docker compose exec backend python -m pytest -v
 
-# Run tests and show coverage
-python -m pytest --cov=app --cov-report=html
 ```
+
+`pytest-cov` is not currently in either dependency manifest, so `--cov` is unavailable; `backend/pytest.ini` keeps the coverage options commented out for that reason.
 
 **Test Organization:**
 - `tests/unit/test_api.py` — API endpoint validation, imports, models, schemas
@@ -351,1230 +249,38 @@ http://localhost:8000/openapi.json
 
 ---
 
-## 5. Authentication & User Management
-
-### Role System
-
-The API enforces three roles with graduated permissions:
-
-| Role | Permissions |
-|------|-------------|
-| `admin` | Full access including user management and system configuration |
-| `operator` | Full access to records, projects, collections, and cameras — cannot manage users |
-| `reviewer` | Read-only access to records, projects, collections, and camera devices |
-
-**Bootstrap behavior**: The first user to register becomes `admin`. All subsequent registrations receive the `reviewer` role. Use `PATCH /auth/users/{id}/role` to promote users.
-
----
-
-### POST `/auth/register`
-
-Register a new user. The first user becomes `admin`; all subsequent users become `reviewer`.
-
-**Request**
-```json
-{
-  "username": "john_doe",
-  "email": "john@example.com",
-  "password": "secure_password_123"
-}
-```
-
-**Response** (201 Created)
-```json
-{
-  "id": 1,
-  "username": "john_doe",
-  "email": "john@example.com",
-  "role": "admin",
-  "is_active": true,
-  "created_at": "2024-12-17T10:30:00"
-}
-```
-
-**Errors**
-- `409 Conflict` — Username or email already exists
-- `400 Bad Request` — Invalid email format or missing fields
-
-**Python Example**
-```python
-import requests
-
-response = requests.post(
-    "http://localhost:8000/auth/register",
-    json={
-        "username": "john_doe",
-        "email": "john@example.com",
-        "password": "secure_password_123"
-    }
-)
-user = response.json()
-print(f"Registered: {user['username']} (role: {user['role']})")
-```
-
----
-
-### POST `/auth/login`
-
-Login and get access token.
-
-**Request**
-```json
-{
-  "username": "john_doe",
-  "password": "secure_password_123"
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "access_token": "eyJzdWIiOiIxIiwiZXhwIjoxNzM0NDUyNjAwfQ.sig...",
-  "token_type": "bearer"
-}
-```
-
-**Errors**
-- `401 Unauthorized` — Invalid credentials
-- `403 Forbidden` — User account inactive
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/auth/login",
-    json={"username": "john_doe", "password": "secure_password_123"}
-)
-token = response.json()["access_token"]
-```
-
----
-
-### GET `/users/me`
-
-Get the current authenticated user's profile, including their role. Used by the frontend immediately after login to determine which UI sections to show.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Response** (200 OK)
-```json
-{
-  "id": 1,
-  "username": "john_doe",
-  "email": "john@example.com",
-  "role": "admin",
-  "is_active": true,
-  "created_at": "2024-12-17T10:30:00"
-}
-```
-
-**Python Example**
-```python
-response = requests.get(
-    "http://localhost:8000/users/me",
-    headers={"Authorization": f"Bearer {token}"}
-)
-me = response.json()
-print(f"Role: {me['role']}")
-```
-
----
-
-### POST `/auth/refresh`
-
-Refresh an existing access token before expiry.
-
-**Headers**
-```
-Authorization: Bearer <current_token>
-```
-
-**Response** (200 OK)
-```json
-{
-  "access_token": "new_token_here...",
-  "token_type": "bearer"
-}
-```
-
----
-
-### POST `/auth/password-reset`
-
-Change own password. Requires the current password.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Request**
-```json
-{
-  "old_password": "secure_password_123",
-  "new_password": "new_secure_password_456"
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "detail": "password updated successfully"
-}
-```
-
----
-
-### GET `/auth/users` — Admin only
-
-List all registered users.
-
-**Query Parameters**
-- `skip` (int, default: 0)
-- `limit` (int, default: 100, max: 1000)
-
-**Response** (200 OK) — array of `UserRead`
-
----
-
-### GET `/auth/users/{user_id}` — Admin only
-
-Get a user by ID.
-
-**Response** (200 OK) — `UserRead`
-
----
-
-### PATCH `/auth/users/{user_id}/role` — Admin only
-
-Change a user's role. Admins cannot change their own role.
-
-**Request**
-```json
-{
-  "role": "operator"
-}
-```
-
-Valid roles: `"admin"`, `"operator"`, `"reviewer"`
-
-**Response** (200 OK) — updated `UserRead`
-
-**Errors**
-- `400 Bad Request` — Trying to change own role
-- `404 Not Found` — User ID doesn't exist
-
----
-
-### PATCH `/auth/users/{user_id}/active` — Admin only
-
-Activate or deactivate a user account. Admins cannot deactivate their own account.
-
-**Query Parameters**
-- `is_active` (bool, required)
-
-**Response** (200 OK) — updated `UserRead`
-
----
-
-### DELETE `/auth/{user_id}` — Admin only
-
-Permanently delete a user account.
-
-**Response** (200 OK)
-```json
-{
-  "detail": "user deleted successfully"
-}
-```
-
----
-
-## 6. Records
-
-A **Record** is a conceptual archival object (a book, map, document, etc.) that groups one or more **RecordImages** — the individual captures or scans. Records hold the descriptive metadata; RecordImages hold the file paths, camera settings, and EXIF data.
-
----
-
-### POST `/records/` — Operator+
-
-Create a new archival record.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Request**
-```json
-{
-  "title": "Ancient Manuscript",
-  "description": "Historical document from 1500s",
-  "object_typology": "book",
-  "author": "Unknown Scribe",
-  "material": "parchment",
-  "date": "1500-01-01",
-  "project_id": 1,
-  "collection_id": null,
-  "custom_attributes": "{\"isbn\": \"N/A\", \"condition\": \"fair\", \"pages\": 150}"
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "id": 1,
-  "title": "Ancient Manuscript",
-  "object_typology": "book",
-  "author": "Unknown Scribe",
-  "material": "parchment",
-  "date": "1500-01-01",
-  "project_id": 1,
-  "collection_id": null,
-  "created_by": "john_doe",
-  "created_at": "2024-12-17T10:30:00",
-  "modified_at": "2024-12-17T10:30:00",
-  "images": []
-}
-```
-
-**Errors**
-- `401 Unauthorized` — No or invalid token
-- `403 Forbidden` — Role insufficient (reviewer cannot create)
-
-**Python Example**
-```python
-rec = requests.post(
-    "http://localhost:8000/records/",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "title": "Ancient Book",
-        "object_typology": "book",
-        "author": "Unknown",
-        "material": "parchment",
-        "date": "1500-01-01"
-    }
-)
-rec_data = rec.json()
-print(f"Created record: {rec_data['id']}")
-```
-
----
-
-### GET `/records/` — Reviewer+
-
-List all records (paginated).
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Query Parameters**
-- `skip` (int, default: 0)
-- `limit` (int, default: 100, max: 1000)
-
-**Response** (200 OK) — array of `RecordRead`
-
----
-
-### GET `/records/{id}` — Reviewer+
-
-Get a specific record including all its images, camera settings, and EXIF data.
-
-**Response** (200 OK)
-```json
-{
-  "id": 1,
-  "title": "Ancient Manuscript",
-  "object_typology": "book",
-  "author": "Unknown Scribe",
-  "project_id": 1,
-  "created_at": "2024-12-17T10:30:00",
-  "images": [
-    {
-      "id": 1,
-      "filename": "20260109_143652_123_c0.jpg",
-      "file_path": "/var/lib/dtk/projects/my_project/images/main/20260109_143652_123_c0.jpg",
-      "format": "jpeg",
-      "resolution_width": 3840,
-      "resolution_height": 2160,
-      "role": "left",
-      "camera_settings": {
-        "id": 1,
-        "camera_model": "Arducam 16MP IMX519",
-        "iso": 100,
-        "aperture": 2.9
-      },
-      "exif_data": {
-        "id": 1,
-        "datetime_original": "2026-01-09T14:36:52"
-      }
-    }
-  ]
-}
-```
-
-**Errors**
-- `404 Not Found` — Record ID doesn't exist
-
----
-
-### PATCH `/records/{id}` — Operator+
-
-Partially update a record's metadata (only provided fields are changed).
-
-**Request** (all fields optional)
-```json
-{
-  "title": "Updated Title",
-  "material": "parchment with leather binding"
-}
-```
-
-**Response** (200 OK) — updated `RecordRead`
-
----
-
-### DELETE `/records/{id}` — Operator+
-
-Delete a record and all its images.
-
-**Response** (200 OK)
-```json
-{
-  "detail": "record deleted"
-}
-```
-
----
-
-### POST `/records/{id}/images` — Operator+
-
-Upload an image file to a record. Accepts multipart form upload and creates a `RecordImage` with optional embedded camera settings and EXIF data.
-
-**Headers**
-```
-Authorization: Bearer <token>
-Content-Type: multipart/form-data
-```
-
-**Form Fields**
-- `file` (file, required) — The image file
-- `metadata` (JSON string, optional) — `RecordImageCreate` schema
-
-**Response** (200 OK) — `RecordImageRead`
-
----
-
-### GET `/records/{id}/images` — Reviewer+
-
-List all images belonging to a record.
-
-**Response** (200 OK) — array of `RecordImageRead`
-
----
-
-### GET `/records/images/{img_id}` — Reviewer+
-
-Get metadata for a specific image.
-
-**Response** (200 OK) — `RecordImageRead`
-
----
-
-### PATCH `/records/images/{img_id}` — Operator+
-
-Update image metadata (sequence, role, thumbnail path).
-
-**Request**
-```json
-{
-  "sequence": 2,
-  "role": "right"
-}
-```
-
----
-
-### DELETE `/records/images/{img_id}` — Operator+
-
-Delete an image and its associated file.
-
----
-
-### GET `/records/images/{img_id}/file` — Reviewer+
-
-Download the original image file. Supports `?token=<jwt>` query parameter for `<img src>` use in browsers.
-
-**Response** — File download (JPEG, TIFF, etc.)
-
----
-
-### GET `/records/images/{img_id}/thumbnail` — Reviewer+
-
-Get a generated thumbnail of the image. Supports `?token=<jwt>` query parameter.
-
-**Response** — JPEG thumbnail
-
----
-
-## 7. Projects
-
-All project endpoints require authentication.
-
-### POST `/projects/` — Operator+
-
-Create a new project.
-
-**Request**
-```json
-{
-  "name": "Book Digitization Project",
-  "description": "Scanning historical books from the archive"
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "id": 1,
-  "name": "Book Digitization Project",
-  "description": "Scanning historical books from the archive",
-  "created_by": "john_doe",
-  "created_at": "2024-12-17T10:30:00"
-}
-```
-
-**Errors**
-- `409 Conflict` — Project name already exists
-
----
-
-### GET `/projects/` — Reviewer+
-
-List all projects (paginated).
-
-**Query Parameters**
-- `skip` (int, default: 0)
-- `limit` (int, default: 100, max: 1000)
-
----
-
-### GET `/projects/{id}` — Reviewer+
-
-Get a specific project.
-
----
-
-### PUT `/projects/{id}` — Operator+
-
-Update a project's name or description.
-
-**Request**
-```json
-{
-  "name": "Updated Project Name",
-  "description": "Updated description"
-}
-```
-
-**Errors**
-- `409 Conflict` — New name already in use by another project
-
----
-
-### DELETE `/projects/{id}` — Operator+
-
-Delete a project. Associated records are unlinked but not deleted.
-
-**Response** (200 OK)
-```json
-{
-  "detail": "project deleted"
-}
-```
-
----
-
-### POST `/projects/{id}/initialize` — Operator+
-
-Initialize project filesystem structure on the device.
-
-Creates the directory layout needed before capturing images.
-
-**Request**
-```json
-{
-  "resolution": "high"
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "success": true,
-  "project_path": "/var/lib/dtk/projects/Book_Digitization_Project"
-}
-```
-
-**Directory Structure Created:**
-```
-/var/lib/dtk/projects/{project_name}/
-├── images/
-│   ├── main/      ← Captured images stored here
-│   ├── temp/      ← Temporary/working files
-│   └── trash/     ← Deleted images (soft delete)
-└── packages/      ← Export packages (IIIF, ZIP, etc.)
-```
-
----
-
-### POST `/projects/{id}/add_record/{rec_id}` — Operator+
-
-Add an existing record to a project.
-
-**Response** (200 OK)
-```json
-{
-  "detail": "record added"
-}
-```
-
----
-
-### POST `/projects/{id}/remove_record/{rec_id}` — Operator+
-
-Remove a record from a project (unlinks it; does not delete the record).
-
-**Response** (200 OK)
-```json
-{
-  "detail": "record removed"
-}
-```
-
----
-
-### GET `/projects/{id}/records` — Reviewer+
-
-List all records associated with a project.
-
-**Query Parameters**
-- `skip` (int, default: 0)
-- `limit` (int, default: 100, max: 1000)
-
-**Response** (200 OK) — array of `RecordRead`
-
----
-
-## 8. Collections
-
-Collections provide a nested organizational hierarchy within projects. A collection can contain records directly or group sub-collections.
-
-### POST `/collections/` — Operator+
-
-Create a new collection. Specify either `project_id` (top-level) or `parent_collection_id` (nested), not both.
-
-**Request**
-```json
-{
-  "name": "Volume I",
-  "description": "First volume of the manuscript series",
-  "collection_type": "series",
-  "project_id": 1
-}
-```
-
-**Response** (201 Created) — `CollectionRead`
-
-**Errors**
-- `400 Bad Request` — Both or neither parent specified
-- `404 Not Found` — Parent project or collection not found
-
----
-
-### GET `/collections/` — Reviewer+
-
-List collections with optional filters.
-
-**Query Parameters**
-- `project_id` (int, optional) — Filter by project (returns top-level collections only)
-- `parent_collection_id` (int, optional) — Filter by parent collection (returns sub-collections)
-- `skip` (int, default: 0)
-- `limit` (int, default: 100, max: 1000)
-
-**Response** (200 OK) — array of `CollectionRead`
-
----
-
-### GET `/collections/{id}` — Reviewer+
-
-Get a specific collection.
-
-**Response** (200 OK) — `CollectionRead`
-
----
-
-### GET `/collections/{id}/hierarchy` — Reviewer+
-
-Get a collection with its full nested child hierarchy and record counts.
-
-**Response** (200 OK) — `CollectionWithChildren`
-
-```json
-{
-  "id": 1,
-  "name": "Volume I",
-  "record_count": 42,
-  "child_collections": [
-    {
-      "id": 2,
-      "name": "Chapter 1",
-      "record_count": 15,
-      "child_collections": []
-    }
-  ]
-}
-```
-
----
-
-### PATCH `/collections/{id}` — Operator+
-
-Update a collection's name, description, type, metadata, or move it to a different parent.
-Circular hierarchy creation is prevented.
-
-**Request** (all fields optional)
-```json
-{
-  "name": "Updated Name",
-  "parent_collection_id": 3
-}
-```
-
-**Errors**
-- `400 Bad Request` — Circular hierarchy detected
-
----
-
-### DELETE `/collections/{id}` — Operator+
-
-Delete a collection. Child collections are cascade-deleted; records in this collection are orphaned.
-
----
-
-## 9. Cameras
-
-### GET `/cameras/devices` — Reviewer+
-
-List available camera devices detected via libcamera/picamera2.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Response** (200 OK)
-```json
-[
-  {
-    "hardware_id": "imx519_0x001a",
-    "model": "Arducam 16MP IMX519",
-    "index": 0,
-    "location": "cam0",
-    "machine_id": "pi5-001",
-    "label": "Left Camera",
-    "calibrated": true
-  },
-  {
-    "hardware_id": "imx519_0x002b",
-    "model": "Arducam 16MP IMX519",
-    "index": 1,
-    "location": "cam1",
-    "machine_id": "pi5-001",
-    "label": "Right Camera",
-    "calibrated": false
-  }
-]
-```
-
-Returns empty list on non-Pi systems or when camera libraries are unavailable.
-
----
-
-### POST `/cameras/capture` — Operator+
-
-Trigger a single image capture on a specified camera.
-
-Captures the image to local storage, extracts metadata, and creates `RecordImage`, `CameraSettings`, and `ExifData` records automatically.
-
-**Request Body**
-```json
-{
-  "project_name": "BookScanning2024",
-  "camera_index": 0,
-  "resolution": "medium",
-  "include_resolution_in_filename": false
-}
-```
-
-**Parameters:**
-- `project_name` (string, required) — Project name (use `/projects/{id}/initialize` first)
-- `camera_index` (int, default: 0) — Camera index (0 or 1)
-- `resolution` (string, default: "medium"):
-  - `"low"`: 2312×1736 (~4MP, 195 DPI)
-  - `"medium"`: 3840×2160 (~8MP, 350 DPI) — **Recommended**
-  - `"high"`: 4624×3472 (16MP, 420 DPI)
-- `include_resolution_in_filename` (bool, default: false)
-
-**Response** (200 OK)
-```json
-{
-  "success": true,
-  "file_path": "/var/lib/dtk/projects/BookScanning2024/images/main/20240117_143022_000_c0.jpg",
-  "timing": null,
-  "error": null
-}
-```
-
-**Automatic Actions:**
-1. Validates camera connection
-2. Loads calibration data from registry (if available)
-3. Captures image to project directory
-4. Extracts EXIF metadata
-5. Creates `RecordImage`, `CameraSettings`, and `ExifData` database records
-
-**Python Example**
-```python
-response = requests.post(
-    "http://localhost:8000/cameras/capture",
-    headers={"Authorization": f"Bearer {token}"},
-    json={
-        "project_name": "BookScanning2024",
-        "camera_index": 0,
-        "resolution": "medium"
-    }
-)
-result = response.json()
-if result['success']:
-    print(f"Captured: {result['file_path']}")
-else:
-    print(f"Error: {result['error']}")
-```
-
----
-
-### POST `/cameras/capture/dual` — Operator+
-
-Trigger simultaneous capture on both cameras.
-
-**Request Body**
-```json
-{
-  "project_name": "BookScanning2024",
-  "resolution": "medium",
-  "include_resolution_in_filename": false,
-  "stagger_ms": 20
-}
-```
-
-**Parameters:**
-- `stagger_ms` (int, default: 20) — Milliseconds delay between camera triggers
-
-**Response** (200 OK)
-```json
-{
-  "success": true,
-  "file_paths": [
-    "/var/lib/dtk/projects/BookScanning2024/images/main/20240117_143022_000_c0.jpg",
-    "/var/lib/dtk/projects/BookScanning2024/images/main/20240117_143022_020_c1.jpg"
-  ],
-  "timing": {
-    "cam0_capture_ms": 245,
-    "cam1_capture_ms": 248,
-    "total_ms": 493
-  },
-  "error": null
-}
-```
-
----
-
-### POST `/cameras/calibrate` — Operator+
-
-Run autofocus calibration to find optimal lens position. Calibration data is saved to the camera registry and reused for faster captures.
-
-**Request Body**
-```json
-{
-  "camera_index": 0,
-  "resolution": "high"
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "success": true,
-  "lens_position": 1.85,
-  "distance_meters": 0.42,
-  "af_time": 2.34,
-  "error": null
-}
-```
-
----
-
-### POST `/cameras/calibrate/white-balance` — Operator+
-
-Calibrate white balance. Place a neutral gray card in frame for best results.
-
-**Request Body**
-```json
-{
-  "camera_index": 0,
-  "resolution": "high",
-  "stabilization_frames": 30
-}
-```
-
-**Response** (200 OK)
-```json
-{
-  "success": true,
-  "awb_gains": [1.92, 1.45],
-  "colour_temperature": 5200,
-  "converged": true,
-  "error": null
-}
-```
-
----
-
-### POST `/cameras/` — Operator+
-
-Manually create camera settings for a record image.
-
-**Request**
-```json
-{
-  "record_image_id": 1,
-  "camera_model": "Arducam 16MP IMX519",
-  "iso": 100,
-  "aperture": 2.9,
-  "shutter_speed": "1/100",
-  "white_balance": "daylight",
-  "flash_used": false
-}
-```
-
-**Response** (201 Created) — `CameraSettingsRead`
-
----
-
-### GET `/cameras/` — Reviewer+
-
-List all camera settings (paginated).
-
-**Query Parameters**
-- `skip` (int, default: 0)
-- `limit` (int, default: 100, max: 1000)
-
----
-
-### GET `/cameras/{id}` — Reviewer+
-
-Get specific camera settings by ID.
-
----
-
-### PUT `/cameras/settings/{id}` — Operator+
-
-Update camera settings (all fields optional).
-
-**Request**
-```json
-{
-  "iso": 200,
-  "white_balance": "custom"
-}
-```
-
----
-
-### DELETE `/cameras/settings/{id}` — Operator+
-
-Delete camera settings.
-
-**Response** (200 OK)
-```json
-{
-  "detail": "Camera settings deleted"
-}
-```
-
----
-
-## 10. System
-
-### GET `/system/temperature` — Reviewer+
-
-Get Raspberry Pi CPU temperature via `vcgencmd measure_temp`.
-
-Returns `available: false` on non-Pi systems or when `vcgencmd` is not installed.
-
-**Headers**
-```
-Authorization: Bearer <token>
-```
-
-**Response** (200 OK)
-```json
-{
-  "temperature": 47.2,
-  "unit": "C",
-  "available": true
-}
-```
-
-**Response when unavailable**
-```json
-{
-  "temperature": null,
-  "unit": "C",
-  "available": false
-}
-```
-
----
-
-## 11. Health Check
-
-### GET `/health`
-
-Health check endpoint (no authentication required).
-
-**Response** (200 OK)
-```json
-{
-  "status": "ok"
-}
-```
-
----
-
-## 12. Data Models
-
-### UserCreate (Request)
-```json
-{
-  "username": "string",
-  "email": "string (valid email format)",
-  "password": "string"
-}
-```
-
-Note: Role is assigned automatically by the server — not accepted from the request body.
-
-### UserRead (Response)
-```json
-{
-  "id": "integer",
-  "username": "string",
-  "email": "string",
-  "role": "admin | operator | reviewer",
-  "is_active": "boolean",
-  "created_at": "datetime or null"
-}
-```
-
-### UserRoleUpdate (Request — admin only)
-```json
-{
-  "role": "admin | operator | reviewer"
-}
-```
-
----
-
-### RecordCreate (Request)
-```json
-{
-  "title": "string (required)",
-  "description": "string or null",
-  "object_typology": "book|dossier|document|map|planimetry|other or null",
-  "author": "string or null",
-  "material": "string or null",
-  "date": "string or null (YYYY-MM-DD)",
-  "custom_attributes": "JSON string or null (typology-specific data)",
-  "project_id": "integer or null",
-  "collection_id": "integer or null",
-  "created_by": "string or null (auto-filled from token if omitted)"
-}
-```
-
-### RecordRead (Response)
-```json
-{
-  "id": "integer",
-  "title": "string",
-  "description": "string or null",
-  "object_typology": "string or null",
-  "author": "string or null",
-  "material": "string or null",
-  "date": "string or null",
-  "custom_attributes": "string or null",
-  "project_id": "integer or null",
-  "collection_id": "integer or null",
-  "created_by": "string or null",
-  "created_at": "datetime or null",
-  "modified_at": "datetime or null",
-  "images": "array of RecordImageRead"
-}
-```
-
-### RecordUpdate (Request — PATCH only)
-```json
-{
-  "title": "string or null",
-  "description": "string or null",
-  "object_typology": "string or null",
-  "author": "string or null",
-  "material": "string or null",
-  "date": "string or null",
-  "custom_attributes": "string or null",
-  "project_id": "integer or null",
-  "collection_id": "integer or null"
-}
-```
-
----
-
-### RecordImageCreate (Request)
-```json
-{
-  "filename": "string (required)",
-  "file_path": "string (required)",
-  "format": "string (required, e.g. 'jpeg', 'tiff')",
-  "file_size": "integer or null (bytes)",
-  "resolution_width": "integer or null",
-  "resolution_height": "integer or null",
-  "capture_id": "string or null (UUID for grouping captures)",
-  "pair_id": "string or null (UUID for dual-camera pairs)",
-  "sequence": "integer or null",
-  "role": "string or null ('left', 'right', 'single', 'overview')",
-  "uploaded_by": "string or null",
-  "camera_settings": "CameraSettingsCreate or null",
-  "exif_data": "ExifDataCreate or null"
-}
-```
-
-### RecordImageRead (Response)
-```json
-{
-  "id": "integer",
-  "record_id": "integer",
-  "filename": "string",
-  "file_path": "string",
-  "thumbnail_path": "string or null",
-  "format": "string",
-  "file_size": "integer or null",
-  "resolution_width": "integer or null",
-  "resolution_height": "integer or null",
-  "capture_id": "string or null",
-  "pair_id": "string or null",
-  "sequence": "integer or null",
-  "role": "string or null",
-  "uploaded_by": "string or null",
-  "created_at": "datetime or null",
-  "camera_settings": "CameraSettingsRead or null",
-  "exif_data": "ExifDataRead or null"
-}
-```
-
----
-
-### ProjectCreate (Request)
-```json
-{
-  "name": "string (required)",
-  "description": "string or null"
-}
-```
-
-### ProjectRead (Response)
-```json
-{
-  "id": "integer",
-  "name": "string",
-  "description": "string or null",
-  "created_by": "string or null",
-  "created_at": "datetime or null"
-}
-```
-
----
-
-### CameraSettingsCreate (Request)
-```json
-{
-  "camera_model": "string or null",
-  "camera_manufacturer": "string or null",
-  "lens_model": "string or null",
-  "iso": "integer or null",
-  "aperture": "float or null",
-  "shutter_speed": "string or null",
-  "focal_length": "float or null",
-  "exposure_compensation": "float or null",
-  "white_balance": "string or null",
-  "flash_used": "boolean or null"
-}
-```
-
-### CameraSettingsRead (Response)
-```json
-{
-  "id": "integer",
-  "record_image_id": "integer",
-  "camera_model": "string or null",
-  "camera_manufacturer": "string or null",
-  "lens_model": "string or null",
-  "iso": "integer or null",
-  "aperture": "float or null",
-  "shutter_speed": "string or null",
-  "focal_length": "float or null",
-  "exposure_compensation": "float or null",
-  "white_balance": "string or null",
-  "flash_used": "boolean or null",
-  "created_at": "datetime or null"
-}
-```
-
----
-
-## 12.1. File Storage Architecture
+## 5. File Storage Architecture
 
 ### Storage Structure
 
-Images are stored on the Raspberry Pi's microSD card at `/var/lib/dtk/projects/`:
+Images are stored under the active projects root, `/var/lib/dtk/projects/` by default:
 
 ```
-/var/lib/dtk/projects/
+<projects root>/
 ├── project_1/
+│   ├── collection_a/            ← captures into a collection land here
+│   │   └── images/
+│   │       └── main/
+│   │           ├── 20260109_143652_123_c0.jpg
+│   │           ├── 20260109_143652_123_c1.jpg
+│   │           └── ...
 │   ├── images/
-│   │   ├── main/           ← Captured images here
-│   │   │   ├── 20260109_143652_123_c0.jpg
-│   │   │   ├── 20260109_143652_123_c1.jpg
-│   │   │   └── ...
-│   │   ├── temp/           ← Working files
-│   │   └── trash/          ← Deleted images (soft delete)
-│   └── packages/           ← Export packages (IIIF, ZIP)
+│   │   └── main/                ← captures with no collection
+│   ├── metadata/
+│   │   ├── project_manifest.jsonl   ← written at project init
+│   │   └── manifest.jsonl           ← one line per capture, appended
+│   └── packages/                ← created at init, currently unused
 ├── project_2/
 │   └── ...
 ```
+
+Five things worth knowing, each of which the previous version of this section got wrong:
+
+- **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
+- **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
+- **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
+- **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files (`backend/app/api/records.py:223`), as does deleting a single image (`:414`). There is no recovery directory, and on a backup-less appliance a delete is final.
+- **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
 
 ### Filename Format
 
@@ -1666,36 +372,7 @@ Project (name, description)
 
 ---
 
-## 13. Error Handling
-
-All errors follow this format:
-
-```json
-{
-  "detail": "error message"
-}
-```
-
-### HTTP Status Codes
-
-| Code | Meaning | Example |
-|------|---------|---------|
-| 200 | OK | Successful GET, PATCH, PUT, DELETE |
-| 201 | Created | Successful POST (resource created) |
-| 400 | Bad Request | Validation error, missing fields |
-| 401 | Unauthorized | Invalid/missing token, wrong credentials |
-| 403 | Forbidden | Role insufficient, or account inactive |
-| 404 | Not Found | Resource ID doesn't exist |
-| 409 | Conflict | Duplicate entry, resource already exists |
-| 500 | Internal Server Error | Unexpected server error |
-
-**403 vs 401:**
-- `401` — Token is missing, expired, or invalid
-- `403` — Token is valid but the user's role does not permit the operation
-
----
-
-## 14. Code Examples
+## 6. Code Examples
 
 ### Complete Workflow: Registration to Gallery
 
@@ -1731,7 +408,7 @@ me_resp = requests.get(f"{BASE_URL}/users/me", headers=headers)
 me = me_resp.json()
 print(f"   Role: {me['role']}")
 
-# 4. Create project (operator+ required)
+# 4. Create project (admin only)
 print("\n4. Creating project...")
 project_resp = requests.post(
     f"{BASE_URL}/projects/",
@@ -1931,23 +608,37 @@ def gallery_view(token):
 
 ---
 
-## 15. Frontend Integration
+## 7. Frontend Integration
 
 ### Authentication Flow
 
 ```
-1. POST /auth/register
+1. GET /auth/setup/status                    (no auth)
+   Response: { needs_setup: boolean }
+   → true  = no user exists yet; route to first-run setup
+     false = route to login
+   The frontend calls this on the unauthenticated path, from the welcome
+   and setup routes; an existing session in localStorage short-circuits
+   straight to the dashboard without it.
+
+2. POST /auth/register
    Request: { username, email, password }
    Response: { id, username, email, role, is_active, created_at }
-   Note: first user becomes admin, all others become reviewer
+   Note: first user becomes admin, all others become reviewer.
+   Note: PUBLIC ONLY FOR THE FIRST USER. Once one account exists this
+         endpoint requires an authenticated admin — 401 without a token,
+         403 for a non-admin. Account creation is admin-controlled: an
+         admin submits the new user's credentials directly. There is no
+         invitation or token flow. Role is ignored if sent; elevate
+         afterwards with PATCH /auth/users/{id}/role.
 
-2. POST /auth/login
+3. POST /auth/login
    Request: { username, password }
    Response: { access_token, token_type }
 
-3. Store token: localStorage.setItem("token", access_token)
+4. Store token: localStorage.setItem("access_token", access_token)
 
-4. GET /users/me
+5. GET /users/me
    Headers: { Authorization: Bearer <token> }
    Response: { id, username, role, ... }
    → Use role to determine which UI sections to show:
@@ -1955,16 +646,16 @@ def gallery_view(token):
      - operator: full dashboard, no user management
      - reviewer: read-only views only
 
-5. Use token in all protected requests:
+6. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
 
-6. Before expiry (~1 hour), refresh:
+7. Before expiry (8 hours by default — ACCESS_TOKEN_EXPIRE_SECONDS), refresh:
    POST /auth/refresh
    Headers: { Authorization: Bearer <old_token> }
    Response: { access_token, token_type }
 
-7. On logout:
-   localStorage.removeItem("token")
+8. On logout:
+   localStorage.removeItem("access_token")
 ```
 
 ---
@@ -2044,7 +735,7 @@ def gallery_view(token):
 
 **API Calls:**
 1. `GET /projects/` — List projects (reviewer+)
-2. `POST /projects/` — Create project (operator+)
+2. `POST /projects/` — Create project (admin only)
 3. `POST /projects/{id}/initialize` — Init filesystem (operator+)
 4. `GET /collections/?project_id={id}` — List top-level collections (reviewer+)
 5. `GET /collections/{id}/hierarchy` — Full collection tree (reviewer+)
@@ -2063,7 +754,7 @@ def gallery_view(token):
 
 ---
 
-## 16. Configuration
+## 8. Configuration
 
 ### Environment Variables (`.env`)
 
@@ -2090,7 +781,7 @@ The repository root `.env.example` is the authoritative list of supported variab
 
 The server host and port are not configurable by environment: the pixi `start` and `dev` tasks hardcode `--host 0.0.0.0 --port 8000`, so the native backend listens on every interface.
 
-What keeps port 8000 off the venue LAN is the host firewall installed by `scripts/setup-firewall.sh`: ufw defaults to deny-inbound and allows 8000/tcp only from the appliance's own compose network (`172.30.0.0/24`), so Nginx can reach the backend and nothing else on the LAN can. Nginx itself is a reverse proxy, not a filter — it restricts nothing on its own. Container ports are handled separately, by loopback binds in `docker-compose.yml`, because Docker's iptables chains sit ahead of ufw's.
+What keeps port 8000 off the venue LAN is the host firewall installed by `scripts/setup-firewall.sh`: ufw defaults to deny-inbound and allows 8000/tcp only from the appliance's own compose network (`172.30.0.0/24`), so Nginx can reach the backend and nothing else on the LAN can. Nginx itself is a reverse proxy, not a filter — it restricts nothing on its own. Container ports are handled separately, because Docker's iptables chains sit ahead of ufw's — but only some are loopback-bound. `docker-compose.yml` binds the database to `127.0.0.1:5432` and the production frontend to `127.0.0.1:3000`, while the backend service publishes `8000:8000` and the dev overlay publishes `5173:5173`, both on all interfaces. On a development machine on an untrusted network, those two are exposed.
 
 Changing the address the backend actually binds to, as opposed to filtering access to it, means editing the uvicorn invocation in `backend/pixi.toml`.
 
