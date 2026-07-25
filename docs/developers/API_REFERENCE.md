@@ -25,7 +25,9 @@ Documentation of the backend API endpoints, data models, implementation details,
 
 How to get the backend running:
 
-The backend runs **in Docker for development** and **natively through pixi on the Raspberry Pi**. There is no virtualenv/pip path: `backend/requirements.txt` pins `picamera2` and `gphoto2`, which are Linux/Pi camera libraries and do not install on Windows or macOS.
+The backend runs **in Docker for development** and **natively through pixi on the Raspberry Pi**. A legacy virtualenv + `pip install -r requirements.txt` still works on Linux, but pixi is preferred for new development (`.github/copilot-instructions.md`).
+
+It does **not** work on Windows or macOS: `backend/requirements.txt` pins `picamera2` and `gphoto2`, which are Linux/Pi camera libraries, and `backend/pixi.toml` declares only `linux-aarch64` and `linux-64`. Use Docker on those platforms.
 
 **Development — any machine, no cameras attached:**
 
@@ -168,11 +170,11 @@ Recommended order to test the entire API:
 5. **Authorize** → Click Authorize button, paste token
 6. **Get Current User** → `GET /users/me` (check your role)
 7. **Create Project** → `POST /projects/` (admin only)
-7. **Create Record** → `POST /records/`
-8. **Upload Image** → `POST /records/{id}/images`
-9. **Add to Project** → `POST /projects/{id}/add_record/{rec_id}`
-10. **Get Record** → `GET /records/{id}`
-11. **Delete Record** → `DELETE /records/{id}`
+8. **Create Record** → `POST /records/`
+9. **Upload Image** → `POST /records/{id}/images`
+10. **Add to Project** → `POST /projects/{id}/add_record/{rec_id}`
+11. **Get Record** → `GET /records/{id}`
+12. **Delete Record** → `DELETE /records/{id}`
 
 ---
 
