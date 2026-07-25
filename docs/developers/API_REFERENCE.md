@@ -47,10 +47,14 @@ See `backend/DEVELOPMENT.md` for the dependency-manifest rules that follow from 
 
 ### Verify it works:
 
-- **Frontend**: http://localhost:5173
+After `start-dev.sh` (development):
+
+- **Frontend**: http://localhost:5173 (Vite dev server)
 - **Interactive API Docs**: http://localhost:8000/docs (Swagger UI)
 - **Health Check**: http://localhost:8000/health
 - **ReDoc**: http://localhost:8000/redoc
+
+After `start.sh` (production on the Pi), there is no Vite server: Nginx serves the UI and proxies the API on **port 80** — `http://<hostname>.local`. Port 8000 is not open to the LAN (see §3).
 
 ### Test everything:
 
@@ -93,7 +97,7 @@ The endpoint list, path and query parameters, and request/response schemas are *
 
 FastAPI derives these from the routers themselves, so they cannot fall out of step with the implementation. This document deliberately does not duplicate them.
 
-Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. And no route in `backend/app/api/` declares `responses=`, so **error codes and bodies are not in the generated schema at all**. For error behaviour, read the route: `HTTPException` calls are explicit and easy to follow.
+Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: FastAPI adds a `422` with an `HTTPValidationError` body automatically wherever a route validates input, but no route in `backend/app/api/` declares `responses=`, so **the application's own error codes — 401, 403, 404, 409, 413, 501, 502, 503 — do not appear**. For those, read the route: `HTTPException` calls are explicit and easy to follow.
 
 It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
@@ -259,13 +263,17 @@ Images are stored under the active projects root, `/var/lib/dtk/projects/` by de
 │   │           └── ...
 │   ├── images/
 │   │   └── main/                ← captures with no collection
+│   ├── metadata/
+│   │   ├── project_manifest.jsonl   ← written at project init
+│   │   └── manifest.jsonl           ← one line per capture, appended
 │   └── packages/                ← created at init, currently unused
 ├── project_2/
 │   └── ...
 ```
 
-Four things worth knowing, each of which the previous version of this section got wrong:
+Five things worth knowing, each of which the previous version of this section got wrong:
 
+- **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
 - **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
 - **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
 - **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files (`backend/app/api/records.py:223`), as does deleting a single image (`:414`). There is no recovery directory, and on a backup-less appliance a delete is final.
@@ -616,9 +624,10 @@ def gallery_view(token):
    Note: first user becomes admin, all others become reviewer.
    Note: PUBLIC ONLY FOR THE FIRST USER. Once one account exists this
          endpoint requires an authenticated admin — 401 without a token,
-         403 for a non-admin. Account creation is invite-only, not
-         self-service. Role is ignored if sent; elevate afterwards with
-         PATCH /auth/users/{id}/role.
+         403 for a non-admin. Account creation is admin-controlled: an
+         admin submits the new user's credentials directly. There is no
+         invitation or token flow. Role is ignored if sent; elevate
+         afterwards with PATCH /auth/users/{id}/role.
 
 3. POST /auth/login
    Request: { username, password }
