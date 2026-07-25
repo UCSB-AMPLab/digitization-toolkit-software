@@ -25,51 +25,43 @@ Documentation of the backend API endpoints, data models, implementation details,
 
 How to get the backend running:
 
+The backend runs **in Docker for development** and **natively through pixi on the Raspberry Pi**. There is no virtualenv/pip path: `backend/requirements.txt` pins `picamera2` and `gphoto2`, which are Linux/Pi camera libraries and do not install on Windows or macOS.
+
+**Development — any machine, no cameras attached:**
+
 ```bash
-# 1. Navigate to backend folder
-cd backend
-
-# 2. Create/Activate virtual environment
-python -m venv .venv
-.venv\Scripts\Activate.ps1  # Windows PowerShell
-# or: source .venv/bin/activate  # Linux/macOS
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Run development server
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+./scripts/start-dev.sh
 ```
+
+This brings the whole stack up in Docker — PostgreSQL, the FastAPI backend and the SvelteKit dev server — and applies Alembic migrations on startup. It is shorthand for:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile with-backend up --build
+```
+
+**Production — on the Pi:** `./scripts/start.sh` runs the database and frontend in Docker and the backend natively via pixi, because camera access needs Pi-specific libraries (libcamera, picamera2) that cannot run in a container.
+
+See `backend/DEVELOPMENT.md` for the dependency-manifest rules that follow from this split.
 
 ### Verify it works:
 
+- **Frontend**: http://localhost:5173
 - **Interactive API Docs**: http://localhost:8000/docs (Swagger UI)
 - **Health Check**: http://localhost:8000/health
 - **ReDoc**: http://localhost:8000/redoc
 
 ### Test everything:
 
-```bash
-cd backend
+Tests run inside the backend container:
 
+```bash
 # Run all tests
-python -m pytest
+docker compose exec backend python -m pytest
 
 # Or run specific test suites:
-python -m pytest tests/unit/          # Unit tests
-python -m pytest tests/integration/   # Integration tests
-python tests/validate_system.py       # System validation
-```
-
-Expected output:
-```
-==================== test session results ====================
-platform win32 -- Python 3.x.x
-collected X items
-
-tests/unit/test_api.py ......                        [100%]
-
-==================== X passed in X.XXs =====================
+docker compose exec backend python -m pytest tests/unit/
+docker compose exec backend python -m pytest tests/integration/
+docker compose exec backend python tests/validate_system.py
 ```
 
 ---
@@ -78,8 +70,8 @@ tests/unit/test_api.py ......                        [100%]
 
 | Resource | Location | Purpose |
 |----------|----------|---------|
-| **API Reference** | This document | Complete endpoint documentation with examples |
-| **Backend Setup** | [../../../backend/README.md](../../../backend/README.md) | Quick start and environment setup |
+| **Endpoint reference** | `http://localhost:8000/docs` | Generated from the code; always current |
+| **Backend Setup** | [../../backend/README.md](../../backend/README.md) | Quick start and environment setup |
 | **Configuration Example** | [Code Examples](#complete-workflow-registration-to-gallery) | How to build configuration page |
 | **Live Scan Example** | [Code Examples](#live-scan-page-example) | How to build live scan page |
 | **Gallery Example** | [Code Examples](#galleryview-page-example) | How to build gallery page |
@@ -184,22 +176,20 @@ Recommended order to test the entire API:
 ### 4.3 Option 3: Run Test Suite
 
 ```bash
-cd backend
-
 # Run all tests with pytest
-python -m pytest
+docker compose exec backend python -m pytest
 
 # Run specific test categories
-python -m pytest tests/unit/          # Unit tests (API, models, schemas)
-python -m pytest tests/integration/   # Integration tests (capture workflow)
-python -m pytest tests/test_cameras.py -m camera  # Camera tests (requires hardware)
+docker compose exec backend python -m pytest tests/unit/          # API, models, schemas
+docker compose exec backend python -m pytest tests/integration/   # capture workflow
+docker compose exec backend python -m pytest tests/test_cameras.py -m camera  # needs hardware
 
 # Run with verbose output
-python -m pytest -v
+docker compose exec backend python -m pytest -v
 
-# Run tests and show coverage
-python -m pytest --cov=app --cov-report=html
 ```
+
+`pytest-cov` is not currently in either dependency manifest, so `--cov` is unavailable; `backend/pytest.ini` keeps the coverage options commented out for that reason.
 
 **Test Organization:**
 - `tests/unit/test_api.py` — API endpoint validation, imports, models, schemas
