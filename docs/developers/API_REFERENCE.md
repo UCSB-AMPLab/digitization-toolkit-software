@@ -81,7 +81,7 @@ docker compose exec backend python tests/validate_system.py
 
 ## 3. API Reference
 
-The complete reference for every endpoint, request and response schema, and error shape is **generated from the code** and served by the running backend:
+The endpoint list, path and query parameters, and request/response schemas are **generated from the code** and served by the running backend:
 
 | | |
 |---|---|
@@ -90,6 +90,8 @@ The complete reference for every endpoint, request and response schema, and erro
 | **OpenAPI schema** | [`http://localhost:8000/openapi.json`](http://localhost:8000/openapi.json) — machine-readable, for client generation |
 
 FastAPI derives these from the routers themselves, so they cannot fall out of step with the implementation. This document deliberately does not duplicate them.
+
+Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. And no route in `backend/app/api/` declares `responses=`, so **error codes and bodies are not in the generated schema at all**. For error behaviour, read the route: `HTTPException` calls are explicit and easy to follow.
 
 It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and described an error shape the backend does not return — with nothing able to notice. They were removed rather than repaired.
 
@@ -160,11 +162,12 @@ The fastest way to test endpoints is using the interactive documentation.
 Recommended order to test the entire API:
 
 1. **Health Check** → `GET /health` (no auth needed)
-2. **Register User** → `POST /auth/register` (first user becomes admin; admin-only thereafter)
-3. **Login** → `POST /auth/login` (save token)
-4. **Authorize** → Click Authorize button, paste token
-5. **Get Current User** → `GET /users/me` (check your role)
-6. **Create Project** → `POST /projects/`
+2. **Check setup state** → `GET /auth/setup/status` (no auth needed)
+3. **Bootstrap, only if `needs_setup` is true** → `POST /auth/register`. This first user becomes admin. If an account already exists, skip this step: registration then requires an admin token and returns 401 without one.
+4. **Login** → `POST /auth/login` (save token)
+5. **Authorize** → Click Authorize button, paste token
+6. **Get Current User** → `GET /users/me` (check your role)
+7. **Create Project** → `POST /projects/` (admin only)
 7. **Create Record** → `POST /records/`
 8. **Upload Image** → `POST /records/{id}/images`
 9. **Add to Project** → `POST /projects/{id}/add_record/{rec_id}`
@@ -182,7 +185,9 @@ docker compose exec backend python -m pytest
 # Run specific test categories
 docker compose exec backend python -m pytest tests/unit/          # API, models, schemas
 docker compose exec backend python -m pytest tests/integration/   # capture workflow
-docker compose exec backend python -m pytest tests/test_cameras.py -m camera  # needs hardware
+# Camera tests need real hardware AND the native pixi environment on the Pi.
+# They cannot pass in the dev container, which has no camera devices and no
+# libcamera — see backend/DEVELOPMENT.md.
 
 # Run with verbose output
 docker compose exec backend python -m pytest -v
@@ -239,22 +244,26 @@ http://localhost:8000/openapi.json
 
 ### Storage Structure
 
-Images are stored on the Raspberry Pi's microSD card at `/var/lib/dtk/projects/`:
+Images are stored under the active projects root, `/var/lib/dtk/projects/` by default:
 
 ```
-/var/lib/dtk/projects/
+<projects root>/
 ├── project_1/
 │   ├── images/
-│   │   ├── main/           ← Captured images here
-│   │   │   ├── 20260109_143652_123_c0.jpg
-│   │   │   ├── 20260109_143652_123_c1.jpg
-│   │   │   └── ...
-│   │   ├── temp/           ← Working files
-│   │   └── trash/          ← Deleted images (soft delete)
-│   └── packages/           ← Export packages (IIIF, ZIP)
+│   │   └── main/           ← captured images
+│   │       ├── 20260109_143652_123_c0.jpg
+│   │       ├── 20260109_143652_123_c1.jpg
+│   │       └── ...
+│   └── packages/           ← export packages
 ├── project_2/
 │   └── ...
 ```
+
+Three things this layout does **not** include, contrary to how it was previously documented:
+
+- **There is no `temp/` or `trash/` directory.** `project_init()` (`backend/capture/project_manager.py:150`) creates only `packages/`; `images/main/` appears on the first capture. Neither word occurs anywhere in the backend.
+- **Deletion is permanent, not soft.** Deleting a record or an image calls `unlink()` on the file (`backend/app/api/records.py:223, 284`). There is no recovery directory, and on a backup-less appliance a delete is final.
+- **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the microSD path above.
 
 ### Filename Format
 
