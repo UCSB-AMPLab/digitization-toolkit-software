@@ -366,15 +366,23 @@ the real throughput and six to eight times the real file sizes.
 | picamera2 (IMX519 ×2) | 7–8 s | too slow for production; NEH-173 tracks the fix |
 
 Both already fire the two cameras in parallel (ThreadPool with a 20 ms stagger,
-`capture/service.py:320`), so the cost is per-capture work, not serialisation.
+`capture/service.py:388-393`), and both backends lock per camera index rather
+than globally, so the cost is per-capture work and not serialisation.
 
 **Throughput** follows from the above: roughly 900 pages/hour on picamera2 and
 1800 on gphoto2, at two pages per capture. Treat these as ceilings — they
 exclude page turning, which dominates in practice.
 
-**Storage,** medium preset: paired JPEGs measured **560–780 KB each**, so a
-100-page book is roughly 60–80 MB. The low and high presets have not been
-measured; scale by pixel count if you need an estimate, and say that you did.
+**Storage, picamera2 only:** at the medium preset, paired JPEGs measured
+**560–780 KB each**, so 100 pages is roughly 56–78 MB.
+
+This figure does not transfer to gphoto2. No file sizes were measured on the
+DSLR path, and the resolution presets do not apply to it at all — most
+`CameraConfig` fields are picamera2-specific and are silently ignored by the
+gphoto2 backend (`capture/backends/gphoto2_backend.py:443-446`), which shoots
+at whatever the body is set to. Sizing storage for a DSLR unit from the number
+above will under-provision badly. The low and high picamera2 presets are also
+unmeasured.
 
 ---
 
@@ -535,8 +543,10 @@ def configuration_page_flow(token):
 def live_scan_workflow(token, project_name):
     """Workflow for the live scan page: capture → auto-save → optional metadata update.
 
-    project_name must already exist: POST /cameras/capture returns 422 for a
-    name with no matching project row (cameras.py:_resolve_capture_target).
+    project_name must already exist — but only when collection_id is omitted.
+    _resolve_capture_target (cameras.py:43-56) resolves the path from the
+    collection when collection_id is given and never reads project_name at
+    all; otherwise an unmatched name returns 422.
     """
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -566,9 +576,11 @@ def live_scan_workflow(token, project_name):
 
     # 3. Update the metadata of the record this capture created.
     #    Use record_id from the capture response — do NOT list records and
-    #    take the first: GET /records/ orders by id ASCENDING (records.py:126),
-    #    so `limit=1` returns the OLDEST record in the database, and patching
-    #    it would overwrite an unrelated page's metadata.
+    #    take the first. An unfiltered GET /records/ orders by id ASCENDING
+    #    (records.py:127), so `limit=1` returns the OLDEST record in the
+    #    database and patching it overwrites an unrelated page. With
+    #    ?collection_id=N the order is sequence-then-id (records.py:125), so
+    #    you get whatever the operator ranked first — also not your capture.
     rec_id = result.get('record_id')
     if rec_id:
         update_resp = requests.patch(
@@ -653,9 +665,15 @@ def gallery_view(token):
    → Use role to determine which UI sections to show:
      - admin:    full dashboard + user management panel
      - operator: full dashboard, no user management
-     - reviewer: read-only for records, projects and collections, BUT
-       reviewers drive the QA workflow — they may annotate and change
-       record status (approve/reject). See allow_read_only in auth.py:171.
+     - reviewer: cannot create or edit records, projects or collections,
+       BUT is not passive — reviewers drive the QA workflow, annotating
+       records and moving them in_review -> approved / rejected
+       (schemas/record.py:11-18), and may trigger a BagIt export
+       (collections.py:443). They cannot send a record back to captured;
+       reopening for re-capture is operator/admin, and from approved it is
+       admin only.
+       Note each router defines its own allow_read_only — records.py:30 is
+       the one governing records; auth.py:171 governs only auth endpoints.
 
 6. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
@@ -668,8 +686,12 @@ def gallery_view(token):
 8. On logout, clear BOTH keys:
    localStorage.removeItem("access_token")
    localStorage.removeItem("auth_user")
-   The client stores the user alongside the token (stores/auth.ts:78-79)
-   and treats a token without auth_user as logged out.
+   The client stores the user alongside the token (stores/auth.ts:78-79).
+   Clearing only the token is not safe: isAuthenticated() checks
+   token !== null alone (stores/auth.ts:113-114, 149-151), so a leftover
+   auth_user leaves the app authenticated with a stale user, while the
+   root route requires both and bounces to login (routes/+page.svelte:24).
+   The two keys hydrate independently, so half-cleared state is reachable.
 ```
 
 ---
@@ -839,7 +861,7 @@ This is the bound on how long a deactivated user keeps a working session, so sho
 - **ORM**: SQLAlchemy 2.0
 - **Engine**: PostgreSQL
 - **Relationships**: Proper foreign keys with cascading deletes
-- **Timestamps**: `created_at` on every model; `modified_at` only on `Record` (`models/record.py:37`)
+- **Timestamps**: not uniform. Most models carry `created_at`, but `ProjectMember` uses `added_at` instead (`models/project_member.py:14`). For modification times, `Record` has `modified_at` (`models/record.py:37`) and `Collection` has `updated_at` (`models/collection.py:27`); no other model tracks one
 - **Migrations**: Alembic. Automatic only in the dev container, whose command is `alembic upgrade head && uvicorn …`. Production runs `pixi run start`, a bare uvicorn; the Pi is migrated by `scripts/update.sh`, and `assert_schema_at_head()` fails startup if that has not happened
 
 ### Validation
