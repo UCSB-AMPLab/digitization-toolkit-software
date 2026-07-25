@@ -120,13 +120,17 @@ sudo systemctl enable triggerhappy >/dev/null 2>&1 || true
 sudo systemctl restart triggerhappy >/dev/null 2>&1 || true
 echo "  Ctrl+Alt+F2 → tty2 shell, Ctrl+Alt+F1 → kiosk (verify 'ps -o user -C thd' shows root)"
 
-# ── 2d. Chromium managed policy — disable the password manager (NEH-67) ─────
-# The kiosk browser must never offer to save passwords or autofill payment /
-# address data. A managed policy JSON enforces this regardless of the launch
-# flags. Raspberry Pi OS ships Chromium under one of two policy roots depending
-# on the build (chromium vs chromium-browser); installing into both is harmless
-# and covers either. No network access is needed.
-echo "→ Installing Chromium managed policy (disable password manager)..."
+# ── 2d. Chromium managed policies — password manager (NEH-67), translate ────
+# (NEH-185). The kiosk browser must never offer to save passwords or autofill
+# payment / address data, and must never show the "translate this page?"
+# popup over the UI. Managed policy JSONs enforce this regardless of launch
+# flags — which matters for translate: Chromium renamed the TranslateUI
+# feature to Translate several versions ago, so a --disable-features flag
+# silently rots; the policy is version-proof (verified on hardware, bench
+# 2026-07-24). Raspberry Pi OS ships Chromium under one of two policy roots
+# depending on the build (chromium vs chromium-browser); installing into both
+# is harmless and covers either. No network access is needed.
+echo "→ Installing Chromium managed policies (password manager, translate)..."
 for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do
     sudo mkdir -p "$policy_dir"
     sudo tee "$policy_dir/dtk-no-password-manager.json" > /dev/null << 'EOF'
@@ -136,8 +140,14 @@ for policy_dir in /etc/chromium/policies/managed /etc/chromium-browser/policies/
     "AutofillCreditCardEnabled": false
 }
 EOF
+    sudo tee "$policy_dir/dtk-no-translate.json" > /dev/null << 'EOF'
+{
+    "TranslateEnabled": false
+}
+EOF
 done
 echo "  /etc/chromium{,-browser}/policies/managed/dtk-no-password-manager.json  ✓"
+echo "  /etc/chromium{,-browser}/policies/managed/dtk-no-translate.json  ✓"
 
 # ── 3. Remove old kiosk.service if present (replaced by .bash_profile) ──────
 if systemctl is-enabled kiosk.service &>/dev/null; then
