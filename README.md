@@ -117,6 +117,11 @@ curl http://localhost:8000/health   # → {"status":"ok"}
 curl -I http://localhost:3000       # → HTTP 200
 ```
 
+> **Do the first run camera-less.** Complete steps 0–5 and pass the health
+> checks above with no cameras attached, then connect the cameras (see the
+> camera setup guides under `docs/`) and re-verify. When something fails,
+> this isolates the fault to the camera layer instead of the whole build.
+
 ### Creating an SD card image
 
 ```bash

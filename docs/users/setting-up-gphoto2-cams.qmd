@@ -16,7 +16,11 @@ To be fully compatible with the Digitization Toolkit software, cameras should su
 ## Connect the cameras to the Raspberry Pi
 
 - **Requirements**:
-    - 2 x USB 2.0 Type-A to Mini-B (5-pin) cables
+    - 2 x USB 2.0 Type-A to Mini-B (5-pin) **data** cables
+
+::: {.callout-warning appearance="simple"}
+Many mini-B cables sold today are **charge-only** and carry no data lines. A charge-only cable produces no symptom on the camera and nothing on the Pi — the camera simply never appears. Two brand-new cables failed exactly this way during hardware validation (one intermittent `error -71` in `dmesg`, then electrical silence). Use cables known to carry data, seat both ends firmly, and verify with `lsusb` (below) before suspecting anything else.
+:::
 
 - **Connections**:
     - Camera side: Plug into the middle port (marked with the USB trident icon).
@@ -25,6 +29,17 @@ To be fully compatible with the Digitization Toolkit software, cameras should su
 ![USB connection from the camera side](../../_static/imgs/cannon-EOS-RebelT7-usb4cam.JPG){width=400}
 
 ![USB connection to the Raspberry Pi - dual camera setup in ports USB 3.0](../../_static/imgs/cannon_EOS-RebelT7-usb2RPi.JPG){width=400}
+
+## Verify the connection
+
+With both cameras connected and **switched on**, run on the Pi:
+
+```bash
+lsusb                  # expect one "Canon, Inc." line per camera body
+gphoto2 --auto-detect  # expect both cameras listed
+```
+
+If a camera is missing: reseat both cable ends, power-cycle the camera body, and check `dmesg | tail` — repeated `error -71` messages point to a bad cable or a poorly seated plug; total silence with a powered-on camera points to a charge-only cable.
 
 ## Canon EOS Rebel T7
 
@@ -46,5 +61,9 @@ To be fully compatible with the Digitization Toolkit software, cameras should su
 
 ::: {.callout-caution appearance="simple"}
 Disabling Auto power off can result in lens damage. The software will try to power off the camera after 15 minutes of inactivity to prevent this. However, if the Raspberry Pi crashes or is inadvertently powered off while Auto power off is disabled, the camera could remain on indefinitely.
+:::
+
+::: {.callout-important appearance="simple"}
+When Auto power off fires, the camera does not just sleep — it **drops off the USB bus entirely** (`lsusb` no longer lists it), and the software cannot wake it: a slept body looks exactly like a disconnected one, and the interface will show the camera as not connected. To bring it back, **half-press the shutter button** on the camera and wait a few seconds for it to re-enumerate. Keep this in mind before unplugging anything or restarting services.
 :::
 

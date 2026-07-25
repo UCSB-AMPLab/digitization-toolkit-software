@@ -38,12 +38,12 @@ Cierre la sesión en la aplicación y vuelva a entrar. Casi siempre es suficient
 
 1. Revise que el selector del lente esté en **MF** (ver arriba).
 2. Apague y encienda esa cámara.
-3. Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+3. Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk` y presione Enter. **La pantalla no muestra nada después del comando: es normal.** Espere unos 30 segundos y vuelva a la aplicación con **Ctrl+Alt+F1**.
 4. Solo si nada de esto funciona: apague todo de forma segura (ver arriba) y vuelva a encender.
 
 ## Si la aplicación se congela
 
-Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk` y presione Enter. **La pantalla no muestra nada después del comando: es normal.** Espere unos 30 segundos y vuelva a la aplicación con **Ctrl+Alt+F1**.
 
 ## Contacto
 
