@@ -97,7 +97,7 @@ The endpoint list, path and query parameters, and request/response schemas are *
 
 FastAPI derives these from the routers themselves, so they cannot fall out of step with the implementation. This document deliberately does not duplicate them.
 
-Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: FastAPI adds a `422` with an `HTTPValidationError` body automatically wherever a route validates input, but no route in `backend/app/api/` declares `responses=`, so **the application's own error codes — 401, 403, 404, 409, 413, 501, 502, 503 — do not appear**. For those, read the route: `HTTPException` calls are explicit and easy to follow.
+Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: FastAPI adds a `422` with an `HTTPValidationError` body automatically wherever a route validates input, but no route in `backend/app/api/` declares `responses=`, so **the application's own error codes — 400, 401, 403, 404, 409, 413, 501, 502, 503 — do not appear**. For those, read the route: `HTTPException` calls are explicit and easy to follow.
 
 It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
@@ -191,9 +191,12 @@ docker compose exec backend python -m pytest
 # Run specific test categories
 docker compose exec backend python -m pytest tests/unit/          # API, models, schemas
 docker compose exec backend python -m pytest tests/integration/   # capture workflow
-# Camera tests need real hardware AND the native pixi environment on the Pi.
-# They cannot pass in the dev container, which has no camera devices and no
-# libcamera (Dockerfile.dev installs none) — see backend/DEPENDENCIES.md.
+# Camera tests need real hardware AND the native pixi environment on the Pi;
+# the dev container has no camera devices and no libcamera (Dockerfile.dev
+# installs none) — see backend/DEPENDENCIES.md. On the Pi, in backend/:
+#   pixi run -e dev pytest tests/test_cameras.py -m camera
+# Note: the `test-cameras` pixi task is currently broken — it points at
+# test/test_cameras.py, and the file is tests/test_cameras.py (NEH-195).
 
 # Run with verbose output
 docker compose exec backend python -m pytest -v
