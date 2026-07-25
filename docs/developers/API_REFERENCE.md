@@ -95,11 +95,11 @@ FastAPI derives these from the routers themselves, so they cannot fall out of st
 
 Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. And no route in `backend/app/api/` declares `responses=`, so **error codes and bodies are not in the generated schema at all**. For error behaviour, read the route: `HTTPException` calls are explicit and easy to follow.
 
-It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and described an error shape the backend does not return — with nothing able to notice. They were removed rather than repaired.
+It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
 What remains here is what a schema cannot express: how to get the stack running, how to test it, how storage is laid out, worked examples, and the reasoning behind the architecture.
 
-**Reaching the schema on a deployed appliance.** Use a development stack for API exploration. On a provisioned unit the backend's port 8000 is firewalled to the appliance's own compose network (`scripts/setup-firewall.sh`), so it is not reachable from the venue LAN — and the proxied `/api/docs` path does not render Swagger UI correctly, because the page requests `/openapi.json` at the site root, which Nginx routes to the frontend.
+**Reaching the schema on a deployed appliance.** A development stack is the easiest place to explore the API. On a provisioned unit, `scripts/setup-firewall.sh` allows port 8000 from the appliance's own compose network (`172.30.0.0/24`) and over `tailscale0`, but not from the venue LAN — so it is reachable for remote support, not from a laptop in the room. Note also that the proxied `/api/docs` path does not render Swagger UI, because the page requests `/openapi.json` at the site root and Nginx routes `/` to the frontend; `/api/openapi.json` does proxy correctly, so the raw schema is retrievable that way.
 
 ---
 
@@ -189,7 +189,7 @@ docker compose exec backend python -m pytest tests/unit/          # API, models,
 docker compose exec backend python -m pytest tests/integration/   # capture workflow
 # Camera tests need real hardware AND the native pixi environment on the Pi.
 # They cannot pass in the dev container, which has no camera devices and no
-# libcamera — see backend/DEVELOPMENT.md.
+# libcamera (Dockerfile.dev installs none) — see backend/DEPENDENCIES.md.
 
 # Run with verbose output
 docker compose exec backend python -m pytest -v
@@ -251,21 +251,25 @@ Images are stored under the active projects root, `/var/lib/dtk/projects/` by de
 ```
 <projects root>/
 ├── project_1/
+│   ├── collection_a/            ← captures into a collection land here
+│   │   └── images/
+│   │       └── main/
+│   │           ├── 20260109_143652_123_c0.jpg
+│   │           ├── 20260109_143652_123_c1.jpg
+│   │           └── ...
 │   ├── images/
-│   │   └── main/           ← captured images
-│   │       ├── 20260109_143652_123_c0.jpg
-│   │       ├── 20260109_143652_123_c1.jpg
-│   │       └── ...
-│   └── packages/           ← export packages
+│   │   └── main/                ← captures with no collection
+│   └── packages/                ← created at init, currently unused
 ├── project_2/
 │   └── ...
 ```
 
-Three things this layout does **not** include, contrary to how it was previously documented:
+Four things worth knowing, each of which the previous version of this section got wrong:
 
-- **There is no `temp/` or `trash/` directory.** `project_init()` (`backend/capture/project_manager.py:150`) creates only `packages/`; `images/main/` appears on the first capture. Neither word occurs anywhere in the backend.
-- **Deletion is permanent, not soft.** Deleting a record or an image calls `unlink()` on the file (`backend/app/api/records.py:223, 284`). There is no recovery directory, and on a backup-less appliance a delete is final.
-- **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the microSD path above.
+- **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
+- **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
+- **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files (`backend/app/api/records.py:223`), as does deleting a single image (`:414`). There is no recovery directory, and on a backup-less appliance a delete is final.
+- **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
 
 ### Filename Format
 
@@ -602,7 +606,9 @@ def gallery_view(token):
    Response: { needs_setup: boolean }
    → true  = no user exists yet; route to first-run setup
      false = route to login
-   The shipped frontend calls this before anything else.
+   The frontend calls this on the unauthenticated path, from the welcome
+   and setup routes; an existing session in localStorage short-circuits
+   straight to the dashboard without it.
 
 2. POST /auth/register
    Request: { username, email, password }
@@ -763,7 +769,7 @@ The repository root `.env.example` is the authoritative list of supported variab
 
 The server host and port are not configurable by environment: the pixi `start` and `dev` tasks hardcode `--host 0.0.0.0 --port 8000`, so the native backend listens on every interface.
 
-What keeps port 8000 off the venue LAN is the host firewall installed by `scripts/setup-firewall.sh`: ufw defaults to deny-inbound and allows 8000/tcp only from the appliance's own compose network (`172.30.0.0/24`), so Nginx can reach the backend and nothing else on the LAN can. Nginx itself is a reverse proxy, not a filter — it restricts nothing on its own. Container ports are handled separately, by loopback binds in `docker-compose.yml`, because Docker's iptables chains sit ahead of ufw's.
+What keeps port 8000 off the venue LAN is the host firewall installed by `scripts/setup-firewall.sh`: ufw defaults to deny-inbound and allows 8000/tcp only from the appliance's own compose network (`172.30.0.0/24`), so Nginx can reach the backend and nothing else on the LAN can. Nginx itself is a reverse proxy, not a filter — it restricts nothing on its own. Container ports are handled separately, because Docker's iptables chains sit ahead of ufw's — but only some are loopback-bound. `docker-compose.yml` binds the database to `127.0.0.1:5432` and the production frontend to `127.0.0.1:3000`, while the backend service publishes `8000:8000` and the dev overlay publishes `5173:5173`, both on all interfaces. On a development machine on an untrusted network, those two are exposed.
 
 Changing the address the backend actually binds to, as opposed to filtering access to it, means editing the uvicorn invocation in `backend/pixi.toml`.
 
