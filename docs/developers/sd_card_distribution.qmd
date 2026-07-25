@@ -110,13 +110,17 @@ Tools like [PiShrink](https://github.com/Drewsif/PiShrink) can reduce the image 
 ## Never add a credential to `.env` by hand
 The per-unit generation above covers `SECRET_KEY` and `DATABASE_PASSWORD`. It does not cover anything you add yourself while preparing a card — and whatever sits in `.env` at imaging time is copied into every clone of that image. The Rionegro card shipped with a live GitHub personal access token in plaintext in `~/dtk/.env`. It was unused and has been revoked, but nothing in the software put it there.
 
-Provisioning never needs a token: the repositories are public and `setup.sh` clones them anonymously. If a private fetch is ever required, pass the token to that one command and never write it to disk:
+Provisioning never needs a token: the repositories are public and `setup.sh` clones them anonymously. If a private fetch is ever required, read the token from a prompt so it never appears on the command line, then clear it:
 
 ```bash
-GH_TOKEN=… gh repo clone UCSB-AMPLab/<repo>   # one command; nothing persisted
+read -rs -p "Token: " GH_TOKEN && export GH_TOKEN
+gh repo clone UCSB-AMPLab/<repo>
+unset GH_TOKEN
 ```
 
-Never embed a token in a remote URL — it persists in `.git/config` and travels with the image. Before imaging a master card, diff `.env` against `.env.example`: it should carry no keys the template does not have.
+Do **not** pass it inline as `GH_TOKEN=… gh …`: that writes the token verbatim into `~/.bash_history`, which sits on the card and is copied into the image along with everything else. For the same reason, never embed a token in a remote URL — it persists in `.git/config` and travels with the image.
+
+Before imaging a master card, diff `.env` against `.env.example`: it should carry no keys the template does not have.
 :::
 
 ---
