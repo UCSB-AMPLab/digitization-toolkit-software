@@ -153,7 +153,7 @@ The fastest way to test endpoints is using the interactive documentation.
      "date": "1500-01-01"
    }
    ```
-3. Click "Execute": view 201 Created response with record ID
+3. Click "Execute": view the 200 OK response with the record ID (this endpoint does not set 201; `POST /collections/` does)
 
 ##### Swagger UI Features
 
@@ -354,21 +354,27 @@ Project (name, description)
 
 ### Performance Metrics
 
-**Capture Speed:**
-- Single capture: ~3–4 seconds (camera init + capture + save)
-- Dual capture: ~5–7 seconds (parallel capture with 20ms stagger)
-- Database insert: ~100–150ms per record
+Measured on a Pi 5 during hardware validation, 23–24 July 2026, at the medium
+preset. Earlier figures in this section were estimates and were roughly double
+the real throughput and six to eight times the real file sizes.
 
-**Throughput (Medium Resolution):**
-- Pages per hour: ~880 pph (single camera)
-- Book (300 pages): ~20 minutes
-- Dual camera: Effectively 1760 pph
+**Dual capture, seconds per pair:**
 
-**Storage Requirements:**
-- Low resolution (2312×1736): ~2–3 MB per image
-- Medium resolution (3840×2160): ~4–5 MB per image
-- High resolution (4624×3472): ~8–10 MB per image
-- 100-page book at medium: ~400–500 MB
+| Backend | Measured | Note |
+|---|---|---|
+| gphoto2 (Canon EOS 1500D ×2) | ~4 s | |
+| picamera2 (IMX519 ×2) | 7–8 s | too slow for production; NEH-173 tracks the fix |
+
+Both already fire the two cameras in parallel (ThreadPool with a 20 ms stagger,
+`capture/service.py:320`), so the cost is per-capture work, not serialisation.
+
+**Throughput** follows from the above: roughly 900 pages/hour on picamera2 and
+1800 on gphoto2, at two pages per capture. Treat these as ceilings — they
+exclude page turning, which dominates in practice.
+
+**Storage,** medium preset: paired JPEGs measured **560–780 KB each**, so a
+100-page book is roughly 60–80 MB. The low and high presets have not been
+measured; scale by pixel count if you need an estimate, and say that you did.
 
 ---
 
@@ -526,8 +532,12 @@ def configuration_page_flow(token):
 ### Live Scan Page Example
 
 ```python
-def live_scan_workflow(token, project_name="BookScanning2024"):
-    """Workflow for the live scan page: capture → auto-save → optional metadata update."""
+def live_scan_workflow(token, project_name):
+    """Workflow for the live scan page: capture → auto-save → optional metadata update.
+
+    project_name must already exist: POST /cameras/capture returns 422 for a
+    name with no matching project row (cameras.py:_resolve_capture_target).
+    """
     headers = {"Authorization": f"Bearer {token}"}
 
     # 1. Get cameras
@@ -554,14 +564,13 @@ def live_scan_workflow(token, project_name="BookScanning2024"):
         return
     print(f"Captured: {result['file_path']}")
 
-    # 3. Find the latest record and update its metadata
-    records = requests.get(
-        f"{BASE_URL}/records/",
-        headers=headers,
-        params={"limit": 1}
-    ).json()
-    if records:
-        rec_id = records[0]['id']
+    # 3. Update the metadata of the record this capture created.
+    #    Use record_id from the capture response — do NOT list records and
+    #    take the first: GET /records/ orders by id ASCENDING (records.py:126),
+    #    so `limit=1` returns the OLDEST record in the database, and patching
+    #    it would overwrite an unrelated page's metadata.
+    rec_id = result.get('record_id')
+    if rec_id:
         update_resp = requests.patch(
             f"{BASE_URL}/records/{rec_id}",
             headers=headers,
@@ -644,7 +653,9 @@ def gallery_view(token):
    → Use role to determine which UI sections to show:
      - admin:    full dashboard + user management panel
      - operator: full dashboard, no user management
-     - reviewer: read-only views only
+     - reviewer: read-only for records, projects and collections, BUT
+       reviewers drive the QA workflow — they may annotate and change
+       record status (approve/reject). See allow_read_only in auth.py:171.
 
 6. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
@@ -654,8 +665,11 @@ def gallery_view(token):
    Headers: { Authorization: Bearer <old_token> }
    Response: { access_token, token_type }
 
-8. On logout:
+8. On logout, clear BOTH keys:
    localStorage.removeItem("access_token")
+   localStorage.removeItem("auth_user")
+   The client stores the user alongside the token (stores/auth.ts:78-79)
+   and treats a token without auth_user as logged out.
 ```
 
 ---
@@ -717,14 +731,16 @@ def gallery_view(token):
 **API Calls:**
 1. `GET /records/` — List all records (reviewer+)
 2. `GET /records/{id}` — Get full record with images (reviewer+)
-3. `GET /records/images/{img_id}/thumbnail?token=<jwt>` — Display thumbnails (reviewer+)
+3. `GET /records/images/{img_id}/thumbnail?token=<token>` — Display thumbnails (reviewer+)
 4. `DELETE /records/{id}` — Delete record (operator+)
 
 **Frontend Flow:**
 ```
 1. GET /records/?limit=50 → display grid
 2. Group by typology
-3. Use /records/images/{img_id}/thumbnail?token=<jwt> for <img src>
+3. Use /records/images/{img_id}/thumbnail?token=<token> for <img src>
+   (the session token is a custom HMAC-SHA256 string, not a JWT — see
+    core/security.py:40-51; using JWT libraries here is a documented no)
 4. Click record → GET /records/{id} → detail view
 5. If operator/admin: show edit/delete controls
 ```
@@ -823,13 +839,13 @@ This is the bound on how long a deactivated user keeps a working session, so sho
 - **ORM**: SQLAlchemy 2.0
 - **Engine**: PostgreSQL
 - **Relationships**: Proper foreign keys with cascading deletes
-- **Timestamps**: Automatic `created_at`/`modified_at` on all resources
-- **Migrations**: Alembic (`alembic upgrade head` runs automatically on container startup)
+- **Timestamps**: `created_at` on every model; `modified_at` only on `Record` (`models/record.py:37`)
+- **Migrations**: Alembic. Automatic only in the dev container, whose command is `alembic upgrade head && uvicorn …`. Production runs `pixi run start`, a bare uvicorn; the Pi is migrated by `scripts/update.sh`, and `assert_schema_at_head()` fails startup if that has not happened
 
 ### Validation
 - **Schemas**: Pydantic v2 for all inputs/outputs
 - **Type Safety**: Full type hints throughout
-- **Email Validation**: Verified email format for user registration
+- **Email Validation**: A basic format regex, deliberately — `pydantic[email]` is excluded to keep the appliance offline-capable (`schemas/user.py:15-21`)
 
 ### Extensibility
 - **Typology System**: 6 built-in document types (book, dossier, document, map, planimetry, other)
