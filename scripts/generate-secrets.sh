@@ -1,5 +1,5 @@
 #!/bin/bash
-# Per-unit secret generation for cloned SD cards (NEH-158)
+# Per-unit secret generation for cloned SD cards.
 #
 # The distribution model is "provision a golden card, image it, flash many":
 # anything on the card at imaging time — .env AND the initialized Postgres
@@ -24,10 +24,7 @@
 # the local socket inside the db container, which needs no old password),
 # then .env is rewritten atomically, then the marker is stamped. A power cut
 # anywhere in between leaves a state this script converges from on next boot.
-#
-# Backend contract (NEH-54/NEH-55): by the time the backend starts with
-# APP_ENV=production, real secrets exist in .env.
-
+# Production startup requires valid SECRET_KEY, DATABASE_PASSWORD and BOOTSTRAP_TOKEN to be present in .env when APP_ENV is set to production
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,8 +61,25 @@ fi
 
 get_env() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | xargs; }
 
+# Atomically update a .env key, preserving owner/mode. Used for BOOTSTRAP_TOKEN backfill.
+set_env_atomic() {
+    local var="$1" val="$2" tmp
+    tmp="$(mktemp "$PROJECT_ROOT/.env.XXXXXX")"
+    cp "$ENV_FILE" "$tmp"
+    if grep -qE "^$var=" "$tmp"; then
+        sed -i "s|^$var=.*|$var=$val|" "$tmp"
+    else
+        echo "$var=$val" >> "$tmp"
+    fi
+    chown --reference="$ENV_FILE" "$tmp"
+    chmod --reference="$ENV_FILE" "$tmp"
+    mv "$tmp" "$ENV_FILE"
+    sync
+}
+
 SECRET_KEY="$(get_env SECRET_KEY || true)"
 DB_PASSWORD="$(get_env DATABASE_PASSWORD || true)"
+BOOTSTRAP_TOKEN="$(get_env BOOTSTRAP_TOKEN || true)"
 DB_USER="$(get_env DATABASE_USER || true)"; DB_USER="${DB_USER:-user}"
 DB_NAME="$(get_env DATABASE_NAME || true)"; DB_NAME="${DB_NAME:-digitization_toolkit}"
 
@@ -81,13 +95,27 @@ is_placeholder_dbpass() {
         *) return 1 ;;
     esac
 }
+is_placeholder_bootstrap() {
+    # The bootstrap token has no shared "example" value; empty is the only placeholder.
+    [ -z "$1" ]
+}
+
+# Backfill BOOTSTRAP_TOKEN without changing existing secrets.
+# Used by keep-existing-secrets paths; rotate paths regenerate it inline.
+backfill_bootstrap_token() {
+    if is_placeholder_bootstrap "$BOOTSTRAP_TOKEN"; then
+        log "generating first-user BOOTSTRAP_TOKEN"
+        set_env_atomic BOOTSTRAP_TOKEN "$(openssl rand -hex 32)"
+    fi
+}
 
 # ── Decide ──────────────────────────────────────────────────────────────────
 # The marker fast path still verifies the secrets are real: if .env was ever
 # manually reverted to placeholders, a matching marker must not mask it.
 if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SERIAL" ] \
    && ! is_placeholder_secret "$SECRET_KEY" && ! is_placeholder_dbpass "$DB_PASSWORD"; then
-    log "secrets already generated on this unit — nothing to do"
+    log "secrets already generated on this unit; nothing to do"
+    backfill_bootstrap_token
     exit 0
 fi
 
@@ -96,16 +124,18 @@ if is_placeholder_secret "$SECRET_KEY" || is_placeholder_dbpass "$DB_PASSWORD"; 
 elif [ ! -f "$MARKER" ]; then
     # Real secrets but no provenance record: a hand-provisioned unit (e.g. the
     # Rionegro card). Adopt them — never rotate secrets we didn't generate.
-    log "real secrets with no provenance marker — adopting as hand-provisioned"
+    log "Real secrets with no provenance marker; adopting as hand-provisioned"
     echo "$SERIAL" > "$MARKER"
+    backfill_bootstrap_token
     exit 0
 else
-    REASON="marker from another machine ($(cat "$MARKER")) — this card is a clone"
+    REASON="Marker from another machine ($(cat "$MARKER")); this card is a clone"
 fi
 
 log "generating per-unit secrets: $REASON"
 NEW_SECRET="$(openssl rand -hex 32)"
 NEW_DBPASS="$(openssl rand -hex 24)"
+NEW_BOOTSTRAP="$(openssl rand -hex 32)"
 
 # ── 1. Rotate the Postgres password first (crash-safe ordering) ─────────────
 # Only needed when a data directory already exists (cloned or test-booted
@@ -123,7 +153,7 @@ if [ -f "$PG_DATA/PG_VERSION" ]; then
             break
         fi
         if [ "$i" -eq 30 ]; then
-            log "ERROR: database did not become ready — leaving secrets untouched"
+            log "ERROR: database did not become ready; leaving secrets untouched"
             $COMPOSE stop db >/dev/null 2>&1 || true
             exit 1
         fi
@@ -134,7 +164,7 @@ if [ -f "$PG_DATA/PG_VERSION" ]; then
     $COMPOSE stop db >/dev/null
     log "Postgres password rotated"
 else
-    log "no Postgres data directory yet — initdb will use the new password"
+    log "No Postgres data directory yet; initdb will use the new password"
 fi
 
 # ── 2. Rewrite .env atomically ───────────────────────────────────────────────
@@ -150,6 +180,7 @@ TMP_ENV="$(mktemp "$PROJECT_ROOT/.env.XXXXXX")"
 cp "$ENV_FILE" "$TMP_ENV"
 set_env SECRET_KEY "$NEW_SECRET"
 set_env DATABASE_PASSWORD "$NEW_DBPASS"
+set_env BOOTSTRAP_TOKEN "$NEW_BOOTSTRAP"
 chown --reference="$ENV_FILE" "$TMP_ENV"
 chmod --reference="$ENV_FILE" "$TMP_ENV"
 mv "$TMP_ENV" "$ENV_FILE"
@@ -158,4 +189,4 @@ sync
 # ── 3. Stamp provenance ──────────────────────────────────────────────────────
 echo "$SERIAL" > "$MARKER"
 sync
-log "done — this unit now has its own SECRET_KEY and DATABASE_PASSWORD"
+log "Done. this unit now has its own SECRET_KEY, DATABASE_PASSWORD and BOOTSTRAP_TOKEN"
