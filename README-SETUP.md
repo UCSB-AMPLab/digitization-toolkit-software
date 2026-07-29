@@ -1,6 +1,6 @@
 # Setup Raspberry Pi 5 + ArduCam IMX519 — rama `dev`
 
-Guía paso a paso para dejar corriendo el `digitization-toolkit` en una Raspberry Pi 5 recién inicializada, con dos cámaras ArduCam IMX519, sobre la rama `dev`.
+Guía paso a paso completa: desde flashear la microSD hasta dejar corriendo el `digitization-toolkit` en una Raspberry Pi 5 con dos cámaras ArduCam IMX519, sobre la rama `dev`.
 
 ## Requisitos previos
 
@@ -8,7 +8,29 @@ Guía paso a paso para dejar corriendo el `digitization-toolkit` en una Raspberr
 - 2x Arducam IMX519 (SKU: B0371)
 - 2x cable ribbon CSI 22-a-22 pines (15-20 cm recomendado)
 - Fuente oficial 5V/3A o superior (27W recomendado)
-- microSD con Raspberry Pi OS Lite (64-bit) — **no** la versión Trixie/Debian 13, este stack está validado sobre Bookworm/Debian 12
+- microSD (16GB o más)
+
+---
+
+## 0. Flashear la microSD con Raspberry Pi Imager
+
+⚠️ **Importante:** la opción "recomendada" por defecto de Raspberry Pi Imager (`Raspberry Pi OS (64-bit)`) actualmente instala **Debian 13 (Trixie)**, que este stack **no soporta** — Trixie trae Python 3.13, incompatible con los bindings de `libcamera`/`picamera2` que el proyecto necesita (Python 3.11 vía `pixi`).
+
+**Selecciona en su lugar una de estas dos** (ambas son Debian 12 "Bookworm", 64-bit):
+
+- **`Raspberry Pi OS (Legacy, 64-bit) Lite`** — sin entorno de escritorio, más liviana (422.6 MB). Recomendada si vas a operar principalmente por SSH/terminal.
+- **`Raspberry Pi OS (Legacy, 64-bit) Full`** — con entorno de escritorio y aplicaciones. Más cómoda si prefieres interfaz gráfica mientras configuras.
+
+Ambas funcionan igual de bien para este proyecto — la diferencia es solo de comodidad/recursos, no de compatibilidad.
+
+**Pasos en Raspberry Pi Imager:**
+
+1. Elige el dispositivo: **Raspberry Pi 5**.
+2. Elige el sistema operativo: una de las dos opciones "Legacy, 64-bit" mencionadas arriba (busca en la lista completa, no en la entrada genérica de arriba).
+3. En **opciones avanzadas** (ícono de engranaje ⚙️):
+   - **Usuario:** `pi` (obligatorio — los scripts de servicio e instalación de kiosko tienen hardcodeado `User=pi` y `/home/pi/dtk`)
+   - **Habilitar SSH** (si vas a hacer provisión headless)
+4. Flashea la microSD.
 
 ---
 
@@ -111,6 +133,7 @@ rpicam-jpeg --camera 1 -o cam1.jpg
 | No aparece `/dev/video0` | `dmesg \| grep imx` |
 | Sospecha de undervoltage | `vcgencmd get_throttled` → `0x0` = saludable, distinto de cero = usar fuente oficial |
 | Logs de debug (si `dtdebug=1`) | `dmesg \| grep -i imx` y `sudo vcdbg log msg` |
+| `ModuleNotFoundError: No module named 'libcamera._libcamera'` al correr el backend | El sistema operativo no es Bookworm (probablemente instalaste Trixie por error). Verifica con `cat /etc/os-release` — si dice `trixie`, tienes que reflashear con una opción "Legacy" (ver paso 0) |
 
 ---
 
@@ -121,29 +144,86 @@ Ninguno de estos viene con Raspberry Pi OS Lite recién flasheado:
 ```bash
 sudo apt update && sudo apt install -y git
 curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker $USER          # re-login para que tome efecto
+sudo usermod -aG docker $USER
 ```
-
-Cierra sesión y vuelve a entrar (o `newgrp docker`).
 
 ```bash
 curl -fsSL https://pixi.sh/install.sh | bash
 ```
 
-Cierra y abre la terminal de nuevo (o `source ~/.bashrc`) para que `pixi` quede en el `PATH`.
+Aplica ambos cambios (grupo `docker` + `PATH` de `pixi`) sin cerrar la terminal:
+
+```bash
+exec bash -l
+```
+
+O manualmente, si prefieres verificar cada uno por separado:
+```bash
+newgrp docker
+source ~/.bashrc
+```
 
 ---
 
-## 5. Clonar el repositorio en `dev`
+## 5. Configurar acceso SSH a GitHub
+
+Los submódulos del repo (`backend`, `frontend`, `wiki`) están registrados con URLs SSH — necesitas una llave SSH asociada a tu cuenta de GitHub antes de clonar.
+
+**Generar la llave:**
+
+```bash
+ssh-keygen -t ed25519 -C "catalina-pi"
+```
+
+- Dale **Enter** para aceptar la ubicación por defecto (`~/.ssh/id_ed25519`).
+- Dale **Enter** dos veces más para dejarla sin passphrase (Enter passphrase / Enter same passphrase again).
+
+**Copiar la llave pública:**
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+Copia la línea completa que empieza con `ssh-ed25519 AAAA...`.
+
+**Agregarla a GitHub:**
+
+1. Ve a [github.com/settings/ssh/new](https://github.com/settings/ssh/new)
+2. **Title:** algo descriptivo, ej. `Raspberry Pi Captua`
+3. **Key type:** Authentication Key
+4. **Key:** pega la llave copiada
+5. Click en **Add SSH key**
+
+**Verificar la conexión:**
+
+```bash
+ssh -T git@github.com
+```
+
+La primera vez te pedirá confirmar el host — escribe `yes`. Deberías ver:
+
+```
+Hi <tu-usuario>! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+---
+
+## 6. Clonar el repositorio en `dev`
 
 ```bash
 git clone --recurse-submodules -b dev https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
 cd ~/dtk
 ```
 
+Si por algún motivo el clonado de submódulos falla con `Permission denied (publickey)`, confirma que el paso 5 se completó correctamente y corre:
+
+```bash
+git submodule update --init --recursive
+```
+
 ---
 
-## 6. Provisión inicial (requiere internet)
+## 7. Provisión inicial (requiere internet)
 
 ```bash
 sudo ./scripts/setup.sh
@@ -153,7 +233,7 @@ Este script crea el `.env` si no existe, construye las imágenes Docker, instala
 
 ---
 
-## 7. Link de cámaras (específico del proyecto)
+## 8. Link de cámaras (específico del proyecto)
 
 ```bash
 cd backend
@@ -163,7 +243,7 @@ pixi run setup-camera-link
 
 ---
 
-## 8. Arrancar el sistema
+## 9. Arrancar el sistema
 
 **Contenedores** (Postgres + Nginx, overlay de producción para Pi):
 
@@ -183,7 +263,7 @@ pixi run start
 
 ---
 
-## 9. Verificar que todo levantó
+## 10. Verificar que todo levantó
 
 ```bash
 curl http://localhost:8000/health   # → {"status":"ok"}
@@ -196,13 +276,19 @@ curl -I http://localhost            # → HTTP 200
 
 ---
 
-## 10. Verificar detección de cámaras a nivel de aplicación
+## 11. Verificar detección de cámaras a nivel de aplicación
 
-```bash
-curl http://localhost:8000/cameras/devices
+El endpoint `/cameras/devices` requiere autenticación (JWT) — un `curl` sin sesión iniciada devolverá `{"detail":"Not authenticated"}`, lo cual **no** significa que las cámaras fallen. Para probarlo de verdad:
+
+1. Abre `http://localhost` en el navegador (o la IP de la Pi desde otra máquina en la misma red).
+2. Regístrate/inicia sesión.
+3. Ve a la sección de cámaras/captura de la interfaz y confirma que detecta ambas ArduCam.
+
+Si el backend no las detecta y el log muestra algo como:
 ```
-
-Debería devolver ambas ArduCam — si devuelve `[]`, revisa el paso 3 (detección a nivel de sistema operativo) antes de asumir que es un problema del backend.
+Failed to list camera devices: picamera2 failed to import: ModuleNotFoundError("No module named 'libcamera._libcamera'")
+```
+revisa la tabla de troubleshooting del paso 3 — casi siempre es un problema de versión de sistema operativo (Trixie en vez de Bookworm).
 
 ---
 
@@ -210,3 +296,4 @@ Debería devolver ambas ArduCam — si devuelve `[]`, revisa el paso 3 (detecci�
 
 - **No ejecutes todavía** `./scripts/install-service.sh` ni `./scripts/install-kiosk-service.sh` — son para el arranque automático en modo kiosko de producción final, no para desarrollo/pruebas sobre `dev`.
 - El overlay `docker-compose.pi.yml` es requerido en Pi: bind-mountea Postgres en `/var/lib/dtk/db/postgres` (en vez del volumen nombrado `postgres_data` de la compose base) y agrega el reverse proxy de Nginx.
+- Si reflasheas la microSD en el futuro, la llave SSH se pierde junto con todo lo demás — deberás repetir el paso 5 (generar una nueva y agregarla a GitHub), o respaldar `~/.ssh` a otra máquina antes de reflashear si prefieres reutilizar la misma.
