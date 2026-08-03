@@ -373,8 +373,8 @@ for i in $(seq 1 30); do
     fi
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s — cannot take a safe backup."
-        echo "  Aborting the update; the running appliance was not touched."
-        exit 1   # EXIT trap: pre-stop path, scoped cleanup only
+        echo "  Aborting the update."
+        exit 1   # EXIT trap reports the actual state (touched or untouched)
     fi
     sleep 2
 done
@@ -395,9 +395,8 @@ set +o pipefail
 DUMP_BYTES="$(wc -c < "$DUMP_FILE" | tr -d ' ')"
 if [ "${DUMP_BYTES:-0}" -lt 100 ]; then
     echo "✗ Backup looks empty (${DUMP_BYTES} bytes) — pg_dump likely failed."
-    echo "  Refusing to migrate without a real backup. Aborting; the running"
-    echo "  appliance was not touched."
-    exit 1   # EXIT trap: pre-stop path removes the bad dump, scoped cleanup only
+    echo "  Refusing to migrate without a real backup. Aborting."
+    exit 1   # EXIT trap removes the bad dump and reports the actual state
 fi
 BACKUP_VERIFIED=1
 echo "  ✓ Backup written (${DUMP_BYTES} bytes)."

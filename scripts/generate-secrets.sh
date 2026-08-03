@@ -151,8 +151,16 @@ if [ -f "$PG_DATA/PG_VERSION" ]; then
     # existing container (or drag the project network into reconciliation)
     # from this boot-time oneshot — it just needs A running db to ALTER the
     # password through (NEH-214 class). If we started it, we stop it below.
+    # A probe failure must NOT read as "db not running" — that would make the
+    # cleanup below stop a database this script did not start. Failing the
+    # oneshot blocks dtk.service (Requires=), which is the designed loud
+    # failure: if docker is broken the app cannot run anyway.
+    if ! RUNNING_SERVICES="$($COMPOSE ps --services --status running 2>/dev/null)"; then
+        log "ERROR: cannot determine container state (docker compose ps failed); leaving secrets untouched"
+        exit 1
+    fi
     DB_WAS_RUNNING=0
-    if [ -n "$($COMPOSE ps --services --status running 2>/dev/null | grep -x db || true)" ]; then
+    if echo "$RUNNING_SERVICES" | grep -qx db; then
         DB_WAS_RUNNING=1
     else
         $COMPOSE up -d --no-recreate db >/dev/null
