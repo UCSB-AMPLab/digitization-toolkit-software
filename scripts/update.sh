@@ -89,6 +89,9 @@ echo ""
 SERVICE_STOPPED=0
 UPDATE_OK=0
 DB_STARTED_BY_US=0
+# Set the moment anything changes container state before the service stop —
+# the abort message must never claim "nothing changed" after that (NEH-215).
+STACK_TOUCHED=0
 DUMP_FILE=""
 BACKUP_VERIFIED=0
 
@@ -101,8 +104,10 @@ restore_service() {
     echo "  Something went wrong during the update. Restarting the unit"
     echo "  so it is not left dead..."
     echo ""
-    # Make sure nothing is half-up before we restart cleanly.
-    $COMPOSE down >/dev/null 2>&1 || true
+    # Make sure nothing is half-up before we restart cleanly. --remove-orphans:
+    # containers from services dropped between releases must go too, or they
+    # keep an endpoint on the project network and wedge the restart (NEH-214).
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
     systemctl start dtk 2>/dev/null || true
     sleep 5
     if systemctl is-active --quiet dtk; then
@@ -120,6 +125,86 @@ restore_service() {
     echo ""
 }
 
+# Positive listen check on the db's published port (127.0.0.1:5432,
+# docker-compose.yml). The container-internal healthcheck can pass while the
+# port is dead on the host — the Rionegro 2026-08-03 failure mode. grep
+# without -q reads to EOF, so the pipeline status is grep's own.
+db_port_listening() {
+    ss -ltn 2>/dev/null | grep -E '[:.]5432[[:space:]]' >/dev/null
+}
+
+# The abort happened after container state had already been changed (the db
+# was started for the backup) but before the service was stopped. Undo what
+# is safe to undo, then report the REAL state of the unit. Never print
+# "nothing changed" from here: Rionegro got exactly that message on
+# 2026-08-03 while its database sat stopped and detached from the network.
+report_touched_abort() {
+    if [ -n "$DUMP_FILE" ] && [ "$BACKUP_VERIFIED" -eq 0 ]; then
+        rm -f "$DUMP_FILE"
+    fi
+    local svc_active=0
+    if systemctl is-active --quiet dtk 2>/dev/null; then
+        svc_active=1
+    fi
+    if [ "$DB_STARTED_BY_US" -eq 1 ] && [ "$svc_active" -eq 0 ]; then
+        # We started db and the service is down: stopping db returns the unit
+        # to its pre-update state. When the service IS active, db stays up —
+        # the backend needs it, and it can only have been down before because
+        # the unit was already degraded.
+        $COMPOSE stop db >/dev/null 2>&1 || true
+    fi
+    echo ""
+    echo "✗ Update aborted AFTER container state had been touched."
+    echo "  Actual state of this unit right now:"
+    if [ "$svc_active" -eq 1 ]; then
+        echo "    • dtk service:  active"
+    else
+        echo "    • dtk service:  NOT active"
+    fi
+    echo "    • containers:"
+    $COMPOSE ps --format '        {{.Service}}: {{.State}}' 2>/dev/null \
+        || echo "        (docker compose ps failed)"
+    if ! command -v ss >/dev/null 2>&1; then
+        echo "    • database:     (cannot check port 5432 — ss unavailable)"
+    elif db_port_listening; then
+        echo "    • database:     listening on 127.0.0.1:5432 ✓"
+    else
+        echo "    • database:     NOT listening on 127.0.0.1:5432 ✗"
+        echo ""
+        echo "  The database is not serving. To recover, run:"
+        echo "    sudo $SCRIPT_DIR/stop.sh && sudo systemctl start dtk"
+    fi
+    echo ""
+}
+
+# After a full teardown nothing from this compose project may survive: a
+# leftover container from a service that no longer exists in the compose
+# files keeps an endpoint on the project network, and the next start then
+# brings up a db detached from its published port (NEH-214). Failing here
+# (under set -e) trips the EXIT trap, which restores the previous stack.
+assert_stack_gone() {
+    local project leftovers
+    project="$($COMPOSE config 2>/dev/null | sed -n 's/^name: *//p' | head -n 1)"
+    if [ -z "$project" ]; then
+        echo "  ⚠ Could not determine the compose project name — skipping the"
+        echo "    teardown completeness check."
+        return 0
+    fi
+    leftovers="$(docker ps -aq --filter "label=com.docker.compose.project=$project" 2>/dev/null || true)"
+    if [ -n "$leftovers" ]; then
+        echo "✗ Teardown incomplete — containers from project '$project' survive:"
+        docker ps -a --filter "label=com.docker.compose.project=$project" \
+            --format '    {{.Names}}  ({{.Status}})' 2>/dev/null || true
+        return 1
+    fi
+    if docker network inspect "${project}_default" >/dev/null 2>&1; then
+        echo "✗ Teardown incomplete — network ${project}_default still exists"
+        echo "  (something outside this compose project is attached to it)."
+        return 1
+    fi
+    return 0
+}
+
 on_exit() {
     local rc=$?
     if [ "$UPDATE_OK" -eq 1 ]; then
@@ -127,18 +212,15 @@ on_exit() {
     fi
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
         restore_service
+    elif [ "$STACK_TOUCHED" -eq 1 ]; then
+        report_touched_abort
     else
-        # Pre-stop failure: the running stack was never touched. Clean up only
-        # what this script itself created.
+        # Pre-stop failure with container state untouched: clean up only what
+        # this script itself created.
         if [ -n "$DUMP_FILE" ] && [ "$BACKUP_VERIFIED" -eq 0 ]; then
             # Never leave a partial/unverified dump behind — rollback-update.sh
             # picks the newest dump and must not find a broken one.
             rm -f "$DUMP_FILE"
-        fi
-        if [ "$DB_STARTED_BY_US" -eq 1 ]; then
-            # We started the db container ourselves; stop it again. Nothing
-            # else is touched.
-            $COMPOSE stop db >/dev/null 2>&1 || true
         fi
         echo ""
         echo "✗ Update aborted before the running service was touched."
@@ -263,13 +345,25 @@ echo ""
 #    a backup failure aborts the update with the appliance untouched.
 # ---------------------------------------------------------------------------
 echo "→ Making sure the database is up so we can back it up..."
-# If the service is running, the db container is already up and we must not
-# touch it (or anything else) on failure — the stack was never stopped. Only
-# if we start db ourselves here do we stop it (and only it) when aborting.
-if ! $COMPOSE ps --services --status running 2>/dev/null | grep -qx db; then
-    DB_STARTED_BY_US=1
+# Probe container state WITHOUT mutating anything. The old unconditional
+# `up -d db` here could recreate a running db container — and try to recreate
+# the project network under the live stack — whenever the new code changed
+# the compose config or image: that is what took Rionegro down on 2026-08-03.
+# If db is already running we use it as-is; only when it is not do we start
+# it, with --no-recreate so a pending config/image change cannot recreate
+# containers while the old stack may still be serving. (--no-recreate is
+# container-scoped; the full, clean recreate happens after the service is
+# stopped, in step 7.)
+if ! RUNNING_SERVICES="$($COMPOSE ps --services --status running 2>/dev/null)"; then
+    echo "✗ Cannot determine container state (docker compose ps failed)."
+    echo "  Aborting before touching anything."
+    exit 1
 fi
-$COMPOSE up -d db
+if ! echo "$RUNNING_SERVICES" | grep -qx db; then
+    DB_STARTED_BY_US=1
+    STACK_TOUCHED=1
+    $COMPOSE up -d --no-recreate db
+fi
 
 echo "  Waiting for PostgreSQL to be ready..."
 for i in $(seq 1 30); do
@@ -279,8 +373,8 @@ for i in $(seq 1 30); do
     fi
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s — cannot take a safe backup."
-        echo "  Aborting the update; the running appliance was not touched."
-        exit 1   # EXIT trap: pre-stop path, scoped cleanup only
+        echo "  Aborting the update."
+        exit 1   # EXIT trap reports the actual state (touched or untouched)
     fi
     sleep 2
 done
@@ -301,9 +395,8 @@ set +o pipefail
 DUMP_BYTES="$(wc -c < "$DUMP_FILE" | tr -d ' ')"
 if [ "${DUMP_BYTES:-0}" -lt 100 ]; then
     echo "✗ Backup looks empty (${DUMP_BYTES} bytes) — pg_dump likely failed."
-    echo "  Refusing to migrate without a real backup. Aborting; the running"
-    echo "  appliance was not touched."
-    exit 1   # EXIT trap: pre-stop path removes the bad dump, scoped cleanup only
+    echo "  Refusing to migrate without a real backup. Aborting."
+    exit 1   # EXIT trap removes the bad dump and reports the actual state
 fi
 BACKUP_VERIFIED=1
 echo "  ✓ Backup written (${DUMP_BYTES} bytes)."
@@ -345,6 +438,14 @@ echo ""
 echo "→ Stopping service to apply migrations..."
 SERVICE_STOPPED=1
 systemctl stop dtk 2>/dev/null || true
+# systemd runs ExecStop (stop.sh) only for an ACTIVE unit. If dtk was already
+# failed or inactive, the containers can still be up under their
+# restart: unless-stopped policy — so tear down explicitly here.
+# --remove-orphans also clears containers whose service no longer exists in
+# the compose files; without it a stale container keeps an endpoint on the
+# project network and wedges every later network operation (NEH-214).
+$COMPOSE down --remove-orphans
+assert_stack_gone
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -373,7 +474,8 @@ cd "$PROJECT_ROOT"
 echo ""
 
 echo "→ Stopping database..."
-$COMPOSE down
+$COMPOSE down --remove-orphans
+assert_stack_gone
 echo ""
 
 # ---------------------------------------------------------------------------

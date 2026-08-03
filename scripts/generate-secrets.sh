@@ -147,21 +147,42 @@ NEW_BOOTSTRAP="$(openssl rand -hex 32)"
 if [ -f "$PG_DATA/PG_VERSION" ]; then
     log "rotating Postgres password for existing data directory..."
     cd "$PROJECT_ROOT"
-    $COMPOSE up -d db >/dev/null
+    # Only start db if it is not already running, and never recreate an
+    # existing container (or drag the project network into reconciliation)
+    # from this boot-time oneshot — it just needs A running db to ALTER the
+    # password through (NEH-214 class). If we started it, we stop it below.
+    # A probe failure must NOT read as "db not running" — that would make the
+    # cleanup below stop a database this script did not start. Failing the
+    # oneshot blocks dtk.service (Requires=), which is the designed loud
+    # failure: if docker is broken the app cannot run anyway.
+    if ! RUNNING_SERVICES="$($COMPOSE ps --services --status running 2>/dev/null)"; then
+        log "ERROR: cannot determine container state (docker compose ps failed); leaving secrets untouched"
+        exit 1
+    fi
+    DB_WAS_RUNNING=0
+    if echo "$RUNNING_SERVICES" | grep -qx db; then
+        DB_WAS_RUNNING=1
+    else
+        $COMPOSE up -d --no-recreate db >/dev/null
+    fi
     for i in $(seq 1 30); do
         if $COMPOSE exec -T db pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
             break
         fi
         if [ "$i" -eq 30 ]; then
             log "ERROR: database did not become ready; leaving secrets untouched"
-            $COMPOSE stop db >/dev/null 2>&1 || true
+            if [ "$DB_WAS_RUNNING" -eq 0 ]; then
+                $COMPOSE stop db >/dev/null 2>&1 || true
+            fi
             exit 1
         fi
         sleep 2
     done
     $COMPOSE exec -T db psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
         -c "ALTER USER \"$DB_USER\" WITH PASSWORD '$NEW_DBPASS';" >/dev/null
-    $COMPOSE stop db >/dev/null
+    if [ "$DB_WAS_RUNNING" -eq 0 ]; then
+        $COMPOSE stop db >/dev/null
+    fi
     log "Postgres password rotated"
 else
     log "No Postgres data directory yet; initdb will use the new password"
