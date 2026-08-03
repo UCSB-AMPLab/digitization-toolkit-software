@@ -37,7 +37,10 @@ echo ""
 echo "→ Stopping Docker containers..."
 # Must use the same compose-file pair as start.sh (base + Pi overlay), otherwise
 # services defined only in docker-compose.pi.yml (e.g. nginx) are left orphaned.
-docker compose -f docker-compose.yml -f docker-compose.pi.yml down
+# --remove-orphans: also remove containers whose service no longer exists in
+# these files (dropped between releases) — a survivor keeps an endpoint on the
+# project network and detaches the db on the next start (NEH-214).
+docker compose -f docker-compose.yml -f docker-compose.pi.yml down --remove-orphans
 
 echo ""
 echo "✓ All services stopped"

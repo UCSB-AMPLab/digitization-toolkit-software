@@ -20,7 +20,11 @@ echo "→ Starting database and frontend containers..."
 # --pull never: skip registry checks (device is offline after initial build)
 # --wait: block until services report healthy (db) or running (others) before
 # we launch the native backend below, so it doesn't race Postgres startup
-docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never --wait
+# --remove-orphans: clear containers from services dropped between releases;
+# a stale one blocks network reconciliation and detaches the db (NEH-214).
+# If clearing fails, the unit fails VISIBLY (systemd marks it failed) rather
+# than serving with a silently degraded stack.
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never --wait --remove-orphans
 
 echo ""
 echo "→ Starting native backend with pixi..."

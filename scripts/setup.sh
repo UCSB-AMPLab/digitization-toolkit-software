@@ -72,7 +72,7 @@ fi
 # 1. Stop any running services
 # ---------------------------------------------------------------------------
 echo "→ Stopping any running services..."
-$COMPOSE down 2>/dev/null || true
+$COMPOSE down --remove-orphans 2>/dev/null || true
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ for i in $(seq 1 30); do
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s."
         echo "  Check logs: docker compose logs db"
-        $COMPOSE down
+        $COMPOSE down --remove-orphans
         exit 1
     fi
     sleep 2
@@ -252,7 +252,7 @@ echo ""
 
 echo "→ Stopping database..."
 cd "$PROJECT_ROOT"
-$COMPOSE down
+$COMPOSE down --remove-orphans
 echo ""
 
 # ---------------------------------------------------------------------------

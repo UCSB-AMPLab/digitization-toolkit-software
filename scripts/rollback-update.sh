@@ -149,7 +149,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "→ Stopping the appliance..."
 systemctl stop dtk 2>/dev/null || true
-$COMPOSE down >/dev/null 2>&1 || true
+$COMPOSE down --remove-orphans >/dev/null 2>&1 || true
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ for i in $(seq 1 30); do
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s. Aborting."
         echo "  The dump at $DUMP_FILE is intact; you can retry the rollback."
-        $COMPOSE down >/dev/null 2>&1 || true
+        $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
         exit 1
     fi
     sleep 2
@@ -193,7 +193,7 @@ if ! gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$
     echo "  The database may be in a partial state. The dump file itself is"
     echo "  intact at: $DUMP_FILE"
     echo "  Do NOT start the service until this is resolved. Get technical help."
-    $COMPOSE down >/dev/null 2>&1 || true
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
     exit 1
 fi
 set +o pipefail
@@ -201,7 +201,7 @@ echo "  ✓ Database restored from backup."
 echo ""
 
 echo "→ Stopping the database container..."
-$COMPOSE down
+$COMPOSE down --remove-orphans
 echo ""
 
 # ---------------------------------------------------------------------------
