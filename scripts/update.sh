@@ -243,11 +243,13 @@ echo "→ Version being installed: $CURRENT_SHA"
 # Manual-recovery snapshot, taken BEFORE any build or dependency work so the
 # pre-update state is knowable even if this update aborts early (NEH-216).
 # Informational only: rollback-update.sh never reads it. Its inputs — the
-# dump and pre-update-SHA — are still written together in step 5 so they
-# always pair; recording pre-update-SHA this early instead would let an
-# abort-during-build pair a fresh SHA with a stale dump.
+# dump and pre-update-SHA — are still written together in step 5, so the
+# NEWEST dump and the recorded SHA correspond; older retained dumps do not
+# (rollback-update.sh warns when an older dump is selected). Recording
+# pre-update-SHA this early instead would let an abort-during-build pair a
+# fresh SHA with a stale dump.
 STATE_FILE="$BACKUP_DIR/pre-update-state-$(date +%Y%m%d-%H%M%S)"
-{
+if {
     echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
     echo "installing-superproject: $CURRENT_SHA"
     if [ -f "$LAST_DEPLOYED_SHA_FILE" ]; then
@@ -258,8 +260,14 @@ STATE_FILE="$BACKUP_DIR/pre-update-state-$(date +%Y%m%d-%H%M%S)"
     echo "submodules:"
     run_as_user git -C "$PROJECT_ROOT" submodule status 2>/dev/null || echo "  (unavailable)"
     echo "pixi: $(run_as_user "$PIXI_BIN" --version 2>/dev/null || echo '(unavailable)')"
-} > "$STATE_FILE" || true
-echo "  Pre-update state recorded: $STATE_FILE"
+} > "$STATE_FILE" 2>/dev/null; then
+    echo "  Pre-update state recorded: $STATE_FILE"
+else
+    echo "  ⚠ Could not write the pre-update state file ($STATE_FILE) —"
+    echo "    check free space on /var/lib/dtk. Continuing; the file is"
+    echo "    informational only."
+    rm -f "$STATE_FILE"
+fi
 # Same retention policy as the dumps.
 # shellcheck disable=SC2012
 ls -1t "$BACKUP_DIR"/pre-update-state-* 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | while read -r old; do
