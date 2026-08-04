@@ -147,8 +147,10 @@ curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER
 ```
 
+Instala la versión exacta de `pixi` que usa el proyecto — las versiones anteriores no pueden leer el formato actual del `pixi.lock` (ver `scripts/setup.sh`):
+
 ```bash
-curl -fsSL https://pixi.sh/install.sh | bash
+curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.73.0 bash
 ```
 
 Aplica ambos cambios (grupo `docker` + `PATH` de `pixi`) sin cerrar la terminal:

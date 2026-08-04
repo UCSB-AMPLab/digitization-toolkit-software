@@ -93,7 +93,9 @@ headless.
 sudo apt update && sudo apt install -y git
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER          # re-login for this to take effect
-curl -fsSL https://pixi.sh/install.sh | bash
+# pixi is pinned: older versions cannot read the committed pixi.lock format
+# (keep in lockstep with PIXI_VERSION in scripts/setup.sh)
+curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.73.0 bash
 
 # 1. Clone the repository
 git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
