@@ -28,11 +28,35 @@ fi
 DTK_USER_HOME=$(eval echo "~$DTK_USER")
 PIXI_BIN="$DTK_USER_HOME/.pixi/bin/pixi"
 
+# Pinned pixi for provisioning (NEH-170). The committed pixi.lock is
+# lock-file format v7 (re-locked with pixi 0.73 on 2026-07-24 — see
+# backend/DEVELOPMENT.md); older pixi cannot read it at all, and an unpinned
+# `curl | bash` gives every unit whatever is latest that day. Bump this pin
+# and the lock format together, deliberately. v0.73.0 is what the bench and
+# Rionegro units run. Keep in lockstep with README.md / README-SETUP.md.
+PIXI_VERSION="v0.73.0"
+
 if [ ! -x "$PIXI_BIN" ]; then
-    echo "✗ pixi not found at $PIXI_BIN"
-    echo "  Install pixi as $DTK_USER first:"
-    echo "    curl -fsSL https://pixi.sh/install.sh | bash"
-    exit 1
+    echo "→ pixi not found — installing pinned pixi $PIXI_VERSION as $DTK_USER..."
+    # PIXI_VERSION must sit on bash's side of the pipe: the installer reads
+    # it (VERSION="${PIXI_VERSION:-latest}"); prefixing curl would set it in
+    # curl's environment only and silently install latest.
+    sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" bash -c \
+        "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=$PIXI_VERSION bash"
+    if [ ! -x "$PIXI_BIN" ]; then
+        echo "✗ pixi install failed (still not found at $PIXI_BIN)."
+        echo "  Install it manually as $DTK_USER and re-run setup:"
+        echo "    curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=$PIXI_VERSION bash"
+        exit 1
+    fi
+fi
+
+INSTALLED_PIXI="$(sudo -u "$DTK_USER" "$PIXI_BIN" --version 2>/dev/null | awk '{print $2}' || true)"
+if [ -n "$INSTALLED_PIXI" ] && [ "v$INSTALLED_PIXI" != "$PIXI_VERSION" ]; then
+    echo "⚠ pixi $INSTALLED_PIXI is installed, but this repo is validated with"
+    echo "  $PIXI_VERSION. If 'pixi install --locked' later fails on the"
+    echo "  lock-file format, align it with:"
+    echo "    pixi self-update --version ${PIXI_VERSION#v}"
 fi
 
 # Run a command as DTK_USER, preserving the pixi bin in PATH
