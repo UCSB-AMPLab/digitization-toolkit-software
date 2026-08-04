@@ -237,7 +237,10 @@ trap on_exit EXIT
 #    the rollback target is the previously deployed commit, handled in step 5.
 # ---------------------------------------------------------------------------
 mkdir -p "$BACKUP_DIR"
-CURRENT_SHA="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
+# git runs as the repo owner: root-run git can fail dubious-ownership on the
+# user-cloned repo, and "unknown" here would poison both the snapshot and
+# (on success) last-deployed-SHA.
+CURRENT_SHA="$(run_as_user git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
 echo "→ Version being installed: $CURRENT_SHA"
 
 # Manual-recovery snapshot, taken BEFORE any build or dependency work so the
@@ -527,7 +530,13 @@ fi
 echo ""
 
 # Success: record this commit as the last good deploy, and disarm the trap.
-echo "$CURRENT_SHA" > "$LAST_DEPLOYED_SHA_FILE"
+# Never write "unknown" — that would destroy a valid record (from
+# provisioning or a previous update) and break the next rollback.
+if [ "$CURRENT_SHA" != "unknown" ]; then
+    echo "$CURRENT_SHA" > "$LAST_DEPLOYED_SHA_FILE"
+else
+    echo "⚠ Could not resolve the installed commit; last-deployed-SHA left unchanged."
+fi
 UPDATE_OK=1
 SERVICE_STOPPED=0
 

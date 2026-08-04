@@ -220,7 +220,10 @@ echo ""
 # ---------------------------------------------------------------------------
 CODE_ROLLED_BACK=0
 if [ -n "$TARGET_SHA" ]; then
-    if git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+    # Validate as the repo owner, like the checkout below — root-run git can
+    # fail dubious-ownership here, which would falsely report the commit
+    # unavailable and silently skip the code rollback.
+    if sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
         echo "→ Returning code to commit $TARGET_SHA ..."
         # Run git as the repo owner to avoid dubious-ownership issues under sudo.
         sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
