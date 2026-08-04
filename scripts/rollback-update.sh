@@ -69,6 +69,7 @@ if [ -n "$SUDO_USER" ]; then
 else
     DTK_USER="$(whoami)"
 fi
+DTK_USER_HOME=$(eval echo "~$DTK_USER")
 
 COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.pi.yml"
 
@@ -223,11 +224,13 @@ if [ -n "$TARGET_SHA" ]; then
     # Validate as the repo owner, like the checkout below — root-run git can
     # fail dubious-ownership here, which would falsely report the commit
     # unavailable and silently skip the code rollback.
-    if sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+    if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
         echo "→ Returning code to commit $TARGET_SHA ..."
-        # Run git as the repo owner to avoid dubious-ownership issues under sudo.
-        sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
-        sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" submodule update --init --recursive
+        # Run git as the repo owner (dubious-ownership under sudo) WITH the
+        # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
+        # applies to the SSH submodule URLs .gitmodules registers.
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive
         CODE_ROLLED_BACK=1
         echo "  ✓ Code restored to the pre-update version."
     else

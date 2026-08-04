@@ -93,6 +93,22 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 0b. Resolve GitHub submodule URLs over HTTPS on this appliance (NEH-217)
+# ---------------------------------------------------------------------------
+# .gitmodules registers the submodules over SSH (developers push over SSH),
+# but appliances have no GitHub key — and the repos are public, so HTTPS
+# fetches work fine. A config-level rewrite survives any branch/tag checkout
+# that restores .gitmodules; hand-editing that file does not (the Rionegro
+# unit was found running exactly such an edit, one checkout away from a
+# mid-update "Permission denied (publickey)"). The rewrite lives in
+# DTK_USER's global git config because the documented update workflow runs
+# git pull / submodule update as that user.
+echo "→ Configuring HTTPS fallback for GitHub submodule URLs..."
+run_as_user git config --global url."https://github.com/".insteadOf "git@github.com:"
+echo "  URLs under git@github.com: now resolve via https://github.com/  ✓"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 1. Stop any running services
 # ---------------------------------------------------------------------------
 echo "→ Stopping any running services..."
