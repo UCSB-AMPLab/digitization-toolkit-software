@@ -256,6 +256,30 @@ $COMPOSE down --remove-orphans
 echo ""
 
 # ---------------------------------------------------------------------------
+# 8. Record the provisioned version for update.sh / rollback-update.sh
+# ---------------------------------------------------------------------------
+# update.sh keys its offline-safety check and its rollback target off the
+# last successfully deployed commit (last-deployed-SHA). Without a record
+# from provisioning, a unit's FIRST update — the largest jump it will ever
+# make — has no code-rollback target and only a conservative "cannot confirm
+# offline-safe" warning (NEH-216). Path kept in sync with update.sh's
+# BACKUP_DIR / LAST_DEPLOYED_SHA_FILE.
+echo "→ Recording the provisioned version..."
+install -d -o "$DTK_USER" -g "$DTK_USER" /var/lib/dtk/backups
+# git must run as the repo owner: root-run git hits dubious-ownership on a
+# user-cloned repo and would silently poison the record.
+PROVISIONED_SHA="$(run_as_user git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+if [ -n "$PROVISIONED_SHA" ]; then
+    echo "$PROVISIONED_SHA" > /var/lib/dtk/backups/last-deployed-SHA
+    echo "  last-deployed-SHA = $PROVISIONED_SHA  ✓"
+else
+    echo "  ⚠ Could not read the repository HEAD — last-deployed-SHA not"
+    echo "    recorded; the first update will warn that it cannot confirm a"
+    echo "    rollback target."
+fi
+echo ""
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 echo "=========================================="

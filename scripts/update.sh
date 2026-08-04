@@ -237,8 +237,45 @@ trap on_exit EXIT
 #    the rollback target is the previously deployed commit, handled in step 5.
 # ---------------------------------------------------------------------------
 mkdir -p "$BACKUP_DIR"
-CURRENT_SHA="$(git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
+# git runs as the repo owner: root-run git can fail dubious-ownership on the
+# user-cloned repo, and "unknown" here would poison both the snapshot and
+# (on success) last-deployed-SHA.
+CURRENT_SHA="$(run_as_user git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
 echo "→ Version being installed: $CURRENT_SHA"
+
+# Manual-recovery snapshot, taken BEFORE any build or dependency work so the
+# pre-update state is knowable even if this update aborts early (NEH-216).
+# Informational only: rollback-update.sh never reads it. Its inputs — the
+# dump and pre-update-SHA — are still written together in step 5, so the
+# NEWEST dump and the recorded SHA correspond; older retained dumps do not
+# (rollback-update.sh warns when an older dump is selected). Recording
+# pre-update-SHA this early instead would let an abort-during-build pair a
+# fresh SHA with a stale dump.
+STATE_FILE="$BACKUP_DIR/pre-update-state-$(date +%Y%m%d-%H%M%S)"
+if {
+    echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
+    echo "installing-superproject: $CURRENT_SHA"
+    if [ -f "$LAST_DEPLOYED_SHA_FILE" ]; then
+        echo "previously-deployed: $(cat "$LAST_DEPLOYED_SHA_FILE")"
+    else
+        echo "previously-deployed: (no record)"
+    fi
+    echo "submodules:"
+    run_as_user git -C "$PROJECT_ROOT" submodule status 2>/dev/null || echo "  (unavailable)"
+    echo "pixi: $(run_as_user "$PIXI_BIN" --version 2>/dev/null || echo '(unavailable)')"
+} > "$STATE_FILE" 2>/dev/null; then
+    echo "  Pre-update state recorded: $STATE_FILE"
+else
+    echo "  ⚠ Could not write the pre-update state file ($STATE_FILE) —"
+    echo "    check free space on /var/lib/dtk. Continuing; the file is"
+    echo "    informational only."
+    rm -f "$STATE_FILE"
+fi
+# Same retention policy as the dumps.
+# shellcheck disable=SC2012
+ls -1t "$BACKUP_DIR"/pre-update-state-* 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | while read -r old; do
+    rm -f "$old"
+done
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -493,7 +530,13 @@ fi
 echo ""
 
 # Success: record this commit as the last good deploy, and disarm the trap.
-echo "$CURRENT_SHA" > "$LAST_DEPLOYED_SHA_FILE"
+# Never write "unknown" — that would destroy a valid record (from
+# provisioning or a previous update) and break the next rollback.
+if [ "$CURRENT_SHA" != "unknown" ]; then
+    echo "$CURRENT_SHA" > "$LAST_DEPLOYED_SHA_FILE"
+else
+    echo "⚠ Could not resolve the installed commit; last-deployed-SHA left unchanged."
+fi
 UPDATE_OK=1
 SERVICE_STOPPED=0
 

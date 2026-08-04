@@ -119,6 +119,17 @@ else
     TARGET_SHA=""
 fi
 
+# The recorded code-rollback commit is written by the MOST RECENT update,
+# next to the newest dump. Selecting an older retained dump breaks that
+# correspondence — say so before the operator confirms.
+NEWEST_DUMP="$(ls -1t "$BACKUP_DIR"/pre-update-*.sql.gz 2>/dev/null | head -n 1 || true)"
+if [ -n "$TARGET_SHA" ] && [ -n "$DUMP_ARG" ] && [ "$DUMP_FILE" != "$NEWEST_DUMP" ]; then
+    echo "⚠  The recorded code-rollback commit ($TARGET_SHA) was written by the"
+    echo "   most recent update, but you selected an OLDER dump. The restored"
+    echo "   database may not correspond to that code version."
+    echo ""
+fi
+
 echo "This will:"
 echo "  • RESTORE the database from:"
 echo "      $DUMP_FILE   (${DUMP_BYTES} bytes)"
@@ -209,7 +220,10 @@ echo ""
 # ---------------------------------------------------------------------------
 CODE_ROLLED_BACK=0
 if [ -n "$TARGET_SHA" ]; then
-    if git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+    # Validate as the repo owner, like the checkout below — root-run git can
+    # fail dubious-ownership here, which would falsely report the commit
+    # unavailable and silently skip the code rollback.
+    if sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
         echo "→ Returning code to commit $TARGET_SHA ..."
         # Run git as the repo owner to avoid dubious-ownership issues under sudo.
         sudo -u "$DTK_USER" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
