@@ -60,10 +60,10 @@ If a camera is missing: reseat both cable ends, power-cycle the camera body, and
 ![Canon EOS camera menu screen auto power off](../../_static/imgs/cannon-EOS-RebelT7-config-menu.jpg){width=400}
 
 ::: {.callout-caution appearance="simple"}
-Disabling Auto power off can result in lens damage. The software will try to power off the camera after 15 minutes of inactivity to prevent this. However, if the Raspberry Pi crashes or is inadvertently powered off while Auto power off is disabled, the camera could remain on indefinitely.
+When the software opens a session on a body, which happens on the first preview, capture, or settings read after the body is switched on, it attempts to switch the body's Auto power off setting off so the camera cannot sleep mid-session; it never powers the camera off itself. Until a session has been opened, the body's own setting applies, so a body that sat idle before the first preview of the day may already have left the USB bus. If the Raspberry Pi crashes or is powered off while a session is open, the camera can stay on until you switch it off by hand.
 :::
 
 ::: {.callout-important appearance="simple"}
-When Auto power off fires, the camera does not just sleep — it **drops off the USB bus entirely** (`lsusb` no longer lists it), and the software cannot wake it: a slept body looks exactly like a disconnected one, and the interface will show the camera as not connected. To bring it back, **half-press the shutter button** on the camera and wait a few seconds for it to re-enumerate. Keep this in mind before unplugging anything or restarting services.
+When Auto power off fires, the camera does not just sleep — it **drops off the USB bus entirely** (`lsusb` no longer lists it), and the software cannot wake it: a slept body looks exactly like a disconnected one, and the interface will show the camera as not connected. To bring it back, **half-press the shutter button** on the camera, wait a few seconds for it to re-enumerate, then press **Reconectar cámaras** in the interface (on the dashboard camera panel or in the live preview controls). The same action recovers a body whose USB cable was reseated. Keep this in mind before unplugging anything or restarting services.
 :::
 
