@@ -32,6 +32,7 @@ website:
           - section: "Cameras Setup"
             contents:
               - href: users/setting-up-gphoto2-cams.qmd
+              - href: users/setting-up-chdk-cams.qmd
       - section: "Developer Guides"
         contents:
           - section: "Hardware Setup Guides"
