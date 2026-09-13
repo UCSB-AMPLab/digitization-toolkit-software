@@ -18,6 +18,14 @@ CHDK is not installed onto the camera's own firmware. It boots from a specially 
 - **A Mac**, with its own clone of the `pychdk` repository (`https://github.com/UCSB-AMPLab/pychdk`, at tag `v0.1.2` — the version this appliance's backend is pinned to, in `backend/requirements.txt` and `backend/pixi.toml`) to prepare the cards from. `pychdk` is not part of this toolkit checkout, and installing it as a Python package — which is all the backend itself does — does not bring the card-preparation tool along either: it lives only under `tools/` in the repository, which packaging leaves out. `tools/flash_chdk.py` only runs on macOS — it drives the Mac's own `diskutil` to format and write the card.
 - **A USB cable** per camera, to connect it to the appliance.
 
+::: {.callout-important}
+## Capture over USB is not proven on this hardware yet
+
+The appliance takes the picture over the USB cable: the image is sent straight down the wire and is never written to the camera's own SD card. The A2500's CHDK port is alpha-level, and `pychdk` records that this streamed capture can fail on the A2500 with PTP error `0x2002`. Neither `pychdk` v0.1.2 nor this backend falls back to shooting onto the card, so wherever that failure occurs the capture fails outright rather than quietly producing a file somewhere else. The camera still enumerates and still previews; the backend's log names the error.
+
+Whether it happens on these particular bodies is not yet known — it has never been run against the cameras themselves. That test is on the bench-test list. Until it has been done, treat capture on the A2500 as unproven, and do not plan a digitization session around it.
+:::
+
 ## Selecting the CHDK backend
 
 This page applies from the release that bumps the superproject's backend pointer past NEH-231 onward; an appliance still on an earlier backend has neither the CHDK backend code nor its `pychdk` dependency, so `CAMERA_BACKEND=chdk` cannot work there yet.
