@@ -75,7 +75,7 @@ The card records which **pages** that camera photographs — ODD or EVEN — not
 
 So a card belongs to "the camera that shoots even pages" or "the camera that shoots odd pages" — not to "the left camera" or "the right camera."
 
-That index mapping only holds when there is no shared parity. While two connected cameras claim the same parity, the appliance stops trying to place either by parity at all and lays every connected body out in the order it found them on the bus instead — so during exactly the kind of repair described further down, an odd-shooting body can sit at index 0. (A shared identity with no shared parity does not do this — it only blocks capture, and the normal even→0/odd→1 mapping still holds.) Read a camera's actual parity and identity from the device list rather than assuming either from its index.
+A parity that any connected camera claims keeps its index whatever else is on the bus, so a camera that is not caught up in a problem is never moved by one. What a shared parity does move is the cameras sharing it: both are refused, the first of them on the bus keeps that parity's index, and the other is parked on the lowest index no parity is using — which can be an index that does not match its own card. It cannot capture from there, so nothing is filed under it; it is placed only so that you can still address it to repair it, as described further down. (A shared identity with no shared parity moves nothing at all — it only blocks capture.) Read a camera's actual parity and identity from the device list rather than assuming either from its index.
 
 ## The camera's identity
 
