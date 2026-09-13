@@ -375,6 +375,18 @@ cd "$PROJECT_ROOT"
 echo ""
 
 # ---------------------------------------------------------------------------
+# 4b. CHDK camera USB access (libusb + udev rule + group membership).
+#     setup.sh only runs once, at first provisioning — this is the only path
+#     an appliance already in the field takes to a new release. Without it
+#     here too, an appliance upgrading to a release with the CHDK backend
+#     would still have no udev rule and no group membership, and a camera
+#     that cannot be opened would look exactly like a broken backend.
+#     Shared with setup.sh via scripts/provision-chdk-usb.sh (idempotent,
+#     touches neither the running service nor anything this script restarts).
+# ---------------------------------------------------------------------------
+"$SCRIPT_DIR/provision-chdk-usb.sh"
+
+# ---------------------------------------------------------------------------
 # 5. Pre-migration backup. The old stack is STILL RUNNING and serving, so this
 #    dump is a consistent snapshot of live data before we change anything.
 #    (pg_dump takes a single transactional snapshot, so it is safe to run while

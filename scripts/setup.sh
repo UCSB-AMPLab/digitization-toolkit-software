@@ -211,6 +211,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 6a. CHDK camera USB access (libusb + udev rule)
+# ---------------------------------------------------------------------------
+# Shared with update.sh, not copied: scripts/provision-chdk-usb.sh is the one
+# copy, called by both, so an appliance updating to a release with the CHDK
+# backend gets this too, not only one freshly provisioned from scratch.
+# Idempotent — safe on every provisioning run and every later update — and
+# does not touch the dtk service itself; see that script for the reasoning.
+"$SCRIPT_DIR/provision-chdk-usb.sh"
+
+# ---------------------------------------------------------------------------
 # 6b. System clock hardening (survive power cuts without an RTC)
 # ---------------------------------------------------------------------------
 # Without a battery-backed clock the Pi resumes at the last saved tick after a
