@@ -13,7 +13,14 @@ Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit-software
 Type=simple
 User=pi
 Group=pi
-SupplementaryGroups=docker
+# plugdev here is deliberate duplication, not an oversight (NEH-231): the pi
+# user's own group membership (added by scripts/setup.sh's udev step) should
+# already carry plugdev into this unit's supplementary groups, since systemd
+# initialises that list from the user database and this directive only adds
+# to it. Listing plugdev again costs nothing when that is right, and is the
+# difference between a working and a camera-less appliance if it is ever
+# wrong. Do not remove it as redundant with the user's own membership.
+SupplementaryGroups=docker plugdev
 WorkingDirectory=/home/pi/dtk
 
 # Ensure pixi and docker are on PATH (systemd uses a stripped environment)
