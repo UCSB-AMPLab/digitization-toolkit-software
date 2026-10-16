@@ -442,6 +442,24 @@ echo ""
 "$SCRIPT_DIR/provision-chdk-usb.sh"
 
 # ---------------------------------------------------------------------------
+# 4c. Offsite catalogue backup: pinned rclone + the per-unit B2 remote.
+#     Same reasoning as 4b. setup.sh runs once, at first provisioning, so this
+#     is the only path an appliance already in the field takes to a release
+#     whose backend uploads through rclone. Without it here, such a unit would
+#     run a backup path with no rclone to run it.
+#
+#     Idempotent, and it touches no network when the installed rclone is
+#     already at or above the floor — so on a provisioned unit this is a
+#     no-op that costs one version check.
+#
+#     --advisory, unlike setup.sh's plain call: here a merely-offline unit must
+#     not lose an otherwise fine update over a backup binary it could not
+#     fetch. The full diagnosis is printed either way; only the exit status
+#     differs, and the next update with a connection provisions it.
+# ---------------------------------------------------------------------------
+"$SCRIPT_DIR/provision-rclone.sh" --advisory
+
+# ---------------------------------------------------------------------------
 # 5. Pre-migration backup. The old stack is STILL RUNNING and serving, so this
 #    dump is a consistent snapshot of live data before we change anything.
 #    (pg_dump takes a single transactional snapshot, so it is safe to run while
