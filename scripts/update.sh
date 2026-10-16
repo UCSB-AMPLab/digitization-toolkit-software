@@ -448,9 +448,12 @@ echo ""
 #     whose backend uploads through rclone. Without it here, such a unit would
 #     run a backup path with no rclone to run it.
 #
-#     Idempotent, and it touches no network when the installed rclone is
-#     already at or above the floor — so on a provisioned unit this is a
-#     no-op that costs one version check.
+#     Idempotent. It uses the network in two cases only: to fetch the pinned
+#     build when the rclone present is missing or below the floor, and to
+#     check a newly written credential against its bucket. A unit that
+#     already has a good rclone takes neither path here — step 2 finds the
+#     existing credential and never probes — so on a provisioned unit this
+#     is a no-op costing one version check.
 #
 #     --advisory, unlike setup.sh's plain call: here a merely-offline unit must
 #     not lose an otherwise fine update over a backup binary it could not
