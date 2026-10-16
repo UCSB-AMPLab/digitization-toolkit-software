@@ -98,12 +98,130 @@ else
     echo "  triggerhappy already installed — skipping apt."
 fi
 
-# Run thd as root (drop-in) so it can open /dev/input/event*.
+# Late-appearing input devices (NEH-184). thd opens /dev/input/event* once, at
+# start (--deviceglob). A node that appears afterwards reaches it only through
+# the packaged udev rule (triggerhappy-udev.rules: th-cmd --socket
+# /var/run/thd.socket --passfd --udev), and a boot where the keyboard
+# enumerates late has been seen to leave the Ctrl+Alt+F2 escape dead until a
+# manual restart. Whether that packaged hand-off fires under the ExecStart
+# override below is not established from the package alone (it names the same
+# socket as the override, /run/thd.socket), so this does not rely on it: a
+# helper, run from our own udev rule and once after thd starts, adds event
+# nodes thd does not already hold through the same socket.
+#
+# The helper only ever ADDS, never removes. thd's add_device() appends without
+# checking for duplicates, so a node registered twice is two fds on one device
+# and the chord fires chvt twice, which is harmless (switching to tty2 twice is
+# switching once). Removing first would risk the opposite: a remove that
+# succeeds followed by an add that fails leaves a working device unregistered
+# and the escape dead, which needs a physical SD-card edit to recover. Prefer
+# benign duplication to a destroyed escape. If a non-idempotent entry is ever
+# added to triggers.d, double-firing would matter and this needs revisiting.
+# To avoid duplicates in the common case the helper skips a node that thd
+# already holds open (read from /proc/<thd pid>/fd); if that cannot be
+# determined it adds anyway.
+sudo tee /usr/local/sbin/dtk-thd-sync > /dev/null << 'EOF'
+#!/bin/sh
+# Hand input event nodes to the running triggerhappy daemon (add only).
+# Usage: dtk-thd-sync [/dev/input/eventN ...]   (no arguments: every node
+# thd does not already hold)
+SOCK="${DTK_THD_SOCKET:-/run/thd.socket}"
+TH_CMD="${DTK_TH_CMD:-/usr/sbin/th-cmd}"
+# th-cmd's sendmsg() has no deadline; bound every call.
+BOUND="${DTK_THD_TIMEOUT:-3}"
+PROC="${DTK_PROC:-/proc}"
+INPUT_DIR="${DTK_INPUT_DIR:-/dev/input}"
+# Called from ExecStartPost (no arguments), thd may not have bound its socket
+# yet: wait up to ~5 s. Called with a device (udev), never wait.
+if [ "$#" -eq 0 ]; then
+    i=0
+    while [ ! -S "$SOCK" ] && [ "$i" -lt 50 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+fi
+if [ ! -S "$SOCK" ]; then
+    echo "dtk-thd-sync: $SOCK not present; thd is not running, nothing to sync" >&2
+    exit 0
+fi
+
+# Is $1 already open in thd? Empty/unknown answers "no" (then we add).
+# MAINPID is set by systemd for ExecStartPost. Otherwise only a single thd
+# process is taken to be the service's: with none or several we cannot tell
+# whose descriptors we would be reading (a diagnostic thd may hold the
+# keyboard), so treat identity as unknown and add. A duplicate is benign; a
+# skipped add is not.
+THD_PID="$MAINPID"
+if [ -z "$THD_PID" ]; then
+    PIDS="$(pidof thd 2>/dev/null)"
+    case "$PIDS" in
+        ""|*" "*) THD_PID="" ;;
+        *) THD_PID="$PIDS" ;;
+    esac
+fi
+held() {
+    [ -n "$THD_PID" ] && [ -d "$PROC/$THD_PID/fd" ] || return 1
+    for fd in "$PROC/$THD_PID"/fd/*; do
+        [ "$(readlink "$fd" 2>/dev/null)" = "$1" ] && return 0
+    done
+    return 1
+}
+
+if [ "$#" -eq 0 ]; then
+    set -- "$INPUT_DIR"/event*
+fi
+for dev in "$@"; do
+    [ -e "$dev" ] || continue
+    if held "$dev"; then
+        continue
+    fi
+    timeout "$BOUND" "$TH_CMD" --socket "$SOCK" --passfd --add "$dev" ||
+        echo "dtk-thd-sync: could not add $dev" >&2
+done
+exit 0
+EOF
+sudo chmod 755 /usr/local/sbin/dtk-thd-sync
+
+# Every new event node is synced as it appears. Runs after the packaged rule
+# (60-), carrying its guard against thd's own virtual device. The work is
+# queued with systemd-run so a blocked th-cmd cannot hold a udev worker.
+# --no-block still makes one synchronous call to the manager, so the enqueue
+# itself is bounded by timeout, and a failure is logged rather than lost.
+sudo tee /usr/local/sbin/dtk-thd-enqueue > /dev/null << 'EOF'
+#!/bin/sh
+# Queue dtk-thd-sync for one input node without holding the udev worker.
+SYSTEMD_RUN="${DTK_SYSTEMD_RUN:-/usr/bin/systemd-run}"
+# Both calls are bounded. systemd-run --no-block still makes one synchronous
+# call to the manager, and logger writes to /dev/log with a blocking socket, so
+# a stalled journal would hold this udev worker just as surely as a stalled
+# manager. Neither failure is worth a wedged worker: the node is picked up by
+# the ExecStartPost sweep on the next thd start either way.
+BOUND="${DTK_ENQUEUE_TIMEOUT:-3}"
+timeout "$BOUND" "$SYSTEMD_RUN" --no-block --collect --quiet \
+    /usr/local/sbin/dtk-thd-sync "$1" ||
+    timeout "$BOUND" logger -t dtk-thd-sync \
+        "could not queue $1 for triggerhappy; it will be picked up on the next thd start" ||
+    :
+exit 0
+EOF
+sudo chmod 755 /usr/local/sbin/dtk-thd-enqueue
+sudo tee /etc/udev/rules.d/61-dtk-triggerhappy.rules > /dev/null << 'EOF'
+ACTION=="add", SUBSYSTEM=="input", KERNEL=="event[0-9]*", ATTRS{name}!="triggerhappy", RUN+="/usr/local/sbin/dtk-thd-enqueue $env{DEVNAME}"
+EOF
+sudo udevadm control --reload >/dev/null 2>&1 || true
+
+# Run thd as root (drop-in) so it can open /dev/input/event*. ExecStartPost
+# covers a node that appeared between thd's enumeration and its socket binding
+# (the udev hand-off finds no socket then); it takes no device, so it adds
+# only nodes thd does not already hold. The leading '-' ignores its exit
+# status and `timeout 20` keeps it inside the unit's start timeout.
 sudo mkdir -p /etc/systemd/system/triggerhappy.service.d
 sudo tee /etc/systemd/system/triggerhappy.service.d/run-as-root.conf > /dev/null << 'EOF'
 [Service]
 ExecStart=
 ExecStart=/usr/sbin/thd --triggers /etc/triggerhappy/triggers.d/ --socket /run/thd.socket --user root --deviceglob /dev/input/event*
+ExecStartPost=
+ExecStartPost=-/usr/bin/timeout 20 /usr/local/sbin/dtk-thd-sync
 EOF
 
 # Trigger file — triggering key FIRST, modifiers after (the reverse never fires).
@@ -119,6 +237,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable triggerhappy >/dev/null 2>&1 || true
 sudo systemctl restart triggerhappy >/dev/null 2>&1 || true
 echo "  Ctrl+Alt+F2 → tty2 shell, Ctrl+Alt+F1 → kiosk (verify 'ps -o user -C thd' shows root)"
+echo "  Late-plugged keyboards are handed to thd by /usr/local/sbin/dtk-thd-sync (NEH-184)."
 
 # ── 2d. Chromium managed policies — password manager (NEH-67), translate ────
 # (NEH-185). The kiosk browser must never offer to save passwords or autofill
