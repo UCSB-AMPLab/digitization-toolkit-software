@@ -70,6 +70,10 @@ COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/doc
 # Backup location (also used by rollback-update.sh — keep these in sync).
 BACKUP_DIR="/var/lib/dtk/backups"
 SHA_FILE="$BACKUP_DIR/pre-update-SHA"
+REF_FILE="$BACKUP_DIR/pre-update-ref"
+# Frontend image that was serving when LAST_DEPLOYED_SHA_FILE's commit was
+# successfully deployed ("sha:" and "image:" lines; written only on success).
+LAST_DEPLOYED_FRONTEND_FILE="$BACKUP_DIR/last-deployed-frontend"
 LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
 KEEP_DUMPS=5
 
@@ -245,12 +249,61 @@ echo "→ Version being installed: $CURRENT_SHA"
 
 # Manual-recovery snapshot, taken BEFORE any build or dependency work so the
 # pre-update state is knowable even if this update aborts early (NEH-216).
-# Informational only: rollback-update.sh never reads it. Its inputs — the
-# dump and pre-update-SHA — are still written together in step 5, so the
-# NEWEST dump and the recorded SHA correspond; older retained dumps do not
-# (rollback-update.sh warns when an older dump is selected). Recording
-# pre-update-SHA this early instead would let an abort-during-build pair a
-# fresh SHA with a stale dump.
+# Best-effort: a failure to write it never aborts an update. The only reader
+# is rollback-update.sh, which uses it solely to say in its summary which
+# components (pixi environment, frontend image) still correspond to the
+# restored version (NEH-218); it never changes what rollback does. Its
+# inputs — the dump and pre-update-SHA — are still written together in
+# step 5, so the NEWEST dump and the recorded SHA correspond; older retained
+# dumps do not (rollback-update.sh warns when an older dump is selected).
+# Recording pre-update-SHA this early instead would let an abort-during-build
+# pair a fresh SHA with a stale dump.
+#
+# The lock digest is of backend/pixi.lock as checked out NOW, i.e. the NEW
+# lock the pixi step below installs; the pre-update lock is no longer in the
+# tree when this script runs. The frontend image recorded here is the one
+# that was serving when the PREVIOUS commit was successfully deployed (the
+# last-deployed-frontend record, accepted only if it names that same commit).
+# It is NOT read from the running container: an update that failed after
+# rebuilding leaves the unit serving a new-code image under the old
+# last-deployed-SHA, so "what is serving now" does not belong to that commit.
+# Empty when there is no record (e.g. a unit provisioned before this field
+# existed); rollback then reports the image as unknown.
+#
+# Several records can share one previously-deployed value (an update that
+# aborts before step 5 writes a record but advances nothing), so a record is
+# identified by its own file name, which step 5 stores in pre-update-ref
+# together with the dump name.
+file_digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+    fi
+}
+previous_frontend_image() {
+    local want
+    want="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null)" || return 1
+    [ -n "$want" ] || return 1
+    [ "$(sed -n 's/^sha: //p' "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null | head -n 1)" = "$want" ] || return 1
+    # Only a complete image id counts. A record truncated mid-write leaves a
+    # short but non-empty value, and a prefix compared against a full id reads
+    # as a definite mismatch — the kind of false certainty this whole record
+    # exists to remove. Incomplete evidence must reach rollback as nothing.
+    img="$(sed -n 's/^image: //p' "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null | head -n 1)"
+    case "$img" in
+        sha256:[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n' "$img"
+}
+# Immutable image id of the running frontend container; empty on any error.
+frontend_image_id() {
+    local cid
+    cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)" || return 1
+    [ -n "$cid" ] || return 1
+    docker container inspect --format '{{.Image}}' "$cid" 2>/dev/null
+}
 STATE_FILE="$BACKUP_DIR/pre-update-state-$(date +%Y%m%d-%H%M%S)"
 if {
     echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
@@ -263,6 +316,8 @@ if {
     echo "submodules:"
     run_as_user git -C "$PROJECT_ROOT" submodule status 2>/dev/null || echo "  (unavailable)"
     echo "pixi: $(run_as_user "$PIXI_BIN" --version 2>/dev/null || echo '(unavailable)')"
+    echo "installing-pixi-lock-sha256: $(file_digest "$PROJECT_ROOT/backend/pixi.lock" || true)"
+    echo "previously-deployed-frontend-image: $(previous_frontend_image || true)"
 } > "$STATE_FILE" 2>/dev/null; then
     echo "  Pre-update state recorded: $STATE_FILE"
 else
@@ -468,6 +523,21 @@ else
     echo "    but cannot switch the code back automatically."
 fi
 
+# Bind this attempt's state record to this attempt's dump, so rollback can
+# tell which record describes the dump it restores (several attempts can
+# share one previously-deployed commit). No record written, no reference:
+# rollback then reports the pixi environment and frontend image as unknown.
+if [ -f "$STATE_FILE" ]; then
+    if ! {
+        echo "state: $(basename "$STATE_FILE")"
+        echo "dump: $(basename "$DUMP_FILE")"
+    } > "$REF_FILE" 2>/dev/null; then
+        rm -f "$REF_FILE" || true
+    fi
+else
+    rm -f "$REF_FILE" || true
+fi
+
 # Retention: keep only the newest $KEEP_DUMPS dumps.
 echo "→ Pruning old backups (keeping newest $KEEP_DUMPS)..."
 # Filenames are our own fixed timestamped pattern; ls -t sorting is safe here.
@@ -546,6 +616,18 @@ echo ""
 # provisioning or a previous update) and break the next rollback.
 if [ "$CURRENT_SHA" != "unknown" ]; then
     echo "$CURRENT_SHA" > "$LAST_DEPLOYED_SHA_FILE"
+    # Record the image that is serving now, against this commit, where the
+    # provenance is known. Best-effort: a missing record only makes a later
+    # rollback report the image as unknown.
+    DEPLOYED_IMAGE="$(frontend_image_id || true)"
+    if [ -n "$DEPLOYED_IMAGE" ] && {
+        echo "sha: $CURRENT_SHA"
+        echo "image: $DEPLOYED_IMAGE"
+    } > "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null; then
+        :
+    else
+        rm -f "$LAST_DEPLOYED_FRONTEND_FILE" || true
+    fi
 else
     echo "⚠ Could not resolve the installed commit; last-deployed-SHA left unchanged."
 fi
