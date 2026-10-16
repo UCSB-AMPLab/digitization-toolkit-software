@@ -411,40 +411,94 @@ reject_value() {   # reject_value <what it is> <the value> <the rule>
 
 # Read one key from offsite.env. Sets globals rather than printing, so it
 # needs no subshell:
-#   OFFSITE_GET_STATUS  ok | absent | malformed
+#   OFFSITE_GET_STATUS  ok | absent | malformed | unreadable
 #   OFFSITE_GET_VALUE   the value when ok (may legitimately be empty)
 #   OFFSITE_GET_LINE    the offending line when malformed
+#
+# EVERY declaration of the key is examined, not just the first one in the
+# strict form. The reader used to take the last `^KEY=` line and consult the
+# looser pattern only when there was no strict match at all, so a file
+# carrying
+#     DTK_OFFSITE_REMOTE=
+#     export DTK_OFFSITE_REMOTE=b2unit:archive
+# read back as ok-and-empty here while python-dotenv returned
+# b2unit:archive — the two disagreed about what the unit was configured to
+# do, and this reader was the one that decided whether to write. A
+# declaration in any form this writer does not emit, at any position, now
+# makes the file malformed; a whitespace-indented line after a strict one is
+# the same case.
+#
+# `unreadable` exists because grep's exit 1 (no match) and exit 2 (could not
+# read the file) were both being swallowed by `|| true`, so a file this
+# script could not read came back as a key that was absent — and absence is
+# what authorises writing. A failed read must never authorise a write, so the
+# status is read explicitly and anything other than 0 or 1 is its own answer.
 OFFSITE_GET_STATUS=""
 OFFSITE_GET_VALUE=""
 OFFSITE_GET_LINE=""
 offsite_get() {
-    local key="$1" hit v
+    local key="$1" hits st line decl last="" nonstrict="" v
     OFFSITE_GET_STATUS="absent"; OFFSITE_GET_VALUE=""; OFFSITE_GET_LINE=""
     [ -f "$OFFSITE_ENV_PATH" ] || return 0
-    hit="$( { grep -n "^${key}=" "$OFFSITE_ENV_PATH" 2>/dev/null || true; } | tail -1 )"
-    if [ -z "$hit" ]; then
-        # Not in the strict form. If the key appears at all, the file is not
-        # one this script wrote, and that is worth saying rather than
-        # silently reading it as absent.
-        hit="$( { grep -nE "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" \
-                       "$OFFSITE_ENV_PATH" 2>/dev/null || true; } | tail -1 )"
-        if [ -n "$hit" ]; then
-            OFFSITE_GET_STATUS="malformed"
-            OFFSITE_GET_LINE="${hit#*:}"
-        fi
+    # One pass, the permissive pattern, so a strict declaration and an
+    # unsupported one are both in hand at the same time. `if cmd; then`
+    # rather than `|| true`: a condition context suppresses the ERR trap and
+    # still yields the real status.
+    if hits="$(grep -nE "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" \
+                    "$OFFSITE_ENV_PATH" 2>/dev/null)"; then
+        st=0
+    else
+        st=$?
+    fi
+    if [ "$st" -eq 1 ]; then
         return 0
     fi
-    v="${hit#*:}"
-    v="${v#"$key="}"
+    if [ "$st" -ne 0 ]; then
+        OFFSITE_GET_STATUS="unreadable"
+        return 0
+    fi
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        # grep -n prefixes "<lineno>:", and a line number carries no colon.
+        decl="${line#*:}"
+        case "$decl" in
+            "${key}="*) last="$decl" ;;
+            *) [ -n "$nonstrict" ] || nonstrict="$decl" ;;
+        esac
+    done <<< "$hits"
+    # Reported whether or not a strict declaration also exists: with both in
+    # the file, the two parsers disagree, and the disagreement is the fault.
+    if [ -n "$nonstrict" ]; then
+        OFFSITE_GET_STATUS="malformed"
+        OFFSITE_GET_LINE="$nonstrict"
+        return 0
+    fi
+    # Last assignment wins, matching python-dotenv.
+    v="${last#"$key="}"
     # Our writer never emits anything outside this class, so a value outside
     # it means the file was edited by something else.
     if ! [[ "$v" =~ ^[A-Za-z0-9._:/+-]*$ ]]; then
         OFFSITE_GET_STATUS="malformed"
-        OFFSITE_GET_LINE="${hit#*:}"
+        OFFSITE_GET_LINE="$last"
         return 0
     fi
     OFFSITE_GET_STATUS="ok"
     OFFSITE_GET_VALUE="$v"
+}
+
+# The diagnosis for OFFSITE_GET_STATUS=unreadable. Separate from the two call
+# sites because the message is the same for either key and the outcome is
+# not a state of the unit — it is this script being unable to find out.
+offsite_read_failed() {   # <key>
+    echo "✗ rclone: could not read $OFFSITE_ENV_PATH while looking for $1."
+    echo "  The file is there and this script cannot read it, which is not the"
+    echo "  same answer as the key being absent — and absence is what"
+    echo "  authorises writing a credential. Nothing was read, nothing was"
+    echo "  written and nothing was changed."
+    echo "  Check the file's mode and owner, and that the filesystem under"
+    echo "  $(dirname "$OFFSITE_ENV_PATH") is healthy and mounted read-write:"
+    echo "    sudo ls -l $OFFSITE_ENV_PATH"
+    provision_failed
 }
 
 # Write offsite.env whole, atomically: a temp file in the same directory, all
@@ -458,6 +512,17 @@ offsite_get() {
 #
 # Returns non-zero having changed nothing on any problem; the caller goes
 # through provision_failed.
+#
+# An empty <remote-or-empty> means the key is OMITTED, not written empty, and
+# that distinction is the whole of it. offsite.env is LATER than .env in the
+# backend's env_file tuple, so a key present here wins over the same key in
+# .env. This file used to carry DTK_OFFSITE_REMOTE unconditionally, including
+# with an empty value, which meant the first run of this version on a unit an
+# earlier version had configured through .env wrote an empty value over a
+# working remote and then reported success — backup off, nothing said. The
+# backend treats an absent key and an empty one alike, and an absent key
+# overrides nothing, so omitting it is both equivalent and safe. The two
+# paths are always written: they are facts about this unit either way.
 write_offsite_env() {   # write_offsite_env <bin> <config-path> <remote-or-empty>
     local bin="$1" cfg="$2" remote="$3" tmp
     # Every value is validated by its caller; this is the backstop, so no code
@@ -491,12 +556,15 @@ write_offsite_env() {   # write_offsite_env <bin> <config-path> <remote-or-empty
         echo "# Written whole by scripts/provision-rclone.sh at provisioning and on"
         echo "# every update. DO NOT EDIT: the next run replaces this file."
         echo "#"
-        echo "# The backend reads this in addition to the project .env, and these"
-        echo "# values win over anything .env says. An empty DTK_OFFSITE_REMOTE"
-        echo "# disables offsite backup entirely."
+        echo "# The backend reads this in addition to the project .env, and a key"
+        echo "# present here wins over the same key in .env. DTK_OFFSITE_REMOTE is"
+        echo "# written only when a remote is actually recorded: no line for it"
+        echo "# means this script recorded none, and overrides nothing in .env."
         echo "DTK_RCLONE_BIN=$bin"
         echo "DTK_RCLONE_CONFIG=$cfg"
-        echo "DTK_OFFSITE_REMOTE=$remote"
+        if [ -n "$remote" ]; then
+            echo "DTK_OFFSITE_REMOTE=$remote"
+        fi
     } > "$tmp"; then
         rm -f "$tmp"
         echo "✗ rclone: could not write the new $OFFSITE_ENV_PATH. The existing"
@@ -510,7 +578,11 @@ write_offsite_env() {   # write_offsite_env <bin> <config-path> <remote-or-empty
     # the two paths and the remote name with its bucket. The B2 application
     # key goes only to the rclone config file and never through here.)
     local want
-    for want in "DTK_RCLONE_BIN=$bin" "DTK_RCLONE_CONFIG=$cfg" "DTK_OFFSITE_REMOTE=$remote"; do
+    local -a wants=("DTK_RCLONE_BIN=$bin" "DTK_RCLONE_CONFIG=$cfg")
+    if [ -n "$remote" ]; then
+        wants+=("DTK_OFFSITE_REMOTE=$remote")
+    fi
+    for want in "${wants[@]}"; do
         if ! grep -qxF "$want" "$tmp"; then
             rm -f "$tmp"
             echo "✗ rclone: the new $OFFSITE_ENV_PATH does not contain the exact line"
@@ -520,6 +592,16 @@ write_offsite_env() {   # write_offsite_env <bin> <config-path> <remote-or-empty
             return 1
         fi
     done
+    # The other half of the same promise: with no remote to record, the key
+    # must be absent rather than present-and-empty, because a present key
+    # overrides .env and an absent one does not.
+    if [ -z "$remote" ] && grep -q "^DTK_OFFSITE_REMOTE=" "$tmp"; then
+        rm -f "$tmp"
+        echo "✗ rclone: the new $OFFSITE_ENV_PATH declares DTK_OFFSITE_REMOTE when"
+        echo "  no remote was recorded, so it was not promoted. The existing"
+        echo "  file, if any, was left exactly as it was."
+        return 1
+    fi
     if ! chown "$DTK_USER:$DTK_USER" "$tmp"; then
         rm -f "$tmp"
         echo "✗ rclone: could not set the owner of the new $OFFSITE_ENV_PATH to"
@@ -553,7 +635,13 @@ key_file_value() {
 #                is not usable.
 #   foreign      rclone loads the file and it has no section for that remote,
 #                but the file exists and holds something else.
-#   unreadable   rclone cannot load the file at all.
+#   unreadable   rclone cannot load the file at all — an unparseable line, a
+#                config encrypted with a password this script will not ask
+#                for, or anything else that makes rclone refuse it.
+#   undetermined rclone loaded the file, but the field check itself could not
+#                be run, so NO claim is made about the remote's fields. Not
+#                the same answer as a field being missing, and recorded
+#                separately for that reason.
 #
 # ASK RCLONE. This used to be an awk pass imitating goconfig, and it disagreed
 # with the real parser in both directions. Verified against the pinned
@@ -584,7 +672,7 @@ key_file_value() {
 # textual header match, which is safe in a way strictness was not: leaning
 # towards "present" can only ever block an overwrite, never authorise one.
 config_remote_state() {   # <rclone> <file> <remote>
-    local rc_bin="$1" f="$2" want="$3" out st k ok=1
+    local rc_bin="$1" f="$2" want="$3" out st fields
     # A remote name goes into a grep pattern below, so anything outside this
     # class is not interpreted at all — it is reported as uncertain, which
     # blocks the overwrite path like every other uncertain answer.
@@ -596,14 +684,23 @@ config_remote_state() {   # <rclone> <file> <remote>
         echo "unreadable"; return 0
     fi
     # $out holds this unit's B2 application key when the credential is
-    # complete. It is piped into grep and never echoed. Keep it that way.
+    # complete. It goes to one awk pass and is never echoed. Keep it that way.
     # `if cmd; then` and not `set +e`: an ERR trap fires on a failing command
     # whether or not errexit is on — only a condition context suppresses it.
     # With `set +e` here, a config rclone cannot load tripped the trap inside
     # this command substitution, so the caller got the generic "stopped
     # unexpectedly" abort instead of the unreadable diagnosis below. Caught in
     # the dry run for exactly that case.
-    if out="$("$rc_bin" --config "$f" config show "$want" 2>/dev/null)"; then
+    #
+    # --ask-password=false because this runs unattended, from setup.sh and
+    # from update.sh. rclone prompts for the password of an encrypted config
+    # by default, and the prompt went to a suppressed stderr, so a unit whose
+    # config an operator had encrypted hung here waiting on a password it
+    # could not ask for — an update that never finished rather than one that
+    # reported a problem. Refused instead, which lands in `unreadable`: that
+    # is its own answer and not absence, so it cannot authorise an overwrite.
+    if out="$("$rc_bin" --config "$f" --ask-password=false \
+                  config show "$want" 2>/dev/null)"; then
         st=0
     else
         st=$?
@@ -611,16 +708,49 @@ config_remote_state() {   # <rclone> <file> <remote>
     if [ "$st" -ne 0 ]; then
         echo "unreadable"; return 0
     fi
-    for k in type account key; do
-        if ! printf '%s\n' "$out" | grep -qE "^${k}[[:space:]]*=[[:space:]]*[^[:space:]]"; then
-            ok=0
-        fi
-    done
-    if [ "$ok" -eq 1 ]; then
+    # All three fields in ONE pass that consumes the whole value. This was
+    # three `printf '%s\n' "$out" | grep -qE ...` pipelines, and grep -q exits
+    # on its first match: once $out exceeded the pipe buffer, printf took
+    # SIGPIPE, pipefail made the pipeline fail, and a field that WAS present
+    # read as missing. A 256 KiB option value reproduced it, and the
+    # consequence was a working credential classified `incomplete`. Reading
+    # the producer to the end is the fix, not a larger buffer.
+    #
+    # [ \t\r] rather than [[:space:]]: the awk on the appliance is mawk, and
+    # this avoids depending on its character-class support.
+    if fields="$(awk '
+        /^type[ \t\r]*=[ \t\r]*[^ \t\r]/    { t = 1 }
+        /^account[ \t\r]*=[ \t\r]*[^ \t\r]/ { a = 1 }
+        /^key[ \t\r]*=[ \t\r]*[^ \t\r]/     { k = 1 }
+        END { printf "%d%d%d\n", t, a, k }
+    ' <<< "$out")"; then
+        st=0
+    else
+        st=$?
+    fi
+    # The check itself failing is not a field being missing. Saying
+    # `incomplete` here would be a claim about the credential made on no
+    # evidence, which is how a usable one came to be reported unusable.
+    if [ "$st" -ne 0 ] || ! [[ "$fields" =~ ^[01][01][01]$ ]]; then
+        echo "undetermined"; return 0
+    fi
+    if [ "$fields" = "111" ]; then
         echo "complete"; return 0
     fi
-    if grep -qE "^[[:space:]]*\[[[:space:]]*${want}[[:space:]]*\][[:space:]]*$" "$f" 2>/dev/null; then
+    # Same discipline on the existence test: exit 1 is "no such header", and
+    # anything above that is this check failing rather than an answer about
+    # the file.
+    if grep -qE "^[[:space:]]*\[[[:space:]]*${want}[[:space:]]*\][[:space:]]*$" \
+            "$f" 2>/dev/null; then
+        st=0
+    else
+        st=$?
+    fi
+    if [ "$st" -eq 0 ]; then
         echo "incomplete"; return 0
+    fi
+    if [ "$st" -ne 1 ]; then
+        echo "undetermined"; return 0
     fi
     echo "foreign"
 }
@@ -709,6 +839,85 @@ fi
 if ! valid_abs_path "$OFFSITE_ENV_PATH"; then
     reject_value "offsite settings path" "$OFFSITE_ENV_PATH" "$ABS_PATH_RULE"
     provision_failed
+fi
+
+# ── One run at a time ───────────────────────────────────────────────────────
+#
+# setup.sh calls this script and update.sh calls it with --advisory, and
+# nothing stops both from running at once — an operator re-running setup.sh in
+# one terminal while an update proceeds in another is not exotic. Two
+# invocations would each classify the config as `missing`, each decide it was
+# authorised to write a credential, and the second would publish over the
+# first; the unit would then hold key B while offsite.env recorded the bucket
+# from the run that wrote key A, and both runs would print CONFIGURED.
+#
+# The lock serialises the whole run rather than the write, because the
+# decision and the write are what must not be separated: classifying the
+# config and acting on that classification have to be one indivisible step,
+# and a lock held only around the write would still let both runs decide
+# `missing` first. The second invocation waits and then sees the finished
+# state, which every branch below already handles correctly.
+#
+# The lock is not the only guard. The credential publish is also atomic and
+# non-replacing (see 2b), so a run without a lock cannot clobber a
+# credential either — which is what makes a missing flock(1) a warning rather
+# than a refusal.
+LOCK_PATH="${PREFIX}/var/lib/dtk/provision-rclone.lock"
+if ! mkdir -p "$(dirname "$LOCK_PATH")"; then
+    echo "✗ rclone: could not create $(dirname "$LOCK_PATH"), so the run lock"
+    echo "  cannot be taken. Nothing was changed."
+    provision_failed
+fi
+if command -v flock >/dev/null 2>&1; then
+    # fd 9 stays open for the life of the script, so the lock is released by
+    # the kernel when this process ends, on every exit path including the
+    # ERR trap and a kill. No lock file is ever removed: removing it races
+    # with the next run opening it.
+    # Guarded rather than left to the ERR trap: an unopenable lock file has a
+    # remedy worth naming, and the trap's generic "this command failed" would
+    # bury it under bash's own redirection error. A failing redirection on a
+    # bare `exec` would otherwise end the shell.
+    if ! exec 9>"$LOCK_PATH"; then
+        echo "✗ rclone: could not open the run lock $LOCK_PATH, so this run"
+        echo "  cannot be serialised against another copy of itself. Nothing"
+        echo "  was changed. Check that $(dirname "$LOCK_PATH") is writable by"
+        echo "  root and mounted read-write."
+        provision_failed
+    fi
+    # The wait is BOUNDED, and that matters more here than the lock does.
+    # update.sh calls this script synchronously at its step 4c, before the
+    # pre-migration backup, and passes --advisory so that provisioning can
+    # never cost an update. An unbounded `flock 9` on a wedged holder would
+    # hang that update for as long as the holder lived, which defeats the
+    # flag entirely — the one failure --advisory exists to prevent, arriving
+    # by a route the flag cannot reach.
+    #
+    # On timeout this run has nothing to add: the holder is another
+    # provisioning run and it is doing the work. So it stands down through
+    # provision_failed, the convention the rest of the script already uses —
+    # setup.sh's plain call fails, update.sh's --advisory call carries on. No
+    # third exit convention, and nothing was changed either way.
+    if ! flock -n 9; then
+        echo "  another provision-rclone.sh run holds $LOCK_PATH — waiting for it."
+        if ! flock -w 120 9; then
+            echo "✗ rclone: another provision-rclone.sh run still holds"
+            echo "  $LOCK_PATH after 120 seconds."
+            echo "  That run is the one provisioning this unit, so this one has"
+            echo "  nothing to add and has stood down. Nothing was read and"
+            echo "  nothing was changed. If no other run is in fact going, find"
+            echo "  what holds the lock and then re-run this script:"
+            echo "    sudo fuser -v $LOCK_PATH"
+            provision_failed
+        fi
+        echo "  lock acquired; continuing."
+    fi
+else
+    echo "  ⚠ flock is not installed, so this run is NOT serialised against"
+    echo "    another copy of this script running at the same time. The"
+    echo "    credential write below is still atomic and will not replace an"
+    echo "    existing credential, so a concurrent run cannot overwrite one;"
+    echo "    what it can do is make the two runs report different states."
+    echo "    Install util-linux to restore the lock."
 fi
 
 # ── 1. Pinned rclone ────────────────────────────────────────────────────────
@@ -892,8 +1101,15 @@ echo "→ Configuring the offsite remote..."
 
 # ── 2.1 Values an earlier version of this script left in .env ───────────────
 # Reported, never removed: removing them would be editing .env again, which is
-# the thing this script stopped doing. They are inert, because offsite.env is
-# later in the backend's env_file tuple and therefore wins.
+# the thing this script stopped doing.
+#
+# They are inert only for the keys offsite.env actually DECLARES. offsite.env
+# is later in the backend's env_file tuple, so a key it declares wins — and a
+# key it omits overrides nothing, which is why DTK_OFFSITE_REMOTE in .env is
+# still live on a unit this script has recorded no remote for. The two paths
+# are always declared, so a stale value for either of those is inert. The
+# remote is not, and the report at the end of this script says so rather than
+# announcing that backup is off.
 #
 # Keyed on the VALUE, not on the key name. .env.example documents all eight
 # DTK_OFFSITE_*/DTK_RCLONE_* variables and setup.sh copies it verbatim to
@@ -911,7 +1127,11 @@ env_file_value() {   # <key> -> prints the raw value, or nothing
         | sed 's/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//' ; } || true
 }
 STALE_NOTES=""
-_v="$(env_file_value DTK_OFFSITE_REMOTE)"
+# Kept, not just reported: a remote declared in .env is what the backend
+# falls back to whenever offsite.env declares none, so the state report at
+# the end of this script has to know about it.
+ENV_FILE_REMOTE="$(env_file_value DTK_OFFSITE_REMOTE)"
+_v="$ENV_FILE_REMOTE"
 [ -z "$_v" ] || STALE_NOTES="$STALE_NOTES
       DTK_OFFSITE_REMOTE=$_v"
 _v="$(env_file_value DTK_RCLONE_BIN)"
@@ -923,14 +1143,17 @@ case "$_v" in /*) STALE_NOTES="$STALE_NOTES
 if [ -n "$STALE_NOTES" ]; then
     echo "  note: $PROJECT_ENV_FILE still carries values an earlier version of"
     echo "  this script wrote into it:$STALE_NOTES"
-    echo "    They are inert and were NOT touched. This script no longer"
-    echo "    writes .env at all — that file has another writer"
+    echo "    They were NOT touched, and this script no longer writes .env"
+    echo "    at all — that file has another writer"
     echo "    (generate-secrets.sh rotates the database password through it),"
     echo "    and two writers to one file cannot be made safe from inside one"
     echo "    of them. The backend reads $OFFSITE_ENV_PATH"
-    echo "    in addition to .env and that file wins, so a stale value there"
-    echo "    changes nothing. Delete those lines by hand if you want the"
-    echo "    file tidy."
+    echo "    in addition to .env, and a key declared THERE wins over the"
+    echo "    same key here. A key that file does not declare is not"
+    echo "    overridden at all, so a DTK_OFFSITE_REMOTE above is still live"
+    echo "    on a unit this script has recorded no remote for — see the"
+    echo "    state reported at the end of this run. Delete those lines by"
+    echo "    hand if you want the file tidy."
 fi
 
 # ── 2.2 Where the credential lives ──────────────────────────────────────────
@@ -961,11 +1184,17 @@ case "$OFFSITE_GET_STATUS" in
         echo ""
         exit 0
         ;;
+    unreadable)
+        offsite_read_failed DTK_RCLONE_CONFIG
+        ;;
 esac
 
 # ── 2.3 What the settings currently select ──────────────────────────────────
 offsite_get DTK_OFFSITE_REMOTE
 case "$OFFSITE_GET_STATUS" in
+    unreadable)
+        offsite_read_failed DTK_OFFSITE_REMOTE
+        ;;
     malformed)
         echo "  ⚠ $OFFSITE_ENV_PATH is not in the format this script writes."
         echo "    This line declares DTK_OFFSITE_REMOTE in a way the reader"
@@ -1158,7 +1387,18 @@ if [ "$HAVE_KEY" -eq 0 ] && [ -n "$SELECTED_NAME" ]; then
         unreadable)
             echo "        exists but rclone CANNOT LOAD IT, so no claim is"
             echo "        made here about what it contains. One unparseable"
-            echo "        line makes rclone refuse the whole file. See:"
+            echo "        line makes rclone refuse the whole file, and so does"
+            echo "        an encrypted config, which this script will not ask"
+            echo "        for a password for. See:"
+            echo "          sudo -u $DTK_USER $RCLONE_USE_BIN --config \\"
+            echo "              $RCLONE_CONFIG_PATH config show $SELECTED_NAME"
+            ;;
+        undetermined)
+            echo "        exists and rclone loads it, but the check of its"
+            echo "        fields could not be run here, so this script makes"
+            echo "        no claim about whether the credential is usable."
+            echo "        That is a fault in this unit's shell environment,"
+            echo "        not a verdict on the file. Read it yourself with:"
             echo "          sudo -u $DTK_USER $RCLONE_USE_BIN --config \\"
             echo "              $RCLONE_CONFIG_PATH config show $SELECTED_NAME"
             ;;
@@ -1213,8 +1453,18 @@ if [ "$HAVE_KEY" -eq 1 ]; then
                 ;;
             unreadable)
                 echo "    rclone CANNOT LOAD IT, so there is no telling what it"
-                echo "    contains. An unreadable file is not an empty one, and"
-                echo "    it does not authorise an overwrite."
+                echo "    contains — an unparseable line does that, and so"
+                echo "    does an encrypted config, which this script will"
+                echo "    not ask for a password for. An unreadable file is"
+                echo "    not an empty one, and it does not authorise an"
+                echo "    overwrite."
+                ;;
+            undetermined)
+                echo "    rclone loads it, but the check of its fields could"
+                echo "    not be run here, so there is no telling whether it"
+                echo "    holds a usable credential. Not knowing is not the"
+                echo "    same as it being empty, and it does not authorise"
+                echo "    an overwrite."
                 ;;
         esac
         chown "$DTK_USER:$DTK_USER" "$RCLONE_CONFIG_PATH"
@@ -1255,7 +1505,36 @@ account = $B2_KEY_ID
 key = $B2_APP_KEY
 EOF
     chown "$DTK_USER:$DTK_USER" "$RCLONE_CONF_TMP"
-    mv "$RCLONE_CONF_TMP" "$RCLONE_CONFIG_PATH"
+    # `ln` and not `mv`: the publish must be atomic AND non-replacing.
+    #
+    # `mv` over the final path replaces whatever is there without being
+    # asked, which made the whole "only `missing` authorises a write" rule
+    # depend on the classification above still being true by the time the
+    # write happens. Between those two points another invocation can publish
+    # a credential of its own, and the `mv` would have deleted it — the run
+    # lock makes that window small rather than absent, and a unit whose
+    # flock(1) is missing has no lock at all. `ln` fails with EEXIST instead,
+    # which is the answer this path wants: a credential that arrived while we
+    # were working is a credential this script does not replace, exactly like
+    # one that was there from the start.
+    #
+    # Both names refer to one inode, so the mode and owner set on the
+    # temporary file are the mode and owner of the published file; removing
+    # the temporary name afterwards leaves the published one intact. `mv` is
+    # still right for offsite.env, which this script alone writes and which
+    # it rebuilds whole on every run by design.
+    if ! ln "$RCLONE_CONF_TMP" "$RCLONE_CONFIG_PATH" 2>/dev/null; then
+        echo "✗ rclone: could not put the new credential at $RCLONE_CONFIG_PATH."
+        echo "  The most likely reason is that something created that file"
+        echo "  while this run was working — another provision-rclone.sh, most"
+        echo "  likely. This script does not replace a credential it did not"
+        echo "  write, so nothing was replaced and the key material supplied"
+        echo "  was not used. $OFFSITE_ENV_PATH was not updated either."
+        echo "  Look at what is there now and re-run:"
+        echo "    sudo ls -l $RCLONE_CONFIG_PATH"
+        provision_failed
+    fi
+    rm -f "$RCLONE_CONF_TMP"
     trap - EXIT
     echo "  mode 0600, owner $DTK_USER  ✓"
 
@@ -1288,7 +1567,17 @@ EOF
     # must not fail the run.
     if reachable "https://api.backblazeb2.com"; then
         echo "  Checking the key against $B2_BUCKET..."
-        if "$RCLONE_USE_BIN" --config "$RCLONE_CONFIG_PATH" lsf --max-depth 1 \
+        # --ask-password=false for the same reason the classification carries
+        # it: this is the only other invocation that READS the config, and
+        # rclone prompts for the password of an encrypted one by default.
+        # With stderr suppressed the prompt is invisible, so the run would
+        # hang here on a unit whose config an operator had encrypted — after
+        # the credential and offsite.env were both already written, which is
+        # the worst place in the script to stop. (`rclone version` above
+        # reads no config, so it needs nothing.) Refused instead, and a
+        # refusal lands in the branch below, which is already best-effort.
+        if "$RCLONE_USE_BIN" --config "$RCLONE_CONFIG_PATH" --ask-password=false \
+                lsf --max-depth 1 \
                 --retries 1 --low-level-retries 1 --contimeout 10s --timeout 20s \
                 "$RCLONE_REMOTE_NAME:$B2_BUCKET" >/dev/null 2>&1; then
             echo "  the key can list $B2_BUCKET  ✓"
@@ -1309,6 +1598,52 @@ fi
 
 # ── 2c. Nothing is selected and no complete key material was supplied ───────
 
+# ── 2c-ante. The bucket alone, over a credential that is already complete ───
+# This is the recovery the "unfinished provisioning" message at the end of
+# this script tells an operator to run:
+#
+#   sudo DTK_OFFSITE_BUCKET=<bucket> provision-rclone.sh
+#
+# It had nowhere to land. A bucket makes B2_BUCKET non-empty with no key id
+# and no application key beside it, so the partial-key branch below caught it
+# and reported "INCOMPLETE key material — missing: KEY_ID APP_KEY" — correct
+# for an operator half way through typing a new credential, and wrong for
+# this one, where the credential is already there and only the selector is
+# missing. The printed instruction could not complete provisioning, and
+# neither could anything else: a run whose credential was written but whose
+# offsite.env write then failed had no way forward short of moving the
+# credential aside and issuing a second key.
+#
+# So it has to run BEFORE the partial-key branch, and it must be narrow:
+# ONLY the bucket supplied, nothing selected, and rclone reading the
+# credential this script writes as complete. A key id or an application key
+# alongside the bucket is an operator part way through a NEW credential, and
+# belongs in the partial-key branch below. Nothing here creates or replaces a
+# credential — the selector is recorded and the mode and owner re-asserted,
+# which is exactly what 2a does for a selector that was already recorded.
+if [ -n "$B2_BUCKET" ] && [ -z "$B2_KEY_ID" ] && [ -z "$B2_APP_KEY" ] \
+        && [ "$CONFIG_STATE" = "complete" ]; then
+    chown "$DTK_USER:$DTK_USER" "$RCLONE_CONFIG_PATH"
+    chmod 0600 "$RCLONE_CONFIG_PATH"
+    offsite_write_or_fail "$RCLONE_USE_BIN" "$RCLONE_CONFIG_PATH" \
+        "$CHECK_NAME:$B2_BUCKET"
+    sync
+    echo "  $RCLONE_CONFIG_PATH already holds a complete [$CHECK_NAME] remote —"
+    echo "  left untouched. No credential was created or replaced."
+    echo "  mode 0600, owner $DTK_USER  ✓"
+    echo "  $OFFSITE_ENV_PATH written  ✓ (mode 0600, owner $DTK_USER)"
+    echo "  DTK_OFFSITE_REMOTE=$CHECK_NAME:$B2_BUCKET  ✓"
+    echo "  Offsite backup is CONFIGURED on this unit."
+    echo ""
+    echo "  The bucket was taken on trust: it is recorded as supplied, and"
+    echo "  nothing here checked that this unit's key can reach it. If the"
+    echo "  next backup fails, check the bucket name first:"
+    echo "    sudo -u $DTK_USER $RCLONE_USE_BIN --config $RCLONE_CONFIG_PATH \\"
+    echo "        lsf --max-depth 1 $CHECK_NAME:$B2_BUCKET"
+    echo ""
+    exit 0
+fi
+
 # Partial key material is an operator half way through, not a disabled unit.
 if [ -n "$B2_KEY_ID" ] || [ -n "$B2_APP_KEY" ] || [ -n "$B2_BUCKET" ]; then
     MISSING_PARTS=""
@@ -1327,19 +1662,40 @@ if [ -n "$B2_KEY_ID" ] || [ -n "$B2_APP_KEY" ] || [ -n "$B2_BUCKET" ]; then
 fi
 
 # Nothing is selected and no key material was supplied. offsite.env is still
-# written, with an empty remote: it records which rclone the backend should
-# run, and an explicit empty remote states "disabled" more clearly than an
-# absent file. Nothing already on this unit is changed by it, because reaching
-# here means offsite.env named no remote in the first place.
+# written, because it records which rclone the backend runs and where that
+# rclone's config lives, and both are facts about this unit whether or not it
+# backs up. What it does NOT do is declare DTK_OFFSITE_REMOTE.
 #
-# But "nothing selected" is not the same fact as "nothing here", and the state
-# of the credential file is reported either way rather than being summarised
-# as disabled. A complete credential that nothing selects is an unfinished
-# provisioning, not a deliberate no-op.
+# It used to declare it empty, on the reasoning that an explicit empty value
+# states "disabled" more clearly than an absent key. It states it to the
+# wrong audience. offsite.env is later than .env in the backend's env_file
+# tuple, so a key declared here overrides the same key there — and an empty
+# declaration overrides it with nothing. On the first run of this version on
+# a unit an earlier version had configured through .env, that turned a
+# working backup off and reported success. An absent key overrides nothing,
+# and the backend reads absent and empty alike, so omitting it is the same
+# statement without the collateral.
+#
+# "Nothing selected" is not the same fact as "nothing here", and neither is
+# the same fact as "deliberately disabled". Nothing below claims to have
+# disabled anything: it reports the state of the credential file and of any
+# remote still named in .env, and lets those two facts stand. A complete
+# credential that nothing selects is an unfinished provisioning; a remote in
+# .env with no credential behind it is a unit that will try and fail.
 offsite_write_or_fail "$RCLONE_USE_BIN" "$RCLONE_CONFIG_PATH" ""
 sync
 echo "  $OFFSITE_ENV_PATH written  ✓ (mode 0600, owner $DTK_USER)"
-echo "  DTK_OFFSITE_REMOTE is empty, so the backend will not attempt a backup."
+echo "  It declares no DTK_OFFSITE_REMOTE: this run selected no remote, and"
+echo "  it has not disabled one."
+if [ -n "$ENV_FILE_REMOTE" ]; then
+    echo "  ⚠ $PROJECT_ENV_FILE still sets"
+    echo "        DTK_OFFSITE_REMOTE=$ENV_FILE_REMOTE"
+    echo "    and nothing written here overrides it, so that is what the"
+    echo "    backend will use. This run neither recorded it nor removed it."
+else
+    echo "  No remote is named here or in $PROJECT_ENV_FILE, so the backend"
+    echo "  will not attempt a backup."
+fi
 case "$CONFIG_STATE" in
     complete)
         echo "  ⚠ But $RCLONE_CONFIG_PATH DOES hold a complete"
@@ -1354,22 +1710,36 @@ case "$CONFIG_STATE" in
         ;;
     incomplete)
         echo "  note: $RCLONE_CONFIG_PATH has a [$CHECK_NAME] section that rclone"
-        echo "    reads as unusable. It was left exactly as it is. Offsite"
-        echo "    backup is off either way, but that file is not a working"
-        echo "    credential and will not become one by itself."
+        echo "    reads as unusable. It was left exactly as it is, and it is"
+        echo "    not a working credential and will not become one by itself."
         ;;
     unreadable)
         echo "  note: $RCLONE_CONFIG_PATH exists and rclone CANNOT LOAD IT, so no"
-        echo "    claim is made about what it contains. It was left exactly as"
-        echo "    it is. Offsite backup is off either way."
+        echo "    claim is made about what it contains — an unparseable line"
+        echo "    does that, and so does an encrypted config, which this"
+        echo "    script will not ask for a password for. It was left exactly"
+        echo "    as it is."
+        ;;
+    undetermined)
+        echo "  note: $RCLONE_CONFIG_PATH exists and rclone loads it, but the"
+        echo "    check of its fields could not be run here, so no claim is"
+        echo "    made about whether it holds a usable credential. It was left"
+        echo "    exactly as it is."
         ;;
     foreign)
         echo "  note: $RCLONE_CONFIG_PATH exists and holds other rclone remotes,"
         echo "    but nothing for [$CHECK_NAME]. It was left exactly as it is."
         ;;
     missing)
-        echo "  Offsite backup is DISABLED on this unit, which is the intended"
-        echo "  state until it has been issued its own key."
+        if [ -n "$ENV_FILE_REMOTE" ]; then
+            echo "  ⚠ And $RCLONE_CONFIG_PATH does not exist, so the remote"
+            echo "    .env names has no credential behind it and every attempt"
+            echo "    will fail. Issue this unit its own key, or clear that"
+            echo "    line in .env."
+        else
+            echo "  Offsite backup is not configured on this unit, which is the"
+            echo "  intended state until it has been issued its own key."
+        fi
         ;;
 esac
 echo ""
