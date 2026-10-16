@@ -13,7 +13,11 @@
 #      REPLACING the current database contents.
 #   3. Checks out the pre-update superproject commit and syncs submodules to
 #      the pins that commit records (no --remote — pins are respected).
-#   4. Restarts the service and reports what happened.
+#   4. Restarts the service and reports what happened, component by component:
+#      the database and the code are restored; the pixi environment and the
+#      frontend image are NOT rebuilt (that needs the registries), so the
+#      summary says whether each still corresponds to the restored version,
+#      using the pre-update-state-* record update.sh writes (NEH-218).
 #
 # Usage:
 #   sudo ./scripts/rollback-update.sh                       # newest dump
@@ -29,6 +33,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 BACKUP_DIR="/var/lib/dtk/backups"
 SHA_FILE="$BACKUP_DIR/pre-update-SHA"
+REF_FILE="$BACKUP_DIR/pre-update-ref"
 
 ASSUME_YES=0
 DUMP_ARG=""
@@ -253,6 +258,132 @@ if systemctl is-active --quiet dtk; then
 fi
 
 # ---------------------------------------------------------------------------
+# What does NOT correspond to the restored version?
+#    Steps 3-4 restore the database and the git checkout only. The pixi
+#    environment and the frontend image were rebuilt by update.sh for the NEW
+#    code and are not rebuilt here (that needs the registries, and rollback is
+#    when a remote unit may be offline). Read what update.sh recorded and say,
+#    per component, whether it still matches — or that we cannot tell.
+# ---------------------------------------------------------------------------
+file_digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+    fi
+}
+# Image the compose tag points at NOW, which is what the stack starts from.
+# Read the RUNNING container's image, exactly as update.sh records it. The
+# tag is not the same question: update.sh rebuilds the tag before it stops
+# anything, so a tag can point at an image no container is serving. With no
+# container running - the service did not come back up - this returns empty
+# and the summary says UNKNOWN rather than comparing against a tag.
+frontend_image_id() {
+    local cid
+    cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)" || return 1
+    [ -n "$cid" ] || return 1
+    docker container inspect --format '{{.Image}}' "$cid" 2>/dev/null
+}
+# state_field <key> <file>: value of "key: value", empty if absent/unreadable.
+state_field() {
+    sed -n "s/^$1: //p" "$2" 2>/dev/null | head -n 1
+}
+
+# Which record describes the dump just restored? update.sh writes
+# pre-update-ref (state file name + dump name) in the same step as the dump,
+# so the record is identified by the attempt, not by the commit: several
+# records can share one previously-deployed value (an update that aborts
+# before the dump writes a record and advances nothing). Anything short of an
+# unambiguous match leaves STATE_RECORD empty and the result UNKNOWN.
+STATE_RECORD=""
+ENV_NOTE=""
+if [ "$CODE_ROLLED_BACK" -ne 1 ]; then
+    ENV_NOTE="the code was not rolled back, so it is not known what this component corresponds to"
+elif [ -h "$REF_FILE" ] || [ ! -r "$REF_FILE" ]; then
+    ENV_NOTE="no pre-update-ref links a state record to this dump"
+else
+    REF_STATE="$(state_field state "$REF_FILE")"
+    REF_DUMP="$(state_field dump "$REF_FILE")"
+    CAND="$BACKUP_DIR/$REF_STATE"
+    if [ -z "$REF_STATE" ] || [ -z "$REF_DUMP" ]; then
+        ENV_NOTE="pre-update-ref is unreadable or incomplete"
+    elif [ "$REF_DUMP" != "$(basename "$REF_DUMP")" ] || [ "$DUMP_FILE" != "$BACKUP_DIR/$REF_DUMP" ] \
+         || [ -h "$DUMP_FILE" ] || [ ! -f "$DUMP_FILE" ]; then
+        # Identity, not basename: a same-named dump from another directory
+        # (a USB stick) has other contents.
+        # Spelling is not identity: a symlink sitting at exactly the expected
+        # name matches the comparison while gunzip reads something else
+        # entirely. The restore itself is the operator's call; certifying what
+        # the restored data corresponds to is not.
+        ENV_NOTE="the dump restored is not the backup $REF_DUMP that pre-update-ref names in $BACKUP_DIR"
+    elif [ "$REF_STATE" != "$(basename "$REF_STATE")" ] || [ -h "$CAND" ] || [ ! -f "$CAND" ] || [ ! -r "$CAND" ]; then
+        ENV_NOTE="the state record named by pre-update-ref is missing, a symlink, unreadable or already pruned"
+    elif [ "$(state_field previously-deployed "$CAND")" != "$TARGET_SHA" ]; then
+        ENV_NOTE="the state record does not name $TARGET_SHA as the previous version"
+    else
+        STATE_RECORD="$CAND"
+    fi
+fi
+
+# Pixi environment. The lock digest says what the update installed against,
+# not what is installed now: start.sh runs "pixi run start", which can
+# reinstall for the restored lock before the summary prints.
+PIXI_STATUS="unknown"
+PIXI_DETAIL="$ENV_NOTE"
+PIXI_FIX="cd $PROJECT_ROOT/backend && pixi install --locked   (needs the conda registry)"
+if [ -n "$STATE_RECORD" ]; then
+    REC_LOCK="$(state_field installing-pixi-lock-sha256 "$STATE_RECORD")"
+    NOW_LOCK="$(file_digest "$PROJECT_ROOT/backend/pixi.lock" || true)"
+    if [ -z "$REC_LOCK" ] || [ -z "$NOW_LOCK" ]; then
+        PIXI_DETAIL="the lock digest is missing from the record or from the checkout"
+    elif [ "$REC_LOCK" = "$NOW_LOCK" ]; then
+        PIXI_STATUS="corresponds"
+        PIXI_DETAIL="backend/pixi.lock is identical in both versions"
+    else
+        PIXI_STATUS="lockdiffers"
+        PIXI_DETAIL="backend/pixi.lock differs from the one the update installed. The environment may still be the newer one, or may already have been reinstalled for the restored lock when the service started; this script does not check which"
+    fi
+fi
+
+# Frontend image.
+IMG_STATUS="unknown"
+IMG_DETAIL="$ENV_NOTE"
+IMG_FIX="cd $PROJECT_ROOT && docker compose -f docker-compose.yml -f docker-compose.pi.yml build frontend && sudo systemctl restart dtk   (needs the npm registry)"
+if [ -n "$STATE_RECORD" ]; then
+    # The image that was serving when $TARGET_SHA was successfully deployed;
+    # empty when no such record existed (older unit, or the write failed).
+    REC_IMG="$(state_field previously-deployed-frontend-image "$STATE_RECORD")"
+    NOW_IMG="$(frontend_image_id || true)"
+    if [ -z "$REC_IMG" ]; then
+        IMG_DETAIL="no record of which image was serving when $TARGET_SHA was deployed"
+    elif [ -z "$NOW_IMG" ]; then
+        IMG_DETAIL="the running frontend container's image could not be read"
+    elif [ "$REC_IMG" = "$NOW_IMG" ]; then
+        IMG_STATUS="corresponds"
+        IMG_DETAIL="the running frontend image is the one recorded when $TARGET_SHA was deployed"
+    else
+        IMG_STATUS="differs"
+        IMG_DETAIL="the frontend image was rebuilt from the newer code"
+    fi
+fi
+
+# Print one component line: <label> <status> <detail> <fix>
+report_component() {
+    case "$2" in
+        corresponds) printf '  %-10s corresponds to the restored version (%s)\n' "$1" "$3" ;;
+        differs)
+            printf '  %-10s does NOT correspond: %s.\n' "$1" "$3"
+            echo "      To fix: $4" ;;
+        lockdiffers)
+            printf '  %-10s NOT CONFIRMED: %s.\n' "$1" "$3"
+            echo "      To make sure: $4" ;;
+        *)
+            printf '  %-10s UNKNOWN: %s.\n' "$1" "$3"
+            echo "      Cannot confirm it matches the restored version. If in doubt: $4" ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
 # What happened
 # ---------------------------------------------------------------------------
 echo ""
@@ -267,10 +398,22 @@ elif [ -n "$TARGET_SHA" ]; then
 else
     echo "  Code:      NOT changed (no pre-update commit was recorded)"
 fi
+report_component "Pixi env:" "$PIXI_STATUS" "$PIXI_DETAIL" "$PIXI_FIX"
+report_component "Frontend:" "$IMG_STATUS" "$IMG_DETAIL" "$IMG_FIX"
 if [ "$SERVICE_OK" -eq 1 ]; then
     echo "  Service:   running ✓"
     echo ""
-    echo "  The appliance is back on the previous version."
+    if [ "$CODE_ROLLED_BACK" -ne 1 ]; then
+        echo "  The database was restored but the code was not changed, so the"
+        echo "  appliance is NOT confirmed to be on the previous version."
+    elif [ "$PIXI_STATUS" != "corresponds" ] || [ "$IMG_STATUS" != "corresponds" ]; then
+        echo "  The database and code are back on the previous version. The"
+        echo "  appliance may still be running parts of the newer version (see"
+        echo "  the lines above); it is not confirmed fully rolled back."
+    else
+        echo "  The database, code, pixi environment and frontend image all"
+        echo "  correspond to the previous version."
+    fi
 else
     echo "  Service:   ✗ did NOT come back up"
     echo ""
