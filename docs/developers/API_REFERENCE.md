@@ -103,6 +103,13 @@ It used to. A hand-written endpoint table, data-model list and error-code table 
 
 What remains here is what a schema cannot express: how to get the stack running, how to test it, how storage is laid out, worked examples, and the reasoning behind the architecture.
 
+**`external_id` — on the record response, in no request body.** The field holds the identifier of the catalogue entry a record was captured for: Fisqua's `reference_code`. Its absence from every request body is deliberate. Nothing writes it yet — the only writer will be the exchange importer, which is not built — so no record on any appliance carries a value.
+
+Two rules the schema cannot state:
+
+- **Unique.** Two records cannot claim the same catalogue entry. Any number of records may have no `external_id` at all.
+- **Written once.** Once a record has a value, an assignment that would change it raises instead of updating, and clearing it to `NULL` counts as a change. Re-assigning the same value is allowed, since nothing changes. The check is on the model — `Record._external_id_is_write_once` in `app/models/record.py` — so it covers every writer that assigns the attribute, and a bulk `UPDATE` or raw SQL goes around it.
+
 **Reaching the schema on a deployed appliance.** A development stack is the easiest place to explore the API. On a provisioned unit, `scripts/setup-firewall.sh` allows port 8000 from the appliance's own compose network (`172.30.0.0/24`) and over `tailscale0`, but not from the venue LAN — so it is reachable for remote support, not from a laptop in the room. Note also that the proxied `/api/docs` path does not render Swagger UI, because the page requests `/openapi.json` at the site root and Nginx routes `/` to the frontend; `/api/openapi.json` does proxy correctly, so the raw schema is retrievable that way.
 
 ---
@@ -147,9 +154,8 @@ The fastest way to test endpoints is using the interactive documentation.
    ```json
    {
      "title": "Ancient Manuscript",
-     "object_typology": "book",
+     "capture_mode": "single",
      "author": "Unknown",
-     "material": "parchment",
      "date": "1500-01-01"
    }
    ```
@@ -279,7 +285,7 @@ Five things worth knowing, each of which the previous version of this section go
 - **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
 - **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
 - **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
-- **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files (`backend/app/api/records.py:223`), as does deleting a single image (`:414`). There is no recovery directory, and on a backup-less appliance a delete is final.
+- **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files, as does deleting a single image (`delete_record` and the image delete handler in `backend/app/api/records.py`); each takes the master, the thumbnail and the `_preview.jpg` sidecar beside the master. There is no recovery directory, and on a backup-less appliance a delete is final.
 - **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
 
 ### Filename Format
@@ -341,7 +347,7 @@ Captured images follow the format: `YYYYMMDD_HHMMSS_mmm_cX.jpg`
 ### Database Relationships
 
 ```
-Record (title, object_typology, project_id, collection_id)
+Record (title, capture_mode, project_id, collection_id)
     └─> RecordImage[] (file_path, filename, format, role)
             ├─> CameraSettings (camera_model, white_balance, lens_position)
             └─> ExifData (raw_exif, datetime_original, GPS)
@@ -471,9 +477,8 @@ else:
         headers=headers,
         json={
             "title": "Ancient Manuscript",
-            "object_typology": "book",
+            "capture_mode": "single",
             "author": "Unknown Scribe",
-            "material": "parchment",
             "date": "1500-01-01",
             "project_id": project['id']
         }
@@ -491,7 +496,7 @@ list_resp = requests.get(
 records = list_resp.json()
 print(f"   Total records: {len(records)}")
 for r in records[:3]:
-    print(f"   - {r['title']}: {r.get('object_typology', 'unknown')}")
+    print(f"   - {r['title']}: {r['capture_mode']}")
 
 print("\nWorkflow complete!")
 ```
@@ -502,7 +507,7 @@ print("\nWorkflow complete!")
 
 ```python
 def configuration_page_flow(token):
-    """Flow for the configuration/setup page: cameras, calibration, typology selector."""
+    """Flow for the configuration/setup page: cameras and calibration."""
     headers = {"Authorization": f"Bearer {token}"}
 
     # Step 1: Get available cameras
@@ -519,22 +524,6 @@ def configuration_page_flow(token):
         result = cal_resp.json()
         if result['success']:
             print(f"Calibrated: lens_position={result['lens_position']}")
-
-    # Step 3: Show available typologies
-    typologies = ["book", "dossier", "document", "map", "planimetry", "other"]
-    print(f"Available document types: {typologies}")
-
-    # Step 4: Dynamic fields per typology
-    typology_fields = {
-        "book": ["title", "author", "material", "date", "isbn", "publisher", "pages"],
-        "dossier": ["title", "author", "date", "contents_summary"],
-        "document": ["title", "author", "date", "signature"],
-        "map": ["title", "region", "scale", "coverage"],
-        "planimetry": ["title", "scale", "project_name"],
-        "other": ["title", "description"]
-    }
-    selected = "book"
-    print(f"Fields for '{selected}': {typology_fields[selected]}")
 ```
 
 ---
@@ -579,10 +568,11 @@ def live_scan_workflow(token, project_name):
     # 3. Update the metadata of the record this capture created.
     #    Use record_id from the capture response — do NOT list records and
     #    take the first. An unfiltered GET /records/ orders by id ASCENDING
-    #    (records.py:127), so `limit=1` returns the OLDEST record in the
-    #    database and patching it overwrites an unrelated page. With
-    #    ?collection_id=N the order is sequence-then-id (records.py:125), so
-    #    you get whatever the operator ranked first — also not your capture.
+    #    (see list_records in records.py), so `limit=1` returns the OLDEST
+    #    record in the database and patching it overwrites an unrelated page.
+    #    With ?collection_id=N the order is sequence-then-id in the same
+    #    function, so you get whatever the operator ranked first — also not
+    #    your capture.
     rec_id = result.get('record_id')
     if rec_id:
         update_resp = requests.patch(
@@ -590,7 +580,6 @@ def live_scan_workflow(token, project_name):
             headers=headers,
             json={
                 "title": "Page 1 of Ancient Manuscript",
-                "object_typology": "book",
                 "author": "Unknown Scribe"
             }
         )
@@ -603,7 +592,7 @@ def live_scan_workflow(token, project_name):
 
 ```python
 def gallery_view(token):
-    """Display all captured records grouped by typology."""
+    """Display all captured records grouped by capture mode."""
     headers = {"Authorization": f"Bearer {token}"}
 
     records = requests.get(
@@ -614,14 +603,13 @@ def gallery_view(token):
 
     print(f"Total Records: {len(records)}\n")
 
-    # Group by typology
-    by_type = {}
+    # Group by capture mode ("single" or "dual")
+    by_mode = {}
     for rec in records:
-        typology = rec.get('object_typology', 'unknown')
-        by_type.setdefault(typology, []).append(rec)
+        by_mode.setdefault(rec['capture_mode'], []).append(rec)
 
-    for typology, recs in sorted(by_type.items()):
-        print(f"\n{typology.upper()} ({len(recs)} items)")
+    for mode, recs in sorted(by_mode.items()):
+        print(f"\n{mode.upper()} ({len(recs)} items)")
         print("-" * 60)
         for rec in recs[:5]:
             print(f"  - {rec['title']}")
@@ -674,8 +662,9 @@ def gallery_view(token):
        (collections.py:443). They cannot send a record back to captured;
        reopening for re-capture is operator/admin, and from approved it is
        admin only.
-       Note each router defines its own allow_read_only — records.py:30 is
-       the one governing records; auth.py:171 governs only auth endpoints.
+       Note each router defines its own allow_read_only — the one in
+       records.py governs records; the one in auth.py governs only auth
+       endpoints.
 
 6. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
@@ -701,7 +690,7 @@ def gallery_view(token):
 
 ### Configuration Page (`pages/configurations`)
 
-**Goals:** Camera device testing and calibration, document typology selection.
+**Goals:** Camera device testing and calibration.
 
 **API Calls:**
 1. `POST /auth/login` — User login
@@ -719,8 +708,6 @@ def gallery_view(token):
 5. If operator/admin: show calibration controls
    - POST /cameras/calibrate → get lens position
    - POST /cameras/calibrate/white-balance → get AWB gains
-6. Show typology selector: book, dossier, document, map, planimetry, other
-7. Display dynamic input fields based on typology
 ```
 
 ---
@@ -744,14 +731,14 @@ def gallery_view(token):
    → Backend creates RecordImage + CameraSettings + ExifData
    → Returns file_path
 5. Show success, file path, and option to update metadata
-6. Optional: PATCH /records/{id} with title, typology, author, etc.
+6. Optional: PATCH /records/{id} with title, author, etc.
 ```
 
 ---
 
 ### Gallery Page (`pages/gallery`)
 
-**Goals:** Display all captured records, filter by typology, view details.
+**Goals:** Display all captured records, view details.
 
 **API Calls:**
 1. `GET /records/` — List all records (reviewer+)
@@ -762,12 +749,11 @@ def gallery_view(token):
 **Frontend Flow:**
 ```
 1. GET /records/?limit=50 → display grid
-2. Group by typology
-3. Use /records/images/{img_id}/thumbnail?token=<token> for <img src>
+2. Use /records/images/{img_id}/thumbnail?token=<token> for <img src>
    (the session token is a custom HMAC-SHA256 string, not a JWT — see
-    core/security.py:40-51; using JWT libraries here is a documented no)
-4. Click record → GET /records/{id} → detail view
-5. If operator/admin: show edit/delete controls
+    core/security.py:68-90; using JWT libraries here is a documented no)
+3. Click record → GET /records/{id} → detail view
+4. If operator/admin: show edit/delete controls
 ```
 
 ---
@@ -864,7 +850,7 @@ This is the bound on how long a deactivated user keeps a working session, so sho
 - **ORM**: SQLAlchemy 2.0
 - **Engine**: PostgreSQL
 - **Relationships**: Proper foreign keys with cascading deletes
-- **Timestamps**: not uniform. Most models carry `created_at`, but `ProjectMember` uses `added_at` instead (`models/project_member.py:14`). For modification times, `Record` has `modified_at` (`models/record.py:37`) and `Collection` has `updated_at` (`models/collection.py:27`); no other model tracks one
+- **Timestamps**: not uniform. Most models carry `created_at`, but `ProjectMember` uses `added_at` instead (`models/project_member.py:14`). For modification times, `Record` has `modified_at` (`models/record.py`, without a line number: that file is under active edit and the number has moved three times) and `Collection` has `updated_at` (`models/collection.py:27`); no other model tracks one
 - **Migrations**: Alembic. Automatic only in the dev container, whose command is `alembic upgrade head && uvicorn …`. Production runs `pixi run start`, a bare uvicorn; the Pi is migrated by `scripts/update.sh`, and `assert_schema_at_head()` fails startup if that has not happened
 
 ### Validation
@@ -873,8 +859,7 @@ This is the bound on how long a deactivated user keeps a working session, so sho
 - **Email Validation**: A basic format regex, deliberately — `pydantic[email]` is excluded to keep the appliance offline-capable (`schemas/user.py:15-21`)
 
 ### Extensibility
-- **Typology System**: 6 built-in document types (book, dossier, document, map, planimetry, other)
-- **Custom Attributes**: JSON field for typology-specific metadata
+- **Custom Attributes**: JSON string for free-form record metadata
 - **Camera Integration**: libcamera/picamera2 with hardware detection
 - **Camera Registry**: Persistent calibration storage across system reboots
 - **Dual Camera Support**: Synchronized captures for book scanning
