@@ -568,10 +568,11 @@ def live_scan_workflow(token, project_name):
     # 3. Update the metadata of the record this capture created.
     #    Use record_id from the capture response — do NOT list records and
     #    take the first. An unfiltered GET /records/ orders by id ASCENDING
-    #    (records.py:145), so `limit=1` returns the OLDEST record in the
-    #    database and patching it overwrites an unrelated page. With
-    #    ?collection_id=N the order is sequence-then-id (records.py:143), so
-    #    you get whatever the operator ranked first — also not your capture.
+    #    (see list_records in records.py), so `limit=1` returns the OLDEST
+    #    record in the database and patching it overwrites an unrelated page.
+    #    With ?collection_id=N the order is sequence-then-id in the same
+    #    function, so you get whatever the operator ranked first — also not
+    #    your capture.
     rec_id = result.get('record_id')
     if rec_id:
         update_resp = requests.patch(
