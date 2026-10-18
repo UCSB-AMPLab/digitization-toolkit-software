@@ -1960,9 +1960,23 @@ if [ "$HAVE_KEY" -eq 1 ]; then
         echo "    aside and re-run:"
         echo "      sudo mv $RCLONE_CONFIG_PATH $RCLONE_CONFIG_PATH.bad"
         echo "      sudo DTK_OFFSITE_KEY_FILE=<file> $SCRIPT_DIR/provision-rclone.sh"
+        # This exits nonzero, so setup.sh stops and update.sh carries on. An
+        # operator supplied a credential for this unit and the unit is holding
+        # a different one: either the key material is wrong or the file is,
+        # and a fresh unit must not be handed over with that unresolved. The
+        # branch said exit 0 while it also caught the benign case — a run
+        # interrupted between writing the credential and publishing the
+        # settings, where the installed credential IS the one supplied. That
+        # case now resumes above and never reaches here, so what is left is
+        # only a credential this script cannot account for.
+        #
+        # update.sh calls this script --advisory, where provision_failed
+        # prints its note and returns 0: an update to a working appliance is
+        # not the moment to stop over an offsite credential, and the next run
+        # tries again.
         run_report
         sync
-        exit 0
+        provision_failed
     fi
 
     # Written here rather than through `rclone config create` so the
