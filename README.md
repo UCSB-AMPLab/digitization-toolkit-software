@@ -75,6 +75,8 @@ pixi run setup-camera-link  # Raspberry Pi only
 pixi run dev
 ```
 
+**rclone is a runtime dependency of the backend**, not a developer convenience, and it does not come from pixi or from apt. The offsite backup path shells out to it to push captures and compressed `pg_dumpall` dumps to Backblaze B2, and to verify each upload against the SHA1 in a bucket listing (NEH-249, NEH-227). The minimum version is **1.70**: Debian Bookworm packages rclone 1.60, which fails B2 authentication for application keys created after mid-2024, and fails in a way indistinguishable from a wrong key, so a unit running it reports every backup as a credentials problem. `scripts/provision-rclone.sh` therefore installs a pinned official static build under `/usr/local/bin`, verifying its SHA-256 against a checksum recorded in that script before installing anything; it runs from `scripts/setup.sh` at provisioning, and asserts the version of the build it staged before promoting it, refusing to finish on one that is too old. It uses the network in two cases only: to fetch the pinned build when the rclone already present is missing or below the floor, and to check a newly written credential against its bucket. A unit that already has a good rclone and is not being given a new credential makes no network call at all.
+
 ## Production Distribution (SD Card Imaging)
 
 The toolkit is designed to ship as a pre-flashed SD card. The end user only needs to insert the card, power on the Pi, and the application starts automatically — no internet connection required.

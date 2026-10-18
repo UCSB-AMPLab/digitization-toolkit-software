@@ -272,6 +272,24 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
+# 6e. Offsite catalogue backup (pinned rclone + per-unit B2 remote)
+# ---------------------------------------------------------------------------
+# Shared with update.sh, not copied, the way provision-chdk-usb.sh is: one
+# copy called from both, so an appliance updating to a release whose backend
+# uploads through rclone gets the binary too, not only one freshly
+# provisioned. See step 4c in update.sh. Idempotent, touches neither the dtk
+# service nor the network when a new-enough rclone is already present and no
+# new credential is being written, and writes no remote at all unless this
+# unit's B2 key material was supplied — see that script.
+#
+# Called WITHOUT --advisory on purpose. At provisioning, a unit that cannot
+# end up with a working rclone must not be handed to an archive as
+# provisioned, so a failure here stops setup. update.sh's call takes
+# --advisory instead, because aborting an update on a merely-offline field
+# unit costs more than leaving offsite backup unprovisioned another week.
+"$SCRIPT_DIR/provision-rclone.sh"
+
+# ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations
 # ---------------------------------------------------------------------------
 cd "$PROJECT_ROOT"
