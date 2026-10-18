@@ -285,7 +285,7 @@ Five things worth knowing, each of which the previous version of this section go
 - **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
 - **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
 - **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
-- **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files (`backend/app/api/records.py:223`), as does deleting a single image (`:414`). There is no recovery directory, and on a backup-less appliance a delete is final.
+- **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files, as does deleting a single image (`delete_record` and the image delete handler in `backend/app/api/records.py`); each takes the master, the thumbnail and the `_preview.jpg` sidecar beside the master. There is no recovery directory, and on a backup-less appliance a delete is final.
 - **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
 
 ### Filename Format
@@ -662,8 +662,9 @@ def gallery_view(token):
        (collections.py:443). They cannot send a record back to captured;
        reopening for re-capture is operator/admin, and from approved it is
        admin only.
-       Note each router defines its own allow_read_only — records.py:30 is
-       the one governing records; auth.py:171 governs only auth endpoints.
+       Note each router defines its own allow_read_only — the one in
+       records.py governs records; the one in auth.py governs only auth
+       endpoints.
 
 6. Use token in all protected requests:
    headers: { "Authorization": `Bearer ${token}` }
@@ -849,7 +850,7 @@ This is the bound on how long a deactivated user keeps a working session, so sho
 - **ORM**: SQLAlchemy 2.0
 - **Engine**: PostgreSQL
 - **Relationships**: Proper foreign keys with cascading deletes
-- **Timestamps**: not uniform. Most models carry `created_at`, but `ProjectMember` uses `added_at` instead (`models/project_member.py:14`). For modification times, `Record` has `modified_at` (`models/record.py:37`) and `Collection` has `updated_at` (`models/collection.py:27`); no other model tracks one
+- **Timestamps**: not uniform. Most models carry `created_at`, but `ProjectMember` uses `added_at` instead (`models/project_member.py:14`). For modification times, `Record` has `modified_at` (`models/record.py`, without a line number: that file is under active edit and the number has moved three times) and `Collection` has `updated_at` (`models/collection.py:27`); no other model tracks one
 - **Migrations**: Alembic. Automatic only in the dev container, whose command is `alembic upgrade head && uvicorn …`. Production runs `pixi run start`, a bare uvicorn; the Pi is migrated by `scripts/update.sh`, and `assert_schema_at_head()` fails startup if that has not happened
 
 ### Validation
