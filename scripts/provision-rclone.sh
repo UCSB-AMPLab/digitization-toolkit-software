@@ -935,8 +935,125 @@ config_remote_state() {   # <rclone> <file> <remote>
     esac
 }
 
+# Does the section already at <file> hold the key id the operator supplied?
+# Asked only of a section config_remote_state has already classified
+# `complete`, from 2b, to tell an interrupted run's own credential from
+# someone else's. Prints `match`, `differ` or `unknown`; `unknown` is every
+# way the question could not be answered, and is treated as `differ`.
+#
+# Only the key id (rclone's `account` field) and the section type are
+# compared, and neither is printed. The application key is never compared, so
+# it is never read here. The dump goes to python on STDIN, as it does in
+# config_remote_state, and the supplied id reaches python through its
+# ENVIRONMENT rather than its argument list, so neither value is visible in
+# the process table. The section does not hold the bucket: rclone's b2 remote
+# takes the bucket from the remote specification, so it cannot be compared
+# here — see 2b.
+CONFIG_ID_COMPARER='
+import json, os, sys
+want = sys.argv[1]
+supplied = os.environ.get("DTK_CMP_KEY_ID", "")
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print("unknown")
+    sys.exit(0)
+section = data.get(want) if isinstance(data, dict) else None
+if not isinstance(section, dict) or not supplied:
+    print("unknown")
+    sys.exit(0)
+account = section.get("account")
+if not isinstance(account, str):
+    print("unknown")
+    sys.exit(0)
+print("match" if (section.get("type") == "b2" and account == supplied) else "differ")
+'
+config_section_key_id_matches() {   # <rclone> <file> <remote> <supplied key id>
+    local rc_bin="$1" f="$2" want="$3" supplied="$4" dump st answer
+    if ! [[ "$want" =~ ^[A-Za-z0-9_.-]+$ ]] || [ ! -f "$f" ] \
+            || [ ! -x "$rc_bin" ] || ! command -v python3 >/dev/null 2>&1; then
+        echo "unknown"; return 0
+    fi
+    if dump="$(bounded "$RCLONE_READ_TIMEOUT" "$rc_bin" --config "$f" \
+                   --ask-password=false config dump 2>/dev/null)"; then
+        st=0
+    else
+        st=$?
+    fi
+    if [ "$st" -ne 0 ]; then
+        echo "unknown"; return 0
+    fi
+    if answer="$(printf '%s' "$dump" \
+                   | DTK_CMP_KEY_ID="$supplied" \
+                     python3 -I -c "$CONFIG_ID_COMPARER" "$want" 2>/dev/null)"; then
+        st=0
+    else
+        st=$?
+    fi
+    if [ "$st" -ne 0 ]; then
+        echo "unknown"; return 0
+    fi
+    case "$answer" in
+        match|differ) echo "$answer" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
 reachable() {
     curl -fsS --head --max-time 15 "$1" >/dev/null 2>&1
+}
+
+probe_listing_once() {
+    # Called on both paths that record a remote: the one that just wrote a
+    # credential, and the resume in 2b that found the supplied key id already
+    # in place. The resume needs it more, not less: the section holds no
+    # bucket, so a key id can match while the bucket supplied beside it is
+    # mistyped, and this listing is the only thing that would say so.
+    #
+    # Best-effort, never fatal: one listing call, so that a mistyped key
+    # surfaces here instead of half an hour later as something that reads as a
+    # credentials problem. It LISTS; it writes nothing, because the only
+    # capability worth confirming without side effects is the one a failed
+    # listing already explains. Not attempted at all when api.backblazeb2.com
+    # does not answer — being unable to ask is not an answer, so it must not be
+    # reported as one, and must not fail the run.
+    #
+    # WHAT A SUCCESS ESTABLISHES, AND NOTHING MORE: that this invocation of
+    # this rclone, with this config file, listed that remote and exited 0. It
+    # is NOT "the key can list the bucket". The environment can redefine the
+    # remote out from under the listing — RCLONE_CONFIG_B2UNIT_TYPE=local makes
+    # `rclone lsf b2unit:scripts` list a local directory and exit 0 — which is
+    # why §2 refuses to run at all when such a variable is set, and why the
+    # line this prints says a listing succeeded rather than what the key can
+    # do.
+    if reachable "https://api.backblazeb2.com"; then
+        echo "  Listing $RCLONE_REMOTE_NAME:$B2_BUCKET once..."
+        # --ask-password=false for the same reason the classification carries
+        # it, and `bounded` for the same reason too: the flags below are
+        # per-operation and idle timeouts, not a maximum runtime, and this
+        # call happens AFTER the credential and offsite.env are both written,
+        # which is the worst place in the script to stall.
+        if bounded "$RCLONE_PROBE_TIMEOUT" \
+                "$RCLONE_USE_BIN" --config "$RCLONE_CONFIG_PATH" \
+                --ask-password=false lsf --max-depth 1 \
+                --retries 1 --low-level-retries 1 --contimeout 10s --timeout 20s \
+                "$RCLONE_REMOTE_NAME:$B2_BUCKET" >/dev/null 2>&1; then
+            echo "  a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET succeeded  ✓"
+            RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET succeeded"
+        else
+            echo "  ⚠ the listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed. The"
+            echo "    remote is recorded; check the key id, the application key, the"
+            echo "    bucket name, and that the key grants listFiles on that bucket. Run"
+            echo "    this to see what rclone says:"
+            echo "      sudo -u $DTK_USER $RCLONE_USE_BIN --config $RCLONE_CONFIG_PATH \\"
+            echo "          lsf --max-depth 1 $RCLONE_REMOTE_NAME:$B2_BUCKET"
+            RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed"
+        fi
+    else
+        echo "  (api.backblazeb2.com did not answer a HEAD request from here, so"
+        echo "  no listing was attempted)"
+        RUN_PROBE="not attempted: api.backblazeb2.com did not answer a HEAD request"
+    fi
 }
 
 # ── Does the environment redefine the remote under inspection? ──────────────
@@ -1528,6 +1645,34 @@ if [ -n "$CONFIG_PATH_ARG" ]; then
     RCLONE_CONFIG_PATH="$CONFIG_PATH_ARG"
     CONFIG_PATH_ESTABLISHED=1
 fi
+# A path that exists must be a regular file. valid_abs_path checks the SHAPE of
+# the path and nothing about what is at it, and config_remote_state treats any
+# existing path as present. A directory therefore classifies as `unreadable`
+# (rclone refuses to load it), and with key material supplied that reaches the
+# preservation path in 2b, which runs chmod 0600 on it. 0600 on a directory
+# removes search permission: `--config-path /var/lib/dtk` would take away the
+# access the appliance user needs to its own state directory. The same path is
+# chmod'd in 2a, 2a-bis and 2c-ante, so the refusal is made once, here, before
+# anything inspects the path and before any chown or chmod can reach it.
+#
+# `-f` follows symlinks, so a link to a regular file passes. That is a
+# separate question from this one and is not decided here.
+if [ -e "$RCLONE_CONFIG_PATH" ] && [ ! -f "$RCLONE_CONFIG_PATH" ]; then
+    if [ -d "$RCLONE_CONFIG_PATH" ]; then
+        FOUND_KIND="a directory"
+    else
+        FOUND_KIND="not a regular file (a device, socket or pipe)"
+    fi
+    echo "✗ rclone: refusing the rclone config path $RCLONE_CONFIG_PATH."
+    echo "    found: $FOUND_KIND"
+    echo "    must be: a regular file, or a path where nothing exists yet"
+    echo "  This run would inspect that path, and may set its mode to 0600 and"
+    echo "  its owner to $DTK_USER, which on anything but a regular file would"
+    echo "  damage something other than a credential. Nothing was written and"
+    echo "  nothing was changed. Name the rclone config FILE with --config-path,"
+    echo "  or check where $OFFSITE_ENV_PATH records DTK_RCLONE_CONFIG."
+    provision_failed
+fi
 SELECTED_REMOTE="$OFFSITE_REMOTE"
 
 # ── 2.2 Key material ────────────────────────────────────────────────────────
@@ -1752,6 +1897,56 @@ if [ "$HAVE_KEY" -eq 1 ]; then
     # the half of this that a parser disagreement once got wrong from the
     # other side: a config rclone reads perfectly was reported absent, and
     # absence reached this path.
+    #
+    # ONE EXCEPTION, and it is not a replacement: the credential is the one
+    # this script wrote on an earlier run that then failed before it could
+    # record anything. That run wrote the section, read it back, and then
+    # could not write offsite.env (a full card, say). Re-running with the same
+    # key file found a complete section, preserved it, and exited 0 with the
+    # settings never published; a later run with no key cannot recover it
+    # either, because 2a needs a recorded remote and none was recorded.
+    #
+    # So when the section is complete and its key id and type are the ones
+    # supplied, the file is left exactly as it is and the run goes on to
+    # publish the settings. Only the key id is compared: the application key
+    # is not read, and the section holds no bucket — rclone's b2 remote takes
+    # the bucket from the remote specification, not from the config — so the
+    # bucket is checked only against a recorded remote, which must be absent
+    # or already name this bucket. On the interrupted run this exists for,
+    # nothing is recorded, so nothing here verifies the bucket: a matching
+    # key id beside a mistyped bucket would resume and record the mistake.
+    # The listing probe at the end is what would say so, which is why this
+    # path runs it rather than exiting first. A different id, a different
+    # recorded remote, or a comparison that could not be made takes the
+    # preservation path below unchanged.
+    #
+    # CONFIG_PATH_ESTABLISHED is NOT set by finding a match — that is the
+    # fourth establishing condition the note on that variable removed, and a
+    # matching id at an inspected path is no better evidence than a matching
+    # section name. If the path was not established some other way,
+    # DTK_RCLONE_CONFIG stays out of offsite.env.
+    RESUME_INTERRUPTED=0
+    if [ "$CONFIG_STATE" = "complete" ] \
+            && { [ -z "$SELECTED_REMOTE" ] \
+                 || [ "$SELECTED_REMOTE" = "$RCLONE_REMOTE_NAME:$B2_BUCKET" ]; } \
+            && [ "$(config_section_key_id_matches "$RCLONE_USE_BIN" \
+                    "$RCLONE_CONFIG_PATH" "$RCLONE_REMOTE_NAME" "$B2_KEY_ID")" = "match" ]; then
+        RESUME_INTERRUPTED=1
+    fi
+    if [ "$RESUME_INTERRUPTED" -eq 1 ]; then
+        echo "  $RCLONE_CONFIG_PATH already holds a complete [$RCLONE_REMOTE_NAME]"
+        echo "  remote with the key id supplied, so it was not rewritten. Its"
+        echo "  application key was not compared. Publishing the settings."
+        chown "$DTK_USER:$DTK_USER" "$RCLONE_CONFIG_PATH"
+        chmod 0600 "$RCLONE_CONFIG_PATH"
+        echo "  mode 0600, owner $DTK_USER re-asserted."
+        RUN_CRED="left the complete [$RCLONE_REMOTE_NAME] section in $RCLONE_CONFIG_PATH untouched (same key id as supplied); mode 0600, owner $DTK_USER re-asserted"
+        offsite_write_or_fail "$RCLONE_REMOTE_NAME:$B2_BUCKET"
+        sync
+        probe_listing_once
+        run_report
+        exit 0
+    fi
     if [ "$CONFIG_STATE" != "missing" ]; then
         echo "  ⚠ $RCLONE_CONFIG_PATH already exists and was NOT replaced."
         echo "    The key material supplied was not used."
@@ -1851,50 +2046,7 @@ RCLONE_CONF
     offsite_write_or_fail "$RCLONE_REMOTE_NAME:$B2_BUCKET"
     sync
 
-    # Best-effort, never fatal: one listing call, so that a mistyped key
-    # surfaces here instead of half an hour later as something that reads as a
-    # credentials problem. It LISTS; it writes nothing, because the only
-    # capability worth confirming without side effects is the one a failed
-    # listing already explains. Not attempted at all when api.backblazeb2.com
-    # does not answer — being unable to ask is not an answer, so it must not be
-    # reported as one, and must not fail the run.
-    #
-    # WHAT A SUCCESS ESTABLISHES, AND NOTHING MORE: that this invocation of
-    # this rclone, with this config file, listed that remote and exited 0. It
-    # is NOT "the key can list the bucket". The environment can redefine the
-    # remote out from under the listing — RCLONE_CONFIG_B2UNIT_TYPE=local makes
-    # `rclone lsf b2unit:scripts` list a local directory and exit 0 — which is
-    # why §2 refuses to run at all when such a variable is set, and why the
-    # line this prints says a listing succeeded rather than what the key can
-    # do.
-    if reachable "https://api.backblazeb2.com"; then
-        echo "  Listing $RCLONE_REMOTE_NAME:$B2_BUCKET once..."
-        # --ask-password=false for the same reason the classification carries
-        # it, and `bounded` for the same reason too: the flags below are
-        # per-operation and idle timeouts, not a maximum runtime, and this
-        # call happens AFTER the credential and offsite.env are both written,
-        # which is the worst place in the script to stall.
-        if bounded "$RCLONE_PROBE_TIMEOUT" \
-                "$RCLONE_USE_BIN" --config "$RCLONE_CONFIG_PATH" \
-                --ask-password=false lsf --max-depth 1 \
-                --retries 1 --low-level-retries 1 --contimeout 10s --timeout 20s \
-                "$RCLONE_REMOTE_NAME:$B2_BUCKET" >/dev/null 2>&1; then
-            echo "  a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET succeeded  ✓"
-            RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET succeeded"
-        else
-            echo "  ⚠ the listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed. The"
-            echo "    remote is recorded; check the key id, the application key, the"
-            echo "    bucket name, and that the key grants listFiles on that bucket. Run"
-            echo "    this to see what rclone says:"
-            echo "      sudo -u $DTK_USER $RCLONE_USE_BIN --config $RCLONE_CONFIG_PATH \\"
-            echo "          lsf --max-depth 1 $RCLONE_REMOTE_NAME:$B2_BUCKET"
-            RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed"
-        fi
-    else
-        echo "  (api.backblazeb2.com did not answer a HEAD request from here, so"
-        echo "  no listing was attempted)"
-        RUN_PROBE="not attempted: api.backblazeb2.com did not answer a HEAD request"
-    fi
+    probe_listing_once
     run_report
     exit 0
 fi
