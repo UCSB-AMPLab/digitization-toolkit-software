@@ -1655,8 +1655,12 @@ fi
 # chmod'd in 2a, 2a-bis and 2c-ante, so the refusal is made once, here, before
 # anything inspects the path and before any chown or chmod can reach it.
 #
-# `-f` follows symlinks, so a link to a regular file passes. That is a
-# separate question from this one and is not decided here.
+# `-f` follows symlinks, so a link to a DIRECTORY is refused here like a bare
+# directory: the test resolves to the target. A link to a regular file passes,
+# and is meant to: an operator who keeps the config on a mounted volume and
+# links it into place has arranged exactly that, and chown and chmod follow to
+# the target, which is the file they meant. What that leaves is silence about
+# which file was changed, so the link is resolved and named below.
 if [ -e "$RCLONE_CONFIG_PATH" ] && [ ! -f "$RCLONE_CONFIG_PATH" ]; then
     if [ -d "$RCLONE_CONFIG_PATH" ]; then
         FOUND_KIND="a directory"
@@ -1672,6 +1676,25 @@ if [ -e "$RCLONE_CONFIG_PATH" ] && [ ! -f "$RCLONE_CONFIG_PATH" ]; then
     echo "  nothing was changed. Name the rclone config FILE with --config-path,"
     echo "  or check where $OFFSITE_ENV_PATH records DTK_RCLONE_CONFIG."
     provision_failed
+fi
+# A symlink that survived the test above points at a regular file. Say which
+# one, before the mode and owner of that file are changed: `ls -l` on the path
+# given would show the link's own permissions, not the target's, so an operator
+# reading the report has no other way to see what this run touched. `-f`
+# resolves the whole chain; without it `readlink` gives one hop, which still
+# names something more useful than the path we were handed.
+if [ -L "$RCLONE_CONFIG_PATH" ]; then
+    LINK_TARGET="$(readlink -f "$RCLONE_CONFIG_PATH" 2>/dev/null \
+                   || readlink "$RCLONE_CONFIG_PATH" 2>/dev/null || true)"
+    if [ -n "$LINK_TARGET" ]; then
+        echo "  note: $RCLONE_CONFIG_PATH is a symlink to $LINK_TARGET."
+        echo "        That file is what this run inspects, and whose mode and"
+        echo "        owner it may set."
+    else
+        echo "  note: $RCLONE_CONFIG_PATH is a symlink whose target could not"
+        echo "        be resolved for reporting. The run continues; the target"
+        echo "        is a regular file, since the check above resolved it."
+    fi
 fi
 SELECTED_REMOTE="$OFFSITE_REMOTE"
 
