@@ -34,6 +34,10 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BACKUP_DIR="/var/lib/dtk/backups"
 SHA_FILE="$BACKUP_DIR/pre-update-SHA"
 REF_FILE="$BACKUP_DIR/pre-update-ref"
+# What the unit believes is deployed. update.sh writes it on success; this
+# script has to correct it when it takes the code back, or the unit reports a
+# version it is no longer running (NEH-272).
+LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
 
 ASSUME_YES=0
 DUMP_ARG=""
@@ -231,13 +235,54 @@ if [ -n "$TARGET_SHA" ]; then
     # unavailable and silently skip the code rollback.
     if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
         echo "→ Returning code to commit $TARGET_SHA ..."
+        # Which branch is the unit on? Captured before the checkout, because
+        # the checkout is what would lose it. A plain `git checkout <sha>`
+        # detaches HEAD, and the documented update then refuses to run at all
+        # ("You are not currently on a branch") — so taking the recovery path
+        # blocked the upgrade path until someone knew to check out dev by
+        # hand (NEH-273). `checkout -B` moves the branch to the target and
+        # stays on it, which keeps the next `git pull --ff-only` working:
+        # the target is an ancestor of the remote tip in the case that
+        # matters, a rollback to the previously deployed commit.
+        ROLLBACK_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
         # Run git as the repo owner (dubious-ownership under sudo) WITH the
         # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
         # applies to the SSH submodule URLs .gitmodules registers.
-        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
+        if [ -n "$ROLLBACK_BRANCH" ]; then
+            sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$ROLLBACK_BRANCH" "$TARGET_SHA"
+        else
+            # Already detached before we started — there is no branch to
+            # preserve, so say so rather than inventing one.
+            echo "  ⚠ This repository was already on a detached HEAD, so the"
+            echo "    rollback leaves it detached. Before the next update, run:"
+            echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout dev"
+            sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
+        fi
         sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive
         CODE_ROLLED_BACK=1
         echo "  ✓ Code restored to the pre-update version."
+        if [ -n "$ROLLBACK_BRANCH" ]; then
+            echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
+        fi
+        # The code is now the rolled-back version, so the deploy record has
+        # to say so. Leaving it naming the commit we rolled AWAY from made
+        # the next update log a false "previously-deployed" and made its
+        # offline-safety check compare a commit against itself (NEH-272).
+        # Only on this branch: when the code rollback is skipped below, the
+        # new code is still deployed and the existing record is correct.
+        if printf '%s\n' "$TARGET_SHA" > "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null; then
+            echo "    Deploy record updated: $TARGET_SHA"
+        else
+            echo "  ⚠ Could not update $LAST_DEPLOYED_SHA_FILE — it still names the"
+            echo "    version that was rolled back. The next update will report the"
+            echo "    wrong previous version; the rollback itself was fine."
+        fi
+        # last-deployed-frontend is deliberately left alone. Its only reader
+        # (update.sh's previous_frontend_image) accepts it only when its
+        # "sha:" matches the deploy record, so rewriting that record above
+        # already makes a now-unrelated image read as nothing. Deleting it
+        # would discard a record that becomes correct again the moment that
+        # commit is redeployed.
     else
         echo "⚠ Recorded commit $TARGET_SHA is not present locally."
         echo "  Skipping code rollback — the database was still restored."
