@@ -17,14 +17,19 @@
 #     internet is required and lets them abort.
 #
 # For a network-connected Pi (fetch the latest tested code this repo pins):
-#   git pull && git submodule update --init --recursive && sudo ./scripts/update.sh
+#   sudo ./scripts/update.sh
+# The script pulls and syncs submodules itself, and sets aside any local
+# modifications first (NEH-270) — the operator no longer has to run git.
 #
-# For an offline update from a USB drive, copy the new repo content first,
-# then run this script.
+# For an offline update from a USB drive, copy the new repo content into place
+# first, then run with --no-pull so the script does not try to reach the
+# remote.
 #
-# Usage: sudo ./scripts/update.sh [--yes]
-#   --yes   Skip the "this update needs internet" confirmation prompt
-#           (for scripted / unattended use).
+# Usage: sudo ./scripts/update.sh [--yes] [--no-pull]
+#   --yes       Skip the "this update needs internet" confirmation prompt
+#               (for scripted / unattended use).
+#   --no-pull   Do not fetch; update to whatever is already checked out.
+#               For offline updates, and for testing a specific commit.
 
 set -e
 
@@ -32,10 +37,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 ASSUME_YES=0
+DO_PULL=1
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
-        *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes]"; exit 2 ;;
+        --no-pull) DO_PULL=0 ;;
+        *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull]"; exit 2 ;;
     esac
 done
 
@@ -93,6 +100,10 @@ echo ""
 SERVICE_STOPPED=0
 UPDATE_OK=0
 DB_STARTED_BY_US=0
+# Set when step 0b discarded local modifications after saving them. The abort
+# message must not then say "nothing changed" — same standard as NEH-215.
+TREE_TOUCHED=0
+MODS_DIR=""
 # Set the moment anything changes container state before the service stop —
 # the abort message must never claim "nothing changed" after that (NEH-215).
 STACK_TOUCHED=0
@@ -228,7 +239,15 @@ on_exit() {
         fi
         echo ""
         echo "✗ Update aborted before the running service was touched."
-        echo "  The appliance is still serving the current version — nothing changed."
+        echo "  The appliance is still serving the current version."
+        if [ "$TREE_TOUCHED" -eq 1 ]; then
+            echo ""
+            echo "  One thing DID change: this unit's local modifications were set"
+            echo "  aside before the failure. They are saved in:"
+            echo "    $MODS_DIR"
+        else
+            echo "  Nothing changed."
+        fi
         echo ""
     fi
     exit "$rc"
@@ -236,9 +255,152 @@ on_exit() {
 trap on_exit EXIT
 
 # ---------------------------------------------------------------------------
-# 1. Note the commit being installed. Since the operator pulls/checks out the
-#    new code BEFORE running this script (see header), HEAD is the NEW version;
-#    the rollback target is the previously deployed commit, handled in step 5.
+# 0b. Fetch the new code (NEH-270).
+#
+#     This was the operator's job until now. The header documented
+#       git pull && git submodule update --init --recursive && sudo ./scripts/update.sh
+#     and on a unit that has been fixed by hand in the field that first
+#     command aborts — "Your local changes to the following files would be
+#     overwritten by merge" — then tells the operator to "commit or stash",
+#     which is not an instruction an archive can act on. Doing it here means
+#     the dirty-tree case is handled once, in the open, and the same way
+#     whether a person or NEH-186's admin-triggered update started this.
+#
+#     Local modifications are COPIED ASIDE, never discarded unseen: every
+#     modified tracked file, in the superproject and in each submodule, is
+#     saved under /var/lib/dtk/local-mods-<timestamp>/ with a patch per level
+#     that reproduces the whole set. Untracked files are left where they are.
+#     On an appliance an unknown file may be the only copy of something, so
+#     this script never deletes one — a pull that an untracked file would
+#     block is reported, not forced.
+#
+#     Runs before anything is built or stopped, so any failure here leaves
+#     the unit serving the current version (the EXIT trap's "nothing
+#     changed" branch).
+# ---------------------------------------------------------------------------
+if [ "$DO_PULL" -eq 1 ]; then
+    echo "→ Fetching the new code..."
+
+    # A detached HEAD has no branch to pull into. rollback-update.sh before
+    # NEH-273 left exactly that behind, so a rolled-back unit arrives here.
+    PULL_BRANCH="$(run_as_user git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    if [ -z "$PULL_BRANCH" ]; then
+        echo "✗ This repository is not on a branch, so there is nothing to pull into."
+        echo "  A rollback on an older unit leaves it this way. To recover:"
+        echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT checkout dev"
+        echo "  then run this script again."
+        exit 1
+    fi
+    PULL_UPSTREAM="$(run_as_user git -C "$PROJECT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    if [ -z "$PULL_UPSTREAM" ]; then
+        echo "✗ Branch '$PULL_BRANCH' is not tracking a remote branch, so there is"
+        echo "  nothing to pull from. Set one, e.g.:"
+        echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT branch --set-upstream-to=origin/$PULL_BRANCH"
+        echo "  or run with --no-pull to update to what is already checked out."
+        exit 1
+    fi
+    echo "  Branch: $PULL_BRANCH → $PULL_UPSTREAM"
+
+    # Network first, working tree afterwards. Everything up to the merge is
+    # read-only, so an unreachable remote or a diverged history aborts with
+    # the unit exactly as it was — local modifications included. Discarding
+    # work and THEN discovering there is no network would be the wrong order.
+    if ! run_as_user git -C "$PROJECT_ROOT" fetch origin; then
+        echo ""
+        echo "✗ Could not reach the remote to fetch. If this unit is offline,"
+        echo "  copy the new code into place and re-run with --no-pull."
+        exit 1
+    fi
+    if ! run_as_user git -C "$PROJECT_ROOT" merge-base --is-ancestor HEAD "$PULL_UPSTREAM"; then
+        echo ""
+        echo "✗ '$PULL_BRANCH' cannot be fast-forwarded to $PULL_UPSTREAM: this unit"
+        echo "  has commits of its own that the remote does not. Someone has to"
+        echo "  decide what to keep — this script will not merge or discard"
+        echo "  committed work. Nothing has been changed."
+        exit 1
+    fi
+
+    # Modified tracked files, superproject and submodules. The superproject
+    # diff ignores submodules so a dirty submodule is not counted twice; the
+    # loop below asks each submodule about its own files.
+    SUPER_DIRTY="$(run_as_user git -C "$PROJECT_ROOT" diff HEAD --name-only --ignore-submodules=all)"
+    SUB_PATHS="$(run_as_user git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'printf "%s\n" "$displaypath"')"
+    SUB_DIRTY=""
+    for sub in $SUB_PATHS; do
+        if [ -n "$(run_as_user git -C "$PROJECT_ROOT/$sub" diff HEAD --name-only)" ]; then
+            SUB_DIRTY="$SUB_DIRTY $sub"
+        fi
+    done
+
+    if [ -n "$SUPER_DIRTY" ] || [ -n "$SUB_DIRTY" ]; then
+        MODS_DIR="/var/lib/dtk/local-mods-$(date +%Y%m%d-%H%M%S)"
+        echo ""
+        echo "  ⚠ This unit has locally modified files. Saving them to:"
+        echo "      $MODS_DIR"
+        mkdir -p "$MODS_DIR"
+
+        # save_local_level <repo-dir> <label> [extra git diff args...]
+        # A copy of each modified file under its own path, plus one patch
+        # that reproduces the level. Either alone recovers the work; together
+        # they also show what it was applied to.
+        #
+        # Deliberately strict — no `|| true` anywhere in here. If a diff
+        # cannot be read or a copy cannot be written, this fails while the
+        # working tree is still intact, and the reset below never runs. A
+        # failure to save must not be followed by a discard.
+        save_local_level() {
+            local dir="$1" label="$2"; shift 2
+            local dest="$MODS_DIR/$label" names f
+            mkdir -p "$dest"
+            names="$(run_as_user git -C "$dir" diff HEAD --name-only "$@")"
+            run_as_user git -C "$dir" diff HEAD "$@" > "$dest/local.patch"
+            while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                # A locally DELETED tracked file has nothing to copy; the
+                # patch above still records the deletion.
+                [ -f "$dir/$f" ] || continue
+                install -D "$dir/$f" "$dest/files/$f"
+                echo "      $label: $f"
+            done <<EOF
+$names
+EOF
+        }
+
+        if [ -n "$SUPER_DIRTY" ]; then
+            save_local_level "$PROJECT_ROOT" superproject --ignore-submodules=all
+        fi
+        for sub in $SUB_DIRTY; do
+            save_local_level "$PROJECT_ROOT/$sub" "$sub"
+        done
+
+        # Now discard them, so the unit ends up running the commit it says it
+        # is running. Only tracked files are touched: untracked files are left
+        # alone, because on an appliance an unknown file may be the only copy
+        # of something and this script will not delete one.
+        run_as_user git -C "$PROJECT_ROOT" reset --hard HEAD >/dev/null
+        run_as_user git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git reset --hard HEAD' >/dev/null
+        TREE_TOUCHED=1
+        echo "  ✓ Saved and reset. To see what was set aside:"
+        echo "      ls -R $MODS_DIR"
+    fi
+
+    echo ""
+    if ! run_as_user git -C "$PROJECT_ROOT" merge --ff-only "$PULL_UPSTREAM"; then
+        echo ""
+        echo "✗ Fast-forward to $PULL_UPSTREAM failed. The usual cause left at this"
+        echo "  point is an untracked file on the unit that the update would"
+        echo "  overwrite — git names it above. Move it aside by hand; this"
+        echo "  script will not delete a file it did not put there."
+        exit 1
+    fi
+    run_as_user git -C "$PROJECT_ROOT" submodule update --init --recursive
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# 1. Note the commit being installed. Step 0b has already pulled (or --no-pull
+#    said the new code is in place), so HEAD is the NEW version; the rollback
+#    target is the previously deployed commit, handled in step 5.
 # ---------------------------------------------------------------------------
 mkdir -p "$BACKUP_DIR"
 # git runs as the repo owner: root-run git can fail dubious-ownership on the
@@ -340,6 +502,15 @@ echo ""
 #    pointer. We compare the last successfully-deployed commit against HEAD.
 #    If a submodule pointer moved we warn — and, when the submodule contents
 #    are available locally, we confirm precisely whether a manifest changed.
+#
+#    Every git call below runs as the repo owner. Root-run git fails
+#    dubious-ownership on a user-cloned repo unless SUDO_UID happens to name
+#    the owner, which holds for an interactive `sudo ./scripts/update.sh` and
+#    not in a service context. With stderr discarded that failure was
+#    invisible and the script reported "no previous-deploy record found" —
+#    false, with the record present and correct — so the offline
+#    determination was never reached (NEH-271). The same reasoning already
+#    governs CURRENT_SHA above and rollback-update.sh's checkout.
 # ---------------------------------------------------------------------------
 NEEDS_INTERNET=0
 if [ -f "$LAST_DEPLOYED_SHA_FILE" ]; then
@@ -349,8 +520,8 @@ else
 fi
 
 if [ -n "$PREV_DEPLOYED_SHA" ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ] \
-   && git -C "$PROJECT_ROOT" cat-file -e "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null; then
-    CHANGED_GITLINKS="$(git -C "$PROJECT_ROOT" diff --name-only "$PREV_DEPLOYED_SHA" "$CURRENT_SHA" -- frontend backend 2>/dev/null || echo "")"
+   && run_as_user git -C "$PROJECT_ROOT" cat-file -e "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null; then
+    CHANGED_GITLINKS="$(run_as_user git -C "$PROJECT_ROOT" diff --name-only "$PREV_DEPLOYED_SHA" "$CURRENT_SHA" -- frontend backend 2>/dev/null || echo "")"
     if [ -n "$CHANGED_GITLINKS" ]; then
         # A submodule pointer moved. Try to confirm whether a dependency
         # manifest actually changed inside it; fall back to a conservative
@@ -360,16 +531,16 @@ if [ -n "$PREV_DEPLOYED_SHA" ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ] \
                 frontend) manifests="package.json package-lock.json" ;;
                 backend)  manifests="pixi.toml pixi.lock package.json package-lock.json" ;;
             esac
-            OLD_SUB="$(git -C "$PROJECT_ROOT" rev-parse "$PREV_DEPLOYED_SHA:$sub" 2>/dev/null || echo "")"
-            NEW_SUB="$(git -C "$PROJECT_ROOT" rev-parse "$CURRENT_SHA:$sub" 2>/dev/null || echo "")"
+            OLD_SUB="$(run_as_user git -C "$PROJECT_ROOT" rev-parse "$PREV_DEPLOYED_SHA:$sub" 2>/dev/null || echo "")"
+            NEW_SUB="$(run_as_user git -C "$PROJECT_ROOT" rev-parse "$CURRENT_SHA:$sub" 2>/dev/null || echo "")"
             [ "$OLD_SUB" = "$NEW_SUB" ] && continue
             if [ -d "$PROJECT_ROOT/$sub/.git" ] || [ -f "$PROJECT_ROOT/$sub/.git" ]; then
-                if git -C "$PROJECT_ROOT/$sub" cat-file -e "$OLD_SUB^{commit}" 2>/dev/null \
-                   && git -C "$PROJECT_ROOT/$sub" cat-file -e "$NEW_SUB^{commit}" 2>/dev/null; then
+                if run_as_user git -C "$PROJECT_ROOT/$sub" cat-file -e "$OLD_SUB^{commit}" 2>/dev/null \
+                   && run_as_user git -C "$PROJECT_ROOT/$sub" cat-file -e "$NEW_SUB^{commit}" 2>/dev/null; then
                     # $manifests is a space-separated list of pathspecs; word
                     # splitting is intended here.
                     # shellcheck disable=SC2086
-                    if [ -n "$(git -C "$PROJECT_ROOT/$sub" diff --name-only "$OLD_SUB" "$NEW_SUB" -- $manifests 2>/dev/null)" ]; then
+                    if [ -n "$(run_as_user git -C "$PROJECT_ROOT/$sub" diff --name-only "$OLD_SUB" "$NEW_SUB" -- $manifests 2>/dev/null)" ]; then
                         NEEDS_INTERNET=1
                         echo "  • $sub dependencies changed ($manifests)."
                     fi
