@@ -249,6 +249,22 @@ if [ -n "$TARGET_SHA" ]; then
         # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
         # applies to the SSH submodule URLs .gitmodules registers.
         if [ -n "$ROLLBACK_BRANCH" ]; then
+            # Moving the branch discards its old tip, and if that tip is an
+            # unpushed field hotfix the branch was the only reference naming
+            # it — verified: after `checkout -B`, no ref points at it and only
+            # the reflog holds it, until that expires. Leave a real ref behind
+            # first, so the commit is recoverable by name.
+            ROLLBACK_PREV="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+            if [ -n "$ROLLBACK_PREV" ] && [ "$ROLLBACK_PREV" != "$TARGET_SHA" ]; then
+                ROLLBACK_BACKUP_REF="pre-rollback/$(date +%Y%m%d-%H%M%S)"
+                if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" branch "$ROLLBACK_BACKUP_REF" "$ROLLBACK_PREV" 2>/dev/null; then
+                    echo "  Previous tip kept as branch '$ROLLBACK_BACKUP_REF' ($ROLLBACK_PREV)."
+                else
+                    echo "  ⚠ Could not record the previous tip as a branch. It was"
+                    echo "    $ROLLBACK_PREV — note it down before the reflog expires"
+                    echo "    if this unit had commits that were never pushed."
+                fi
+            fi
             sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$ROLLBACK_BRANCH" "$TARGET_SHA"
         else
             # Already detached before we started — there is no branch to

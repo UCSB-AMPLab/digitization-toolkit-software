@@ -72,6 +72,21 @@ run_as_user() {
     sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" PATH="$DTK_USER_HOME/.pixi/bin:$PATH" "$@"
 }
 
+# Who git must run as: the repository's actual owner, asked of the filesystem
+# rather than inferred. DTK_USER comes from SUDO_USER and falls back to
+# whoami, so in a service context with no SUDO_USER it resolves to root — and
+# `sudo -u root git` then hits exactly the dubious-ownership failure that
+# routing git through a helper was supposed to avoid (NEH-271), because root's
+# global config carries no safe.directory. The owner's HOME also matters: the
+# insteadOf rewrite that lets .gitmodules' SSH URLs resolve (NEH-217) lives in
+# that user's global config, not root's.
+REPO_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || true)"
+[ -n "$REPO_USER" ] || REPO_USER="$DTK_USER"
+REPO_USER_HOME=$(eval echo "~$REPO_USER")
+run_as_repo_owner() {
+    sudo -u "$REPO_USER" env HOME="$REPO_USER_HOME" "$@"
+}
+
 COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/docker-compose.pi.yml"
 
 # Backup location (also used by rollback-update.sh — keep these in sync).
@@ -283,7 +298,7 @@ if [ "$DO_PULL" -eq 1 ]; then
 
     # A detached HEAD has no branch to pull into. rollback-update.sh before
     # NEH-273 left exactly that behind, so a rolled-back unit arrives here.
-    PULL_BRANCH="$(run_as_user git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    PULL_BRANCH="$(run_as_repo_owner git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
     if [ -z "$PULL_BRANCH" ]; then
         echo "✗ This repository is not on a branch, so there is nothing to pull into."
         echo "  A rollback on an older unit leaves it this way. To recover:"
@@ -291,7 +306,7 @@ if [ "$DO_PULL" -eq 1 ]; then
         echo "  then run this script again."
         exit 1
     fi
-    PULL_UPSTREAM="$(run_as_user git -C "$PROJECT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    PULL_UPSTREAM="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
     if [ -z "$PULL_UPSTREAM" ]; then
         echo "✗ Branch '$PULL_BRANCH' is not tracking a remote branch, so there is"
         echo "  nothing to pull from. Set one, e.g.:"
@@ -305,13 +320,13 @@ if [ "$DO_PULL" -eq 1 ]; then
     # read-only, so an unreachable remote or a diverged history aborts with
     # the unit exactly as it was — local modifications included. Discarding
     # work and THEN discovering there is no network would be the wrong order.
-    if ! run_as_user git -C "$PROJECT_ROOT" fetch origin; then
+    if ! run_as_repo_owner git -C "$PROJECT_ROOT" fetch origin; then
         echo ""
         echo "✗ Could not reach the remote to fetch. If this unit is offline,"
         echo "  copy the new code into place and re-run with --no-pull."
         exit 1
     fi
-    if ! run_as_user git -C "$PROJECT_ROOT" merge-base --is-ancestor HEAD "$PULL_UPSTREAM"; then
+    if ! run_as_repo_owner git -C "$PROJECT_ROOT" merge-base --is-ancestor HEAD "$PULL_UPSTREAM"; then
         echo ""
         echo "✗ '$PULL_BRANCH' cannot be fast-forwarded to $PULL_UPSTREAM: this unit"
         echo "  has commits of its own that the remote does not. Someone has to"
@@ -320,14 +335,27 @@ if [ "$DO_PULL" -eq 1 ]; then
         exit 1
     fi
 
-    # Modified tracked files, superproject and submodules. The superproject
-    # diff ignores submodules so a dirty submodule is not counted twice; the
-    # loop below asks each submodule about its own files.
-    SUPER_DIRTY="$(run_as_user git -C "$PROJECT_ROOT" diff HEAD --name-only --ignore-submodules=all)"
-    SUB_PATHS="$(run_as_user git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'printf "%s\n" "$displaypath"')"
+    # Modified tracked files, superproject and submodules.
+    #
+    # --ignore-submodules=dirty, not =all: =all hides a submodule gitlink that
+    # has been STAGED to a different commit, and `submodule update` later
+    # follows the index, so the unit would install that staged pointer's code
+    # while CURRENT_SHA recorded the superproject commit that pins a different
+    # one — an older backend's migrations against a newer database. Verified:
+    # with =all the staged gitlink reports clean, with =dirty it is named.
+    # =dirty still keeps a merely-dirty submodule from being counted twice,
+    # which is what the loop below handles.
+    #
+    # Captured by assignment, never inside `[ -n "$(...)" ]`. A git failure
+    # there yields empty stdout, reads as "clean", and set -e does not fire on
+    # a substitution inside a test — verified with a diff exiting 128. A
+    # repository we cannot interrogate must abort, not be reset unsaved.
+    SUPER_DIRTY="$(run_as_repo_owner git -C "$PROJECT_ROOT" diff HEAD --name-only --ignore-submodules=dirty)"
+    SUB_PATHS="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'printf "%s\n" "$displaypath"')"
     SUB_DIRTY=""
     for sub in $SUB_PATHS; do
-        if [ -n "$(run_as_user git -C "$PROJECT_ROOT/$sub" diff HEAD --name-only)" ]; then
+        SUB_STATUS="$(run_as_repo_owner git -C "$PROJECT_ROOT/$sub" diff HEAD --name-only)"
+        if [ -n "$SUB_STATUS" ]; then
             SUB_DIRTY="$SUB_DIRTY $sub"
         fi
     done
@@ -350,24 +378,62 @@ if [ "$DO_PULL" -eq 1 ]; then
         # failure to save must not be followed by a discard.
         save_local_level() {
             local dir="$1" label="$2"; shift 2
-            local dest="$MODS_DIR/$label" names f
+            local dest="$MODS_DIR/$label" f index_entry
             mkdir -p "$dest"
-            names="$(run_as_user git -C "$dir" diff HEAD --name-only "$@")"
-            run_as_user git -C "$dir" diff HEAD "$@" > "$dest/local.patch"
-            while IFS= read -r f; do
+            # --binary so a changed binary file's bytes survive in the patch
+            # as well as in the copy below.
+            run_as_repo_owner git -C "$dir" diff HEAD --binary "$@" > "$dest/local.patch"
+            # -z into a file, because a NUL-delimited list cannot be held in a
+            # shell variable and `--name-only` alone returns non-ASCII paths
+            # git-quoted ("caf\303\251.txt"), which no file test then matches
+            # — the file would be silently skipped and then reset away.
+            # Redirecting to a file keeps the git call's own exit status under
+            # set -e, unlike a pipe.
+            run_as_repo_owner git -C "$dir" diff HEAD --name-only -z "$@" > "$dest/.names"
+            while IFS= read -r -d "" f; do
                 [ -n "$f" ] || continue
+                # A submodule gitlink is a directory by nature, so it must
+                # not trip the check below. Its own modifications are saved by
+                # that submodule's own pass, and the commit a staged pointer
+                # named still exists in the submodule's object store, so the
+                # superproject reset loses nothing recoverable.
+                # --literal-pathspecs is a TOP-LEVEL git option, not an
+                # ls-files one. Placed after the subcommand, git errors out and
+                # the mode reads as empty, which silently defeats this check
+                # and sends every gitlink into the refusal below. Captured by
+                # assignment with no pipe, so a git failure aborts rather than
+                # being read as "not a gitlink".
+                index_entry="$(run_as_repo_owner git -C "$dir" --literal-pathspecs ls-files --stage -- "$f")"
+                if [ "${index_entry%% *}" = "160000" ]; then
+                    echo "      $label: $f (submodule pointer)"
+                    continue
+                fi
+                if [ -e "$dir/$f" ] && [ ! -f "$dir/$f" ]; then
+                    # The tracked path has been replaced by a directory (or
+                    # something else). `reset --hard` would delete whatever is
+                    # inside it to restore the tracked file, and there is no
+                    # copy to make — so refuse. Verified: a tracked file
+                    # replaced by a directory holding an untracked file loses
+                    # that file to the reset.
+                    echo ""
+                    echo "✗ '$label/$f' is tracked as a file but is now something else"
+                    echo "  on this unit. Restoring the tracked file would delete"
+                    echo "  whatever is there, and this script does not delete what it"
+                    echo "  cannot save. Move it aside by hand, then run this again."
+                    rm -f "$dest/.names"
+                    return 1
+                fi
                 # A locally DELETED tracked file has nothing to copy; the
                 # patch above still records the deletion.
                 [ -f "$dir/$f" ] || continue
                 install -D "$dir/$f" "$dest/files/$f"
                 echo "      $label: $f"
-            done <<EOF
-$names
-EOF
+            done < "$dest/.names"
+            rm -f "$dest/.names"
         }
 
         if [ -n "$SUPER_DIRTY" ]; then
-            save_local_level "$PROJECT_ROOT" superproject --ignore-submodules=all
+            save_local_level "$PROJECT_ROOT" superproject --ignore-submodules=dirty
         fi
         for sub in $SUB_DIRTY; do
             save_local_level "$PROJECT_ROOT/$sub" "$sub"
@@ -377,15 +443,20 @@ EOF
         # is running. Only tracked files are touched: untracked files are left
         # alone, because on an appliance an unknown file may be the only copy
         # of something and this script will not delete one.
-        run_as_user git -C "$PROJECT_ROOT" reset --hard HEAD >/dev/null
-        run_as_user git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git reset --hard HEAD' >/dev/null
+        # Set BEFORE the first reset, not after the last. With it after, a
+        # superproject reset that succeeded followed by a submodule reset that
+        # failed (a stale index.lock will do it) left the flag at zero, and
+        # the trap then printed "nothing changed" having already discarded
+        # modifications — the exact thing NEH-215 exists to prevent.
         TREE_TOUCHED=1
+        run_as_repo_owner git -C "$PROJECT_ROOT" reset --hard HEAD >/dev/null
+        run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git reset --hard HEAD' >/dev/null
         echo "  ✓ Saved and reset. To see what was set aside:"
         echo "      ls -R $MODS_DIR"
     fi
 
     echo ""
-    if ! run_as_user git -C "$PROJECT_ROOT" merge --ff-only "$PULL_UPSTREAM"; then
+    if ! run_as_repo_owner git -C "$PROJECT_ROOT" merge --ff-only "$PULL_UPSTREAM"; then
         echo ""
         echo "✗ Fast-forward to $PULL_UPSTREAM failed. The usual cause left at this"
         echo "  point is an untracked file on the unit that the update would"
@@ -393,7 +464,7 @@ EOF
         echo "  script will not delete a file it did not put there."
         exit 1
     fi
-    run_as_user git -C "$PROJECT_ROOT" submodule update --init --recursive
+    run_as_repo_owner git -C "$PROJECT_ROOT" submodule update --init --recursive
     echo ""
 fi
 
@@ -406,7 +477,7 @@ mkdir -p "$BACKUP_DIR"
 # git runs as the repo owner: root-run git can fail dubious-ownership on the
 # user-cloned repo, and "unknown" here would poison both the snapshot and
 # (on success) last-deployed-SHA.
-CURRENT_SHA="$(run_as_user git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
+CURRENT_SHA="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "unknown")"
 echo "→ Version being installed: $CURRENT_SHA"
 
 # Manual-recovery snapshot, taken BEFORE any build or dependency work so the
@@ -476,7 +547,7 @@ if {
         echo "previously-deployed: (no record)"
     fi
     echo "submodules:"
-    run_as_user git -C "$PROJECT_ROOT" submodule status 2>/dev/null || echo "  (unavailable)"
+    run_as_repo_owner git -C "$PROJECT_ROOT" submodule status 2>/dev/null || echo "  (unavailable)"
     echo "pixi: $(run_as_user "$PIXI_BIN" --version 2>/dev/null || echo '(unavailable)')"
     echo "installing-pixi-lock-sha256: $(file_digest "$PROJECT_ROOT/backend/pixi.lock" || true)"
     echo "previously-deployed-frontend-image: $(previous_frontend_image || true)"
@@ -520,8 +591,8 @@ else
 fi
 
 if [ -n "$PREV_DEPLOYED_SHA" ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ] \
-   && run_as_user git -C "$PROJECT_ROOT" cat-file -e "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null; then
-    CHANGED_GITLINKS="$(run_as_user git -C "$PROJECT_ROOT" diff --name-only "$PREV_DEPLOYED_SHA" "$CURRENT_SHA" -- frontend backend 2>/dev/null || echo "")"
+   && run_as_repo_owner git -C "$PROJECT_ROOT" cat-file -e "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null; then
+    CHANGED_GITLINKS="$(run_as_repo_owner git -C "$PROJECT_ROOT" diff --name-only "$PREV_DEPLOYED_SHA" "$CURRENT_SHA" -- frontend backend 2>/dev/null || echo "")"
     if [ -n "$CHANGED_GITLINKS" ]; then
         # A submodule pointer moved. Try to confirm whether a dependency
         # manifest actually changed inside it; fall back to a conservative
@@ -531,16 +602,16 @@ if [ -n "$PREV_DEPLOYED_SHA" ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ] \
                 frontend) manifests="package.json package-lock.json" ;;
                 backend)  manifests="pixi.toml pixi.lock package.json package-lock.json" ;;
             esac
-            OLD_SUB="$(run_as_user git -C "$PROJECT_ROOT" rev-parse "$PREV_DEPLOYED_SHA:$sub" 2>/dev/null || echo "")"
-            NEW_SUB="$(run_as_user git -C "$PROJECT_ROOT" rev-parse "$CURRENT_SHA:$sub" 2>/dev/null || echo "")"
+            OLD_SUB="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse "$PREV_DEPLOYED_SHA:$sub" 2>/dev/null || echo "")"
+            NEW_SUB="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse "$CURRENT_SHA:$sub" 2>/dev/null || echo "")"
             [ "$OLD_SUB" = "$NEW_SUB" ] && continue
             if [ -d "$PROJECT_ROOT/$sub/.git" ] || [ -f "$PROJECT_ROOT/$sub/.git" ]; then
-                if run_as_user git -C "$PROJECT_ROOT/$sub" cat-file -e "$OLD_SUB^{commit}" 2>/dev/null \
-                   && run_as_user git -C "$PROJECT_ROOT/$sub" cat-file -e "$NEW_SUB^{commit}" 2>/dev/null; then
+                if run_as_repo_owner git -C "$PROJECT_ROOT/$sub" cat-file -e "$OLD_SUB^{commit}" 2>/dev/null \
+                   && run_as_repo_owner git -C "$PROJECT_ROOT/$sub" cat-file -e "$NEW_SUB^{commit}" 2>/dev/null; then
                     # $manifests is a space-separated list of pathspecs; word
                     # splitting is intended here.
                     # shellcheck disable=SC2086
-                    if [ -n "$(run_as_user git -C "$PROJECT_ROOT/$sub" diff --name-only "$OLD_SUB" "$NEW_SUB" -- $manifests 2>/dev/null)" ]; then
+                    if [ -n "$(run_as_repo_owner git -C "$PROJECT_ROOT/$sub" diff --name-only "$OLD_SUB" "$NEW_SUB" -- $manifests 2>/dev/null)" ]; then
                         NEEDS_INTERNET=1
                         echo "  • $sub dependencies changed ($manifests)."
                     fi
