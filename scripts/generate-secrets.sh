@@ -59,6 +59,21 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
+# Assert the mode on every boot (NEH-269). setup.sh creates .env with
+# `install -m 600 -o $DTK_USER`, but nothing afterwards re-checked it, so a
+# mode loosened once stayed loosened — a hand-edit with a tool that recreates
+# the file under the default umask is the likely cause — and every secret
+# written below inherited it. Asserting it here also covers the run that
+# decides it has nothing to do: a unit whose secrets are already its own was
+# previously left world-readable for good. This file holds SECRET_KEY,
+# DATABASE_PASSWORD and BOOTSTRAP_TOKEN and is read by the dtk service as its
+# owner, so 600 is the only correct mode and there is nothing to preserve.
+ENV_MODE="$(stat -c %a "$ENV_FILE" 2>/dev/null || echo "")"
+if [ "$ENV_MODE" != "600" ]; then
+    chmod 600 "$ENV_FILE"
+    log "set $ENV_FILE mode ${ENV_MODE:-unreadable} -> 600"
+fi
+
 get_env() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | xargs; }
 
 # Atomically update a .env key, preserving owner/mode. Used for BOOTSTRAP_TOKEN backfill.
@@ -72,7 +87,10 @@ set_env_atomic() {
         echo "$var=$val" >> "$tmp"
     fi
     chown --reference="$ENV_FILE" "$tmp"
-    chmod --reference="$ENV_FILE" "$tmp"
+    # Mode asserted, not copied: --reference propagated a loose mode onto a
+    # file it had just written a fresh secret into (NEH-269). Ownership still
+    # follows the real file, which is whoever setup.sh provisioned it as.
+    chmod 600 "$tmp"
     mv "$tmp" "$ENV_FILE"
     sync
 }
@@ -203,7 +221,8 @@ set_env SECRET_KEY "$NEW_SECRET"
 set_env DATABASE_PASSWORD "$NEW_DBPASS"
 set_env BOOTSTRAP_TOKEN "$NEW_BOOTSTRAP"
 chown --reference="$ENV_FILE" "$TMP_ENV"
-chmod --reference="$ENV_FILE" "$TMP_ENV"
+# Mode asserted, not copied — see set_env_atomic above (NEH-269).
+chmod 600 "$TMP_ENV"
 mv "$TMP_ENV" "$ENV_FILE"
 sync
 
