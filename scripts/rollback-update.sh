@@ -8,15 +8,20 @@
 #   • the pre-update commit  →  /var/lib/dtk/backups/pre-update-SHA
 #
 # What this script does, loudly, for possibly non-technical venue staff:
-#   1. Checks everything the code rollback will need: who git runs as, that
-#      the checkout is readable as that user, and that the pre-update commit
-#      is present. If any of that fails it stops here, with the appliance
-#      still running and the database untouched.
+#   1. Checks the few things that can be checked without doing anything: who
+#      git runs as, that the checkout is readable as that user, and that the
+#      pre-update commit is present. Any of those failing stops it here, with
+#      the appliance still running and the database untouched.
 #   2. Stops the appliance.
-#   3. Restores the newest (or a named) database dump into PostgreSQL,
-#      REPLACING the current database contents.
-#   4. Checks out the pre-update superproject commit and syncs submodules to
-#      the pins that commit records (no --remote — pins are respected).
+#   3. Checks out the pre-update superproject commit and syncs submodules to
+#      the pins that commit records (no --remote — pins are respected). This
+#      comes BEFORE the database, because it is the half that can be undone:
+#      if any of it fails, the code goes back, the appliance restarts, and
+#      nothing was rolled back.
+#   4. Restores the newest (or a named) database dump into PostgreSQL,
+#      REPLACING the current database contents. The irreversible step, and the
+#      last one that can fail — by which point the code is already right, so a
+#      failure here is retryable from the same backup.
 #   5. Restarts the service and reports what happened, component by component:
 #      the database and the code are restored; the pixi environment and the
 #      frontend image are NOT rebuilt (that needs the registries), so the
@@ -167,18 +172,29 @@ if [ -n "$TARGET_SHA" ] && [ -n "$DUMP_ARG" ] && [ "$DUMP_FILE" != "$NEWEST_DUMP
 fi
 
 # ---------------------------------------------------------------------------
-# 1b. Answer every question the code rollback depends on, before anything is
-#     stopped or restored.
+# 1b. The four questions the code rollback depends on that can be answered
+#     without doing anything: who git runs as, whether git can read the
+#     checkout as that user, whether the recorded commit is present, and what
+#     the target's own update.sh does.
 #
-#     These checks used to sit in step 4, after the database had been dropped,
-#     recreated and reloaded from the dump. Each way they can fail -- an
-#     identity sudo will not accept, a checkout git declines to read, a commit
-#     the unit does not have -- ended in the same state: the old database
-#     restored under the new code, and the backend refusing to start on the
-#     Alembic revision mismatch. The script reported that as a completed
-#     restore with a note about a skipped checkout. None of these questions
-#     need the appliance stopped to answer, so they are answered here, and a
-#     failure leaves the unit running what it was already running.
+#     Deliberately only those four. An earlier version of this block also tried
+#     to predict whether the checkout would succeed -- a read-tree dry run, an
+#     enumeration of the target's submodule pins, a ref pinning the target. Two
+#     adversarial rounds kept finding inputs where the prediction and the act
+#     diverged: a staged gitlink the dry run preserves and the check never sees,
+#     a stale lock on refs/heads/<branch> that read-tree does not need and
+#     `checkout -B` does, a stale index lock inside a submodule, a commit that
+#     is present locally but not ref-reachable so `submodule update` fetches it
+#     anyway. Predicting what git will do across four repositories is not
+#     something a shell script finishes doing.
+#
+#     So the order changed instead, and the prediction went away with it. The
+#     code moves BEFORE the database is restored, because a code move can be
+#     undone and a restore cannot. Step 3 tries the thing and puts it back if it
+#     fails; step 4 does the irreversible work once the code is already where it
+#     belongs. Verified offline, with both remotes removed: moving the
+#     superproject and its submodule to the target and back again restores the
+#     commits, the branch and a clean worktree exactly.
 # ---------------------------------------------------------------------------
 TARGET_UPDATE_PULLS=unknown
 case "$TARGET_RECORD_STATE" in
@@ -235,95 +251,6 @@ if [ -n "$TARGET_SHA" ]; then
         echo "  backend refusing to start."
         echo "  Fetch it and run this script again:"
         echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT fetch --all"
-        echo "  Aborting with nothing changed — the database is untouched."
-        exit 1
-    fi
-
-    # Pin the target. The check above answers a question about now, and the
-    # checkout happens after the operator confirms and after the restore, which
-    # take as long as they take. A commit reachable from a branch cannot be
-    # pruned in that window; this covers the case where it is not reachable,
-    # which is a unit that was moved sideways rather than forward. The ref lives
-    # outside refs/heads so it does not appear as a branch, and each rollback
-    # overwrites it.
-    sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
-        git -C "$PROJECT_ROOT" update-ref refs/dtk/rollback-target "$TARGET_SHA" \
-        2>/dev/null \
-        || echo "  ⚠ Could not pin $TARGET_SHA with a ref; continuing without it."
-
-    # Whether the checkout can be performed, which is not the same question as
-    # whether the repository can be read. A stale .git/index.lock left by an
-    # interrupted git, or an untracked file sitting at a path the target tracks,
-    # both make `git checkout` refuse -- and it used to refuse in step 4, with
-    # the database already replaced and `set -e` ending the script before the
-    # summary or the restart.
-    #
-    # `read-tree -n` is git's own dry run: it reports what the update would fail
-    # on and writes nothing, not even the index. Verified against the real
-    # checkout on five inputs: a stale lock, an untracked collision and a real
-    # local modification to a file the target changes all fail it with the
-    # message the checkout gives, while an unrelated local modification and a
-    # staged change -- which checkout carries across -- both pass, so it does
-    # not refuse a rollback that would have worked.
-    #
-    # The refresh first, because read-tree compares the index against the
-    # working tree and a stat-dirty index -- identical content, a newer mtime,
-    # which a restore or a plain `cp -a` leaves behind -- makes it report "not
-    # uptodate" for a file the checkout would have carried across. Verified
-    # both ways: the dry run fails stat-dirty and passes once refreshed. `git
-    # checkout` refreshes before it decides, so this asks the same question the
-    # checkout will. It writes stat information and nothing else, and it exits
-    # non-zero on a file that really has changed -- which is read-tree's call to
-    # make, not this line's, so the status is dropped.
-    sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
-        git -C "$PROJECT_ROOT" update-index -q --refresh >/dev/null 2>&1 || true
-    if ! CHECKOUT_BLOCKER="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
-            git -C "$PROJECT_ROOT" read-tree -n -m -u HEAD "$TARGET_SHA" 2>&1)"; then
-        echo "✗ The checkout to $TARGET_SHA would not succeed. git says:"
-        printf '%s\n' "$CHECKOUT_BLOCKER" | sed 's/^/      /'
-        echo "  Clear that first and run this script again. A stale lock file is"
-        echo "  removed with:"
-        echo "      sudo -u $DTK_USER rm -f $PROJECT_ROOT/.git/index.lock"
-        echo "  and an untracked file in the way has to be moved or deleted."
-        echo "  Aborting with nothing changed — the database is untouched."
-        exit 1
-    fi
-
-    # Whether the submodule commits the target pins are already on the unit.
-    # This appliance is offline-first and a rollback is exactly when a venue's
-    # unit may have no network, so `submodule update --init --recursive` in step
-    # 4 reaching for a commit it does not have fails -- after the restore, which
-    # left the database on the previous version and the backend on the new one.
-    #
-    # Asked, not fixed: fetching here would do network I/O before the operator
-    # has confirmed anything, and on a unit that does have network the printed
-    # command does the same job with her watching it.
-    SUBMODULE_GAPS=""
-    SUBMODULE_PINS="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
-        git -C "$PROJECT_ROOT" ls-tree -r "$TARGET_SHA" 2>/dev/null \
-        | sed -n 's/^160000 commit \([0-9a-f]*\)'$'\t''\(.*\)$/\1 \2/p' || true)"
-    while read -r sm_sha sm_path; do
-        [ -n "$sm_sha" ] && [ -n "$sm_path" ] || continue
-        if [ ! -e "$PROJECT_ROOT/$sm_path/.git" ]; then
-            SUBMODULE_GAPS="$SUBMODULE_GAPS      $sm_path — not set up on this unit, so it has to be cloned
-"
-        elif ! sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
-                git -C "$PROJECT_ROOT/$sm_path" cat-file -e "$sm_sha^{commit}" \
-                2>/dev/null; then
-            SUBMODULE_GAPS="$SUBMODULE_GAPS      $sm_path — commit $sm_sha is not present
-"
-        fi
-    done <<SUBMODULES
-$SUBMODULE_PINS
-SUBMODULES
-    if [ -n "$SUBMODULE_GAPS" ]; then
-        echo "✗ The code at $TARGET_SHA needs submodule commits this unit does not have:"
-        printf '%s' "$SUBMODULE_GAPS"
-        echo "  Step 4 would try to fetch them, and on a unit with no network that"
-        echo "  fails with the database already restored."
-        echo "  With the unit online, this gets them:"
-        echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
-        echo "  Then run this script again."
         echo "  Aborting with nothing changed — the database is untouched."
         exit 1
     fi
@@ -406,149 +333,172 @@ $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
 echo ""
 
 # ---------------------------------------------------------------------------
-# 3. Restore the database.
-#    Start only the db container, wait for it, drop & recreate the database so
-#    the restore lands in a clean state, then load the dump.
+# 3. Return the code to the pre-update commit (pins respected — no --remote).
+#
+#    Before the database, and that order is the whole design. A code move can
+#    be undone; a restore cannot. So this step tries the thing rather than
+#    predicting it, and every way it can fail -- a lock in any of the four
+#    repositories, a staged gitlink, a submodule commit git decides to fetch
+#    and cannot reach offline -- ends in abort_before_restore: put the code
+#    back, start the appliance, say nothing was rolled back. The database is
+#    never opened on that path, so the unit is the unit it was.
 # ---------------------------------------------------------------------------
-echo "→ Starting the database container..."
-$COMPOSE up -d db
+CODE_ROLLED_BACK=0
+ROLLBACK_BACKUP_CREATED=""
 
-echo "  Waiting for PostgreSQL to be ready..."
-for i in $(seq 1 30); do
-    if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
-        echo "  Database ready."
-        break
-    fi
-    if [ "$i" -eq 30 ]; then
-        echo "✗ Database did not become ready after 60s. Aborting."
-        echo "  The dump at $DUMP_FILE is intact; you can retry the rollback."
-        $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
-        exit 1
-    fi
-    sleep 2
-done
-
-echo "→ Restoring the database (dropping and recreating '$DATABASE_NAME')..."
-# Terminate other sessions, then drop/recreate via the maintenance 'postgres'
-# database so we are not connected to the DB we are dropping.
-$COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
-    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DATABASE_NAME' AND pid <> pg_backend_pid();" \
-    >/dev/null
-$COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
-    -c "DROP DATABASE IF EXISTS \"$DATABASE_NAME\";" \
-    -c "CREATE DATABASE \"$DATABASE_NAME\" OWNER \"$DATABASE_USER\";" \
-    >/dev/null
-
-set -o pipefail
-if ! gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -v ON_ERROR_STOP=1 >/dev/null; then
-    set +o pipefail
-    echo "✗ Restore FAILED while loading the dump."
-    echo "  The database may be in a partial state. The dump file itself is"
-    echo "  intact at: $DUMP_FILE"
-    echo "  Do NOT start the service until this is resolved. Get technical help."
-    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
-    exit 1
+# Where to return to if the move fails, read from the repository rather than
+# assumed. The submodule commits are recorded too, because `submodule update`
+# moves those and a unit whose submodule sat off its pin should not be quietly
+# corrected by a rollback that failed.
+PREV_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+PREV_SUPER="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+# Kept separate from the sed, because a pipeline reports the sed's status and
+# an unreadable submodule state would otherwise look like "no submodules" --
+# which the undo would then read as a successful comparison against nothing.
+PREV_SUBMODULES=""
+PREV_SUBMODULES_KNOWN=0
+if PREV_SUBMODULES_RAW="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)"; then
+    PREV_SUBMODULES="$(printf '%s\n' "$PREV_SUBMODULES_RAW" | sed 's/^[+-U]//')"
+    PREV_SUBMODULES_KNOWN=1
 fi
-set +o pipefail
-echo "  ✓ Database restored from backup."
-echo ""
 
-echo "→ Stopping the database container..."
-$COMPOSE down --remove-orphans
-echo ""
+# Is the unit on the commits it was on when this script started? Asked of the
+# repository, never inferred from a command's exit status: a post-checkout hook
+# that fails runs after git has already moved the refs, so a failed checkout
+# does not mean the checkout did not happen.
+code_is_where_it_started() {
+    [ -n "$PREV_SUPER" ] || return 1
+    [ "$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null)" = "$PREV_SUPER" ] || return 1
+    if [ "$PREV_SUBMODULES_KNOWN" = 1 ]; then
+        NOW_SUBMODULES_RAW="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)" || return 1
+        [ "$(printf '%s\n' "$NOW_SUBMODULES_RAW" | sed 's/^[+-U]//')" = "$PREV_SUBMODULES" ] \
+            || return 1
+    fi
+    return 0
+}
 
-# A git step in 4 that fails anyway cannot leave the operator with a dead shell
-# and no message. Step 1b removes the reasons this was reachable, but `set -e`
-# ending the script between the restore and the restart would print nothing at
-# all, and the database is on the previous version by then. The service is
-# deliberately NOT started here: an old database under newer code is the Alembic
-# revision mismatch the backend refuses to start on, and a unit in `failed`
-# tells her less than these lines do.
-abort_after_restore() {
+# Put the code back exactly where it was. 0 if it is, 1 if it is not and
+# somebody has to look. Verified offline, with both remotes removed: moving the
+# superproject and its submodule to the target and back restores the commits,
+# the branch and a clean worktree.
+undo_code_move() {
+    [ -n "$PREV_SUPER" ] || return 1
+    # Nothing to undo if nothing moved, and checked first because the commonest
+    # reason the move failed -- a lock git could not take -- is also a reason
+    # the undo's own checkout would fail. Reporting "could not be put back" for
+    # a unit that never left would be both wrong and frightening.
+    code_is_where_it_started && return 0
+    if [ -n "$PREV_BRANCH" ]; then
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$PREV_BRANCH" "$PREV_SUPER" >/dev/null 2>&1 || return 1
+    else
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$PREV_SUPER" >/dev/null 2>&1 || return 1
+    fi
+    sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive >/dev/null 2>&1 || return 1
+    # The same predicate, so "put back" means the same thing as "never moved".
+    # It compares submodules only when the starting state was readable: an
+    # empty string standing for "could not read it" would have matched anything.
+    code_is_where_it_started
+}
+
+abort_before_restore() {
     echo ""
-    echo "✗ The rollback stopped part-way: $1"
+    echo "✗ The code could not be returned to $TARGET_SHA: $1"
     echo ""
-    echo "  The database HAS been restored from:"
+    echo "  Nothing has been restored. The database was never opened and the"
+    echo "  backup is intact at:"
     echo "      $DUMP_FILE"
-    echo "  The code is $2."
-    echo "  The appliance is stopped, and this script has NOT restarted it,"
-    echo "  because an old database under newer code is a mismatch the backend"
-    echo "  refuses to start on."
     echo ""
-    echo "  To finish the rollback by hand:"
-    echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT checkout -B ${ROLLBACK_BRANCH:-dev} $TARGET_SHA"
-    echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
-    echo "      sudo systemctl start dtk"
-    # If the superproject did move, the deploy record has to say so even though
-    # the rollback did not finish. Left naming the version rolled away from, it
-    # makes the next update log a false previous version and compare a commit
-    # against itself in its offline-safety check (NEH-272) -- and this path is
-    # where an operator is least likely to notice.
-    if [ "${CODE_AT_TARGET:-0}" = 1 ]; then
-        if printf '%s\n' "$TARGET_SHA" > "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null; then
-            echo ""
-            echo "  The deploy record was updated to $TARGET_SHA, which is where the"
-            echo "  superproject now is."
+    if code_is_where_it_started; then
+        echo "  The code never moved: the unit is still on $PREV_SUPER."
+        CODE_RECOVERED=1
+    else
+        echo "→ Putting the code back..."
+        if undo_code_move; then
+            echo "  ✓ The code is back on $PREV_SUPER."
+            CODE_RECOVERED=1
         else
-            echo ""
-            echo "  ⚠ $LAST_DEPLOYED_SHA_FILE could not be updated and still names"
-            echo "    the version that was rolled away from."
+            CODE_RECOVERED=0
         fi
     fi
-    if [ -n "${ROLLBACK_BACKUP_REF:-}" ]; then
+    if [ "$CODE_RECOVERED" = 1 ]; then
+        if [ -n "$ROLLBACK_BACKUP_CREATED" ]; then
+            echo "    (The branch '$ROLLBACK_BACKUP_CREATED' this run created names the"
+            echo "     same commit and can be deleted.)"
+        fi
+        echo "→ Starting the appliance..."
+        systemctl start dtk || true
+        sleep 5
+        if systemctl is-active --quiet dtk; then
+            echo "  ✓ Running the version it was running before this script started."
+        else
+            echo "  ⚠ The appliance did not come back up, although nothing was"
+            echo "    rolled back. Check:  journalctl -u dtk -n 50"
+        fi
         echo ""
-        echo "  The version you rolled away from is kept as branch"
-        echo "  '$ROLLBACK_BACKUP_REF', if you decide to go back to it instead."
+        echo "  Nothing was rolled back. Clear what is named above and run this"
+        echo "  script again."
+        exit 1
     fi
+    echo "  ✗ The code could NOT be put back, so the unit is between versions."
+    echo "    The database is still the one it was using, so the safest thing is"
+    echo "    to return the code by hand and start the service:"
+    echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT status"
+    # A unit that was already detached stays detached. Defaulting to `-B dev`
+    # here would move someone's branch to the target as part of a recovery,
+    # which the rollback itself is careful not to do.
+    if [ -n "$PREV_BRANCH" ]; then
+        echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout -B $PREV_BRANCH $PREV_SUPER"
+    else
+        echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout $PREV_SUPER"
+    fi
+    echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+    echo "        sudo systemctl start dtk"
+    if [ -n "$ROLLBACK_BACKUP_CREATED" ]; then
+        echo "    The version this run started from is also kept as branch"
+        echo "    '$ROLLBACK_BACKUP_CREATED'."
+    fi
+    echo "    The appliance has NOT been started, because what it would run is"
+    echo "    not known."
     exit 1
 }
 
-# ---------------------------------------------------------------------------
-# 4. Return the code to the pre-update commit (pins respected — no --remote).
-#    Every question this step depends on was answered in 1b, so from here
-#    it only acts — and if an act fails anyway, it says so rather than
-#    letting `set -e` end the script in silence.
-# ---------------------------------------------------------------------------
-CODE_ROLLED_BACK=0
-# The superproject is at the target but the rollback has not finished: what
-# abort_after_restore needs in order to leave the deploy record truthful.
-CODE_AT_TARGET=0
 if [ -n "$TARGET_SHA" ]; then
     echo "→ Returning code to commit $TARGET_SHA ..."
-    # Which branch is the unit on? Captured before the checkout, because
-    # the checkout is what would lose it. A plain `git checkout <sha>`
-    # detaches HEAD, and the documented update then refuses to run at all
-    # ("You are not currently on a branch") — so taking the recovery path
-    # blocked the upgrade path until someone knew to check out dev by
-    # hand (NEH-273). `checkout -B` moves the branch to the target and
-    # stays on it, which keeps the next `git pull --ff-only` working:
-    # the target is an ancestor of the remote tip in the case that
-    # matters, a rollback to the previously deployed commit.
-    ROLLBACK_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    # Which branch the unit is on, and the commit it is at, were read above:
+    # the undo needs them and so does this, so they are read once. A plain
+    # `git checkout <sha>` detaches HEAD, and the documented update then
+    # refuses to run at all ("You are not currently on a branch") — so taking
+    # the recovery path blocked the upgrade path until someone knew to check
+    # out dev by hand (NEH-273). `checkout -B` moves the branch to the target
+    # and stays on it, which keeps the next `git pull --ff-only` working: the
+    # target is an ancestor of the remote tip in the case that matters, a
+    # rollback to the previously deployed commit.
+    #
     # Run git as the repo owner (dubious-ownership under sudo) WITH the
     # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
     # applies to the SSH submodule URLs .gitmodules registers.
-    if [ -n "$ROLLBACK_BRANCH" ]; then
+    if [ -n "$PREV_BRANCH" ]; then
         # Moving the branch discards its old tip, and if that tip is an
         # unpushed field hotfix the branch was the only reference naming
         # it — verified: after `checkout -B`, no ref points at it and only
         # the reflog holds it, until that expires. Leave a real ref behind
         # first, so the commit is recoverable by name.
-        ROLLBACK_PREV="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
-        if [ -n "$ROLLBACK_PREV" ] && [ "$ROLLBACK_PREV" != "$TARGET_SHA" ]; then
+        if [ -n "$PREV_SUPER" ] && [ "$PREV_SUPER" != "$TARGET_SHA" ]; then
             ROLLBACK_BACKUP_REF="pre-rollback/$(date +%Y%m%d-%H%M%S)"
-            if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" branch "$ROLLBACK_BACKUP_REF" "$ROLLBACK_PREV" 2>/dev/null; then
-                echo "  Previous tip kept as branch '$ROLLBACK_BACKUP_REF' ($ROLLBACK_PREV)."
+            # Recorded as created only once it exists: the failure handler
+            # tells the operator the old version is kept there, and that has
+            # to be true when it says it.
+            if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" branch "$ROLLBACK_BACKUP_REF" "$PREV_SUPER" 2>/dev/null; then
+                echo "  Previous tip kept as branch '$ROLLBACK_BACKUP_REF' ($PREV_SUPER)."
+                ROLLBACK_BACKUP_CREATED="$ROLLBACK_BACKUP_REF"
             else
                 echo "  ⚠ Could not record the previous tip as a branch. It was"
-                echo "    $ROLLBACK_PREV — note it down before the reflog expires"
+                echo "    $PREV_SUPER — note it down before the reflog expires"
                 echo "    if this unit had commits that were never pushed."
             fi
         fi
-        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$ROLLBACK_BRANCH" "$TARGET_SHA" \
-            || abort_after_restore "the checkout to $TARGET_SHA failed" \
-                                   "still the version you were rolling away from"
-        CODE_AT_TARGET=1
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$PREV_BRANCH" "$TARGET_SHA" \
+            || abort_before_restore "the checkout to $TARGET_SHA failed"
     else
         # Already detached before we started — there is no branch to
         # preserve, so say so rather than inventing one.
@@ -556,18 +506,40 @@ if [ -n "$TARGET_SHA" ]; then
         echo "    rollback leaves it detached. Before the next update, run:"
         echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout dev"
         sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA" \
-            || abort_after_restore "the checkout to $TARGET_SHA failed" \
-                                   "still the version you were rolling away from"
-        CODE_AT_TARGET=1
+            || abort_before_restore "the checkout to $TARGET_SHA failed"
     fi
     sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive \
-        || abort_after_restore "the submodules could not be synced" \
-                               "at $TARGET_SHA, but its submodules are not"
+        || abort_before_restore "the submodules could not be synced"
+
+    # Verified, not predicted. `submodule update` works from the INDEX, and git
+    # keeps a staged index entry when the old and the new tree agree on that
+    # path -- so a staged gitlink can install a different submodule commit from
+    # the one $TARGET_SHA names, and no check made beforehand sees it. Comparing
+    # afterwards does, and the move is still undoable at this point.
+    #
+    # Compared at the depth `ls-tree -r` reports, which is the superproject's
+    # own gitlinks: none of backend, frontend or wiki carries a .gitmodules, so
+    # there is nothing nested for the non-recursive status to miss.
+    TARGET_PINS="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
+        git -C "$PROJECT_ROOT" ls-tree -r "$TARGET_SHA" \
+        | sed -n 's/^160000 commit \([0-9a-f]*\)'$'\t''\(.*\)$/\2 \1/p' | sort)"
+    ACTUAL_PINS="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
+        git -C "$PROJECT_ROOT" submodule status \
+        | sed 's/^[+-U]//' | awk '{print $2" "$1}' | sort)"
+    if [ "$TARGET_PINS" != "$ACTUAL_PINS" ]; then
+        echo "  The submodules are not at the commits $TARGET_SHA names."
+        echo "  $TARGET_SHA names:"
+        printf '%s\n' "$TARGET_PINS" | sed 's/^/      /'
+        echo "  the unit has:"
+        printf '%s\n' "$ACTUAL_PINS" | sed 's/^/      /'
+        abort_before_restore "the submodules ended up on the wrong commits"
+    fi
+
     CODE_ROLLED_BACK=1
     echo "  ✓ Code restored to the pre-update version."
     if [ "$TARGET_UPDATE_PULLS" = yes ]; then
-        if [ -n "$ROLLBACK_BRANCH" ]; then
-            echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
+        if [ -n "$PREV_BRANCH" ]; then
+            echo "    Branch '$PREV_BRANCH' now points at it, so the next update can run."
             echo "    If that update reports no change, this version's update.sh did not"
             echo "    fetch after all; run these two and deploy again:"
             echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT pull --ff-only"
@@ -610,6 +582,66 @@ if [ -n "$TARGET_SHA" ]; then
     # commit is redeployed.
     echo ""
 fi
+# ---------------------------------------------------------------------------
+# 4. Restore the database.
+#    The irreversible step, and deliberately the last one that can fail. The
+#    code is already where it belongs, so a failure here leaves a retryable
+#    state rather than a mismatch nobody can undo: the dump is untouched and
+#    re-running this script redoes the (idempotent) code move and tries the
+#    restore again.
+#
+#    Start only the db container, wait for it, drop & recreate the database so
+#    the restore lands in a clean state, then load the dump.
+# ---------------------------------------------------------------------------
+echo "→ Starting the database container..."
+$COMPOSE up -d db
+
+echo "  Waiting for PostgreSQL to be ready..."
+for i in $(seq 1 30); do
+    if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
+        echo "  Database ready."
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo "✗ Database did not become ready after 60s. Aborting."
+        echo "  The dump at $DUMP_FILE is intact, and the code is already on"
+        echo "  $TARGET_SHA, so running this script again retries just the restore."
+        $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+        exit 1
+    fi
+    sleep 2
+done
+
+echo "→ Restoring the database (dropping and recreating '$DATABASE_NAME')..."
+# Terminate other sessions, then drop/recreate via the maintenance 'postgres'
+# database so we are not connected to the DB we are dropping.
+$COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
+    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DATABASE_NAME' AND pid <> pg_backend_pid();" \
+    >/dev/null
+$COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS \"$DATABASE_NAME\";" \
+    -c "CREATE DATABASE \"$DATABASE_NAME\" OWNER \"$DATABASE_USER\";" \
+    >/dev/null
+
+set -o pipefail
+if ! gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -v ON_ERROR_STOP=1 >/dev/null; then
+    set +o pipefail
+    echo "✗ Restore FAILED while loading the dump."
+    echo "  The database may be in a partial state. The dump file itself is"
+    echo "  intact at: $DUMP_FILE"
+    echo "  The code IS already on $TARGET_SHA, so running this script again"
+    echo "  retries the restore from the same backup."
+    echo "  Do NOT start the service until this is resolved. Get technical help."
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    exit 1
+fi
+set +o pipefail
+echo "  ✓ Database restored from backup."
+echo ""
+
+echo "→ Stopping the database container..."
+$COMPOSE down --remove-orphans
+echo ""
 
 # ---------------------------------------------------------------------------
 # 5. Restart the service.
@@ -624,7 +656,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # What does NOT correspond to the restored version?
-#    Steps 3-4 restore the database and the git checkout only. The pixi
+#    Steps 3-4 restore the git checkout and the database only. The pixi
 #    environment and the frontend image were rebuilt by update.sh for the NEW
 #    code and are not rebuilt here (that needs the registries, and rollback is
 #    when a remote unit may be offline). Read what update.sh recorded and say,
