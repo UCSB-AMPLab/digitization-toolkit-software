@@ -8,12 +8,16 @@
 #   • the pre-update commit  →  /var/lib/dtk/backups/pre-update-SHA
 #
 # What this script does, loudly, for possibly non-technical venue staff:
-#   1. Stops the appliance.
-#   2. Restores the newest (or a named) database dump into PostgreSQL,
+#   1. Checks everything the code rollback will need: who git runs as, that
+#      the checkout is readable as that user, and that the pre-update commit
+#      is present. If any of that fails it stops here, with the appliance
+#      still running and the database untouched.
+#   2. Stops the appliance.
+#   3. Restores the newest (or a named) database dump into PostgreSQL,
 #      REPLACING the current database contents.
-#   3. Checks out the pre-update superproject commit and syncs submodules to
+#   4. Checks out the pre-update superproject commit and syncs submodules to
 #      the pins that commit records (no --remote — pins are respected).
-#   4. Restarts the service and reports what happened, component by component:
+#   5. Restarts the service and reports what happened, component by component:
 #      the database and the code are restored; the pixi environment and the
 #      frontend image are NOT rebuilt (that needs the registries), so the
 #      summary says whether each still corresponds to the restored version,
@@ -75,11 +79,10 @@ DATABASE_NAME="${DATABASE_NAME:-digitization_toolkit}"
 # Resolve real user. The fallback is the CHECKOUT'S OWNER, not whoami: with no
 # SUDO_USER -- a systemd unit, NEH-186's admin-triggered path, anything that is
 # not an interactive sudo -- whoami is root, and root-run git on a user-owned
-# checkout fails dubious-ownership. In this script that is not cosmetic. The
-# database is restored before the target commit is validated below, so a git
-# call that falsely reports the commit unavailable leaves the OLD database
-# restored under the NEW code, and the backend then refuses to start on the
-# revision mismatch. update.sh already asks the filesystem who owns the
+# checkout fails dubious-ownership. Every git call in this script runs as this
+# user, so getting it wrong fails all of them: the preflight in 1b then refuses
+# a rollback the unit was able to perform, which is at least a refusal rather
+# than a half-done rollback. update.sh already asks the filesystem who owns the
 # checkout; this script was never given the same treatment.
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
@@ -146,6 +149,106 @@ if [ -n "$TARGET_SHA" ] && [ -n "$DUMP_ARG" ] && [ "$DUMP_FILE" != "$NEWEST_DUMP
     echo "   most recent update, but you selected an OLDER dump. The restored"
     echo "   database may not correspond to that code version."
     echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# 1b. Answer every question the code rollback depends on, before anything is
+#     stopped or restored.
+#
+#     These checks used to sit in step 4, after the database had been dropped,
+#     recreated and reloaded from the dump. Each way they can fail -- an
+#     identity sudo will not accept, a checkout git declines to read, a commit
+#     the unit does not have -- ended in the same state: the old database
+#     restored under the new code, and the backend refusing to start on the
+#     Alembic revision mismatch. The script reported that as a completed
+#     restore with a note about a skipped checkout. None of these questions
+#     need the appliance stopped to answer, so they are answered here, and a
+#     failure leaves the unit running what it was already running.
+# ---------------------------------------------------------------------------
+TARGET_UPDATE_PULLS=unknown
+if [ -n "$TARGET_SHA" ]; then
+    # Who git runs as. An identity sudo will not accept fails every git call
+    # in step 4 the same way, so it is named here instead of surfacing later
+    # as a commit that appears to be missing.
+    if ! sudo -u "$DTK_USER" true 2>/dev/null; then
+        echo "✗ Cannot run commands as '$DTK_USER', the owner of $PROJECT_ROOT."
+        echo "  Every git step of the rollback runs as that user, so the code"
+        echo "  cannot be returned to $TARGET_SHA."
+        echo "  Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+
+    # Whether the checkout is readable AS that user, asked separately from the
+    # commit lookup because the two have different remedies: git declines a
+    # repository it considers dubiously owned with an error, not with a
+    # missing object.
+    if ! sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
+            git -C "$PROJECT_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "✗ git cannot read the checkout at $PROJECT_ROOT as '$DTK_USER'."
+        echo "  This says why:"
+        echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT status"
+        echo "  Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+
+    # Whether the recorded commit is here to be checked out. On a unit that
+    # never fetched it -- an SD card written from an image, a checkout replaced
+    # by hand -- there is nothing to return the code to, and restoring the dump
+    # would leave the database older than the code running over it.
+    if ! sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
+            git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+        echo "✗ Recorded commit $TARGET_SHA is not present in $PROJECT_ROOT."
+        echo "  The backup was taken at that commit, so restoring it under the"
+        echo "  code now checked out would leave the two disagreeing and the"
+        echo "  backend refusing to start."
+        echo "  Fetch it and run this script again:"
+        echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT fetch --all"
+        echo "  Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+
+    # scripts/ lives in this repository, so a rollback replaces this script
+    # and update.sh along with the application code. The copy on disk
+    # afterwards is the target's own, and if the target predates the
+    # self-pulling step (NEH-270) that copy does not fetch: it redeploys the
+    # commit already checked out and prints "Update complete". An operator
+    # reads that as an update. This script is the newer one at the moment it
+    # runs, so it is the only thing in a position to say otherwise.
+    #
+    # Classified structurally rather than by text. The marker is the
+    # target's own argument handling -- a `--no-pull)` case arm or a
+    # DO_PULL assignment -- which exists only in an implementation that
+    # pulls. Searching for "git pull" would match the operator instructions
+    # in the header comment of versions that never pull at all.
+    #
+    # Every step is guarded. The answer is wanted under `set -e`, and failing
+    # to reach it is not a reason to refuse the rollback. `git show` exits 128
+    # when scripts/update.sh does not exist at that commit, which is a real
+    # input on this repository, and a lookup that cannot answer falls through
+    # to `unknown`, which prints the conservative recovery in step 4.
+    # Three outcomes, not two. A grep that cannot run exits 2, and folding
+    # that into "no" would state as a fact that the target does not fetch
+    # on the strength of a failed test. 0 is yes, 1 is no, anything else is
+    # unknown -- and unknown prints the same recovery as no, so the only
+    # thing the distinction costs is a false claim.
+    #
+    # The markers allow for `export DO_PULL=1` and for a case arm with
+    # alternatives (`--offline|--no-pull)`), both of which a line-anchored
+    # pattern missed. They are still spelling rather than structure: a
+    # `DO_PULL=1` inside a heredoc comment would read as pulling. That is
+    # the direction to be wrong in, so the `yes` branch in step 4 carries
+    # the recovery too.
+    if TARGET_UPDATE_SH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" show "$TARGET_SHA:scripts/update.sh" 2>/dev/null)"; then
+        TARGET_GREP_STATUS=0
+        printf '%s\n' "$TARGET_UPDATE_SH" \
+            | grep -qE '(^|[[:space:];&|(])DO_PULL=|--no-pull[^)]*\)' \
+            || TARGET_GREP_STATUS=$?
+        case "$TARGET_GREP_STATUS" in
+            0) TARGET_UPDATE_PULLS=yes ;;
+            1) TARGET_UPDATE_PULLS=no ;;
+            *) TARGET_UPDATE_PULLS=unknown ;;
+        esac
+    fi
 fi
 
 echo "This will:"
@@ -235,147 +338,97 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # 4. Return the code to the pre-update commit (pins respected — no --remote).
+#    Every question this step depends on was answered in 1b, so from here
+#    it only acts.
 # ---------------------------------------------------------------------------
 CODE_ROLLED_BACK=0
 if [ -n "$TARGET_SHA" ]; then
-    # Validate as the repo owner, like the checkout below — root-run git can
-    # fail dubious-ownership here, which would falsely report the commit
-    # unavailable and silently skip the code rollback.
-    if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
-        echo "→ Returning code to commit $TARGET_SHA ..."
-        # Which branch is the unit on? Captured before the checkout, because
-        # the checkout is what would lose it. A plain `git checkout <sha>`
-        # detaches HEAD, and the documented update then refuses to run at all
-        # ("You are not currently on a branch") — so taking the recovery path
-        # blocked the upgrade path until someone knew to check out dev by
-        # hand (NEH-273). `checkout -B` moves the branch to the target and
-        # stays on it, which keeps the next `git pull --ff-only` working:
-        # the target is an ancestor of the remote tip in the case that
-        # matters, a rollback to the previously deployed commit.
-        # scripts/ lives in this repository, so a rollback replaces this script
-        # and update.sh along with the application code. The copy on disk
-        # afterwards is the target's own, and if the target predates the
-        # self-pulling step (NEH-270) that copy does not fetch: it redeploys the
-        # commit already checked out and prints "Update complete". An operator
-        # reads that as an update. This script is the newer one at the moment it
-        # runs, so it is the only thing in a position to say otherwise.
-        #
-        # Classified structurally rather than by text. The marker is the
-        # target's own argument handling -- a `--no-pull)` case arm or a
-        # DO_PULL assignment -- which exists only in an implementation that
-        # pulls. Searching for "git pull" would match the operator instructions
-        # in the header comment of versions that never pull at all.
-        #
-        # Every step is guarded, because this answer is used after the restore
-        # and before the service restart, under `set -e`. `git show` exits 128
-        # when scripts/update.sh does not exist at that commit, which is a real
-        # input on this repository, and a lookup that cannot answer must fall
-        # through to the conservative message rather than abort a rollback
-        # that has already moved the tree.
-        # Three outcomes, not two. A grep that cannot run exits 2, and folding
-        # that into "no" would state as a fact that the target does not fetch
-        # on the strength of a failed test. 0 is yes, 1 is no, anything else is
-        # unknown -- and unknown prints the same recovery as no, so the only
-        # thing the distinction costs is a false claim.
-        #
-        # The markers allow for `export DO_PULL=1` and for a case arm with
-        # alternatives (`--offline|--no-pull)`), both of which a line-anchored
-        # pattern missed. They are still spelling rather than structure: a
-        # `DO_PULL=1` inside a heredoc comment would read as pulling. That
-        # direction is the dangerous one, so the `yes` branch below carries the
-        # recovery too.
-        TARGET_UPDATE_PULLS=unknown
-        if TARGET_UPDATE_SH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" show "$TARGET_SHA:scripts/update.sh" 2>/dev/null)"; then
-            TARGET_GREP_STATUS=0
-            printf '%s\n' "$TARGET_UPDATE_SH" \
-                | grep -qE '(^|[[:space:];&|(])DO_PULL=|--no-pull[^)]*\)' \
-                || TARGET_GREP_STATUS=$?
-            case "$TARGET_GREP_STATUS" in
-                0) TARGET_UPDATE_PULLS=yes ;;
-                1) TARGET_UPDATE_PULLS=no ;;
-                *) TARGET_UPDATE_PULLS=unknown ;;
-            esac
-        fi
-        ROLLBACK_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-        # Run git as the repo owner (dubious-ownership under sudo) WITH the
-        # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
-        # applies to the SSH submodule URLs .gitmodules registers.
-        if [ -n "$ROLLBACK_BRANCH" ]; then
-            # Moving the branch discards its old tip, and if that tip is an
-            # unpushed field hotfix the branch was the only reference naming
-            # it — verified: after `checkout -B`, no ref points at it and only
-            # the reflog holds it, until that expires. Leave a real ref behind
-            # first, so the commit is recoverable by name.
-            ROLLBACK_PREV="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
-            if [ -n "$ROLLBACK_PREV" ] && [ "$ROLLBACK_PREV" != "$TARGET_SHA" ]; then
-                ROLLBACK_BACKUP_REF="pre-rollback/$(date +%Y%m%d-%H%M%S)"
-                if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" branch "$ROLLBACK_BACKUP_REF" "$ROLLBACK_PREV" 2>/dev/null; then
-                    echo "  Previous tip kept as branch '$ROLLBACK_BACKUP_REF' ($ROLLBACK_PREV)."
-                else
-                    echo "  ⚠ Could not record the previous tip as a branch. It was"
-                    echo "    $ROLLBACK_PREV — note it down before the reflog expires"
-                    echo "    if this unit had commits that were never pushed."
-                fi
-            fi
-            sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$ROLLBACK_BRANCH" "$TARGET_SHA"
-        else
-            # Already detached before we started — there is no branch to
-            # preserve, so say so rather than inventing one.
-            echo "  ⚠ This repository was already on a detached HEAD, so the"
-            echo "    rollback leaves it detached. Before the next update, run:"
-            echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout dev"
-            sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
-        fi
-        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive
-        CODE_ROLLED_BACK=1
-        echo "  ✓ Code restored to the pre-update version."
-        if [ "$TARGET_UPDATE_PULLS" = yes ]; then
-            if [ -n "$ROLLBACK_BRANCH" ]; then
-                echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
-                echo "    If that update reports no change, this version's update.sh did not"
-                echo "    fetch after all; run these two and deploy again:"
-                echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT pull --ff-only"
-                echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
-            fi
-        else
-            if [ "$TARGET_UPDATE_PULLS" = no ]; then
-                echo "  ⚠ scripts/ was rolled back with everything else, and this version's"
-                echo "    update.sh does not fetch. Running it would redeploy the commit"
-                echo "    already checked out and report 'Update complete'."
+    echo "→ Returning code to commit $TARGET_SHA ..."
+    # Which branch is the unit on? Captured before the checkout, because
+    # the checkout is what would lose it. A plain `git checkout <sha>`
+    # detaches HEAD, and the documented update then refuses to run at all
+    # ("You are not currently on a branch") — so taking the recovery path
+    # blocked the upgrade path until someone knew to check out dev by
+    # hand (NEH-273). `checkout -B` moves the branch to the target and
+    # stays on it, which keeps the next `git pull --ff-only` working:
+    # the target is an ancestor of the remote tip in the case that
+    # matters, a rollback to the previously deployed commit.
+    ROLLBACK_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+    # Run git as the repo owner (dubious-ownership under sudo) WITH the
+    # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
+    # applies to the SSH submodule URLs .gitmodules registers.
+    if [ -n "$ROLLBACK_BRANCH" ]; then
+        # Moving the branch discards its old tip, and if that tip is an
+        # unpushed field hotfix the branch was the only reference naming
+        # it — verified: after `checkout -B`, no ref points at it and only
+        # the reflog holds it, until that expires. Leave a real ref behind
+        # first, so the commit is recoverable by name.
+        ROLLBACK_PREV="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+        if [ -n "$ROLLBACK_PREV" ] && [ "$ROLLBACK_PREV" != "$TARGET_SHA" ]; then
+            ROLLBACK_BACKUP_REF="pre-rollback/$(date +%Y%m%d-%H%M%S)"
+            if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" branch "$ROLLBACK_BACKUP_REF" "$ROLLBACK_PREV" 2>/dev/null; then
+                echo "  Previous tip kept as branch '$ROLLBACK_BACKUP_REF' ($ROLLBACK_PREV)."
             else
-                echo "  ⚠ scripts/ was rolled back with everything else, and this version's"
-                echo "    update.sh could not be read, so whether it fetches is unknown."
-                echo "    It may redeploy the commit already checked out and report success."
+                echo "  ⚠ Could not record the previous tip as a branch. It was"
+                echo "    $ROLLBACK_PREV — note it down before the reflog expires"
+                echo "    if this unit had commits that were never pushed."
             fi
-            echo "    To return to the current version, run these two first:"
+        fi
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$ROLLBACK_BRANCH" "$TARGET_SHA"
+    else
+        # Already detached before we started — there is no branch to
+        # preserve, so say so rather than inventing one.
+        echo "  ⚠ This repository was already on a detached HEAD, so the"
+        echo "    rollback leaves it detached. Before the next update, run:"
+        echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout dev"
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA"
+    fi
+    sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive
+    CODE_ROLLED_BACK=1
+    echo "  ✓ Code restored to the pre-update version."
+    if [ "$TARGET_UPDATE_PULLS" = yes ]; then
+        if [ -n "$ROLLBACK_BRANCH" ]; then
+            echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
+            echo "    If that update reports no change, this version's update.sh did not"
+            echo "    fetch after all; run these two and deploy again:"
             echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT pull --ff-only"
             echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
-            echo "    and then deploy with scripts/update.sh."
         fi
-        # The code is now the rolled-back version, so the deploy record has
-        # to say so. Leaving it naming the commit we rolled AWAY from made
-        # the next update log a false "previously-deployed" and made its
-        # offline-safety check compare a commit against itself (NEH-272).
-        # Only on this branch: when the code rollback is skipped below, the
-        # new code is still deployed and the existing record is correct.
-        if printf '%s\n' "$TARGET_SHA" > "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null; then
-            echo "    Deploy record updated: $TARGET_SHA"
-        else
-            echo "  ⚠ Could not update $LAST_DEPLOYED_SHA_FILE — it still names the"
-            echo "    version that was rolled back. The next update will report the"
-            echo "    wrong previous version; the rollback itself was fine."
-        fi
-        # last-deployed-frontend is deliberately left alone. Its only reader
-        # (update.sh's previous_frontend_image) accepts it only when its
-        # "sha:" matches the deploy record, so rewriting that record above
-        # already makes a now-unrelated image read as nothing. Deleting it
-        # would discard a record that becomes correct again the moment that
-        # commit is redeployed.
     else
-        echo "⚠ Recorded commit $TARGET_SHA is not present locally."
-        echo "  Skipping code rollback — the database was still restored."
-        echo "  You may need to check out the previous version manually."
+        if [ "$TARGET_UPDATE_PULLS" = no ]; then
+            echo "  ⚠ scripts/ was rolled back with everything else, and this version's"
+            echo "    update.sh does not fetch. Running it would redeploy the commit"
+            echo "    already checked out and report 'Update complete'."
+        else
+            echo "  ⚠ scripts/ was rolled back with everything else, and this version's"
+            echo "    update.sh could not be read, so whether it fetches is unknown."
+            echo "    It may redeploy the commit already checked out and report success."
+        fi
+        echo "    To return to the current version, run these two first:"
+        echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT pull --ff-only"
+        echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+        echo "    and then deploy with scripts/update.sh."
     fi
+    # The code is now the rolled-back version, so the deploy record has
+    # to say so. Leaving it naming the commit we rolled AWAY from made
+    # the next update log a false "previously-deployed" and made its
+    # offline-safety check compare a commit against itself (NEH-272).
+    # Only inside this branch: with no commit recorded the code is not
+    # rolled back at all, the new code is still deployed, and the existing
+    # record is already correct.
+    if printf '%s\n' "$TARGET_SHA" > "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null; then
+        echo "    Deploy record updated: $TARGET_SHA"
+    else
+        echo "  ⚠ Could not update $LAST_DEPLOYED_SHA_FILE — it still names the"
+        echo "    version that was rolled back. The next update will report the"
+        echo "    wrong previous version; the rollback itself was fine."
+    fi
+    # last-deployed-frontend is deliberately left alone. Its only reader
+    # (update.sh's previous_frontend_image) accepts it only when its
+    # "sha:" matches the deploy record, so rewriting that record above
+    # already makes a now-unrelated image read as nothing. Deleting it
+    # would discard a record that becomes correct again the moment that
+    # commit is redeployed.
     echo ""
 fi
 
