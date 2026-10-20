@@ -97,7 +97,22 @@ The endpoint list, path and query parameters, and request/response schemas are *
 
 FastAPI derives these from the routers themselves, so they cannot fall out of step with the implementation. This document deliberately does not duplicate them.
 
-Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: FastAPI adds a `422` with an `HTTPValidationError` body automatically wherever a route validates input, but no route in `backend/app/api/` declares `responses=`, so **the application's own error codes — 400, 401, 403, 404, 409, 413, 501, 502, 503 — do not appear**. For those, read the route: `HTTPException` calls are explicit and easy to follow.
+Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: no route in `backend/app/api/` declares `responses=`, so the only error FastAPI advertises is the `422` with an `HTTPValidationError` body it adds automatically wherever a route validates input. **Every other code the application raises is absent from the schema: 400, 401, 403, 404, 409, 413, 429, 500, 501, 502, 503 and 504** — and so is the application's own `422`, which is a different thing from the automatic one.
+
+Three of those are worth knowing individually, because a client that assumes the list is shorter will mis-handle them.
+
+- **`422` is two codes wearing one number.** FastAPI's is a validation failure with an array body. Nineteen places in `backend/app/api/` raise their own, carrying a plain `detail` string or a dict — `{message, blocking_record_ids}` on the handover and export refusals. A client that reads 422 as "your request was malformed" will report a collection refused for unapproved records as a bug in itself.
+- **`401` is never per-route, and `403` usually is not.** All fifteen 401s are in `app/api/auth.py`, three of them in the shared dependencies — the bootstrap-token check and `get_current_user` — so they apply to nearly every route rather than to the handful that mention them. Three of the five 403s are there too. The other two are domain rules: an annotation may only be deleted by its creator or an admin, and a status transition checks the caller's role inside `_apply_status_change`, which means a role refusal can arrive from any route that moves a record's status, not only from `PATCH /records/{id}/status`.
+- **`500` is a documented outcome, not only a crash.** Fifteen routes raise it deliberately, most of them where an operation has already changed the disk and the database write then failed. `POST /collections/{id}/images/renumber` is the clearest: it reports that the files were renumbered and the database was not.
+
+To re-derive this rather than trust it, which is what let the previous list go stale:
+
+```bash
+grep -rhoE 'HTTPException\(\s*(status_code\s*=\s*)?(status\.HTTP_)?[0-9]{3}|status_code\s*=\s*(status\.HTTP_)?[0-9]{3}' backend/app/ \
+  | grep -oE '[0-9]{3}' | sort -u
+```
+
+Then drop the success codes the decorators declare — 200, 201, 202, 204. One raiser sits outside `backend/app/api/`: `app/core/db_errors.py`, a 409 for a unique-constraint violation. For any single route, read it: the `HTTPException` calls are explicit, and the helpers they go through (`_locked_record`, `assert_movable`, `_assert_promotable`, `_apply_status_change`) raise codes the route body does not mention.
 
 It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
