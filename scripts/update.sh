@@ -59,11 +59,18 @@ fi
 DATABASE_USER="${DATABASE_USER:-user}"
 DATABASE_NAME="${DATABASE_NAME:-digitization_toolkit}"
 
-# Resolve real user (same logic as setup.sh)
+# Resolve real user. The fallback is the CHECKOUT'S OWNER, not whoami: with no
+# SUDO_USER -- a systemd unit, NEH-186's admin-triggered path -- whoami is root,
+# and then PIXI_BIN below becomes /root/.pixi/bin/pixi, which does not exist on
+# a unit where pixi was installed for the appliance user. Confirmed on the bench
+# unit 2026-10-20: the frontend image rebuilt and the deploy then stopped at
+# `pixi install` with "env: '/root/.pixi/bin/pixi': No such file or directory".
+# Routing git through the checkout's owner (REPO_USER below) fixed the git half
+# of this; the pixi and migration calls still went through DTK_USER.
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
-    DTK_USER="$(whoami)"
+    DTK_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || whoami)"
 fi
 DTK_USER_HOME=$(eval echo "~$DTK_USER")
 PIXI_BIN="$DTK_USER_HOME/.pixi/bin/pixi"
@@ -584,14 +591,37 @@ echo ""
 #    governs CURRENT_SHA above and rollback-update.sh's checkout.
 # ---------------------------------------------------------------------------
 NEEDS_INTERNET=0
-if [ -f "$LAST_DEPLOYED_SHA_FILE" ]; then
-    PREV_DEPLOYED_SHA="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null || echo "")"
-else
+# A file that cannot be read is not a file that is not there, and this block's
+# messages used to say the latter for both. PREV_RECORD_STATE carries which it
+# was so the diagnosis below can be true.
+PREV_DEPLOYED_SHA=""
+if [ ! -e "$LAST_DEPLOYED_SHA_FILE" ]; then
+    PREV_RECORD_STATE=absent
+elif ! PREV_DEPLOYED_SHA="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null)"; then
+    PREV_RECORD_STATE=unreadable
     PREV_DEPLOYED_SHA=""
+elif [ -z "$PREV_DEPLOYED_SHA" ]; then
+    PREV_RECORD_STATE=empty
+else
+    PREV_RECORD_STATE=present
 fi
 
-if [ -n "$PREV_DEPLOYED_SHA" ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ] \
-   && run_as_repo_owner git -C "$PROJECT_ROOT" cat-file -e "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null; then
+# Likewise for the object check: cat-file -e exits 1 when the object is really
+# absent and 128 when it could not be run or read. Only the first justifies
+# saying the commit is not in this repository.
+PREV_OBJ_STATE=skipped
+if [ "$PREV_RECORD_STATE" = present ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ]; then
+    PREV_OBJ_STATUS=0
+    run_as_repo_owner git -C "$PROJECT_ROOT" cat-file -e "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null \
+        || PREV_OBJ_STATUS=$?
+    case "$PREV_OBJ_STATUS" in
+        0) PREV_OBJ_STATE=present ;;
+        1) PREV_OBJ_STATE=missing ;;
+        *) PREV_OBJ_STATE=uncheckable ;;
+    esac
+fi
+
+if [ "$PREV_OBJ_STATE" = present ]; then
     CHANGED_GITLINKS="$(run_as_repo_owner git -C "$PROJECT_ROOT" diff --name-only "$PREV_DEPLOYED_SHA" "$CURRENT_SHA" -- frontend backend 2>/dev/null || echo "")"
     if [ -n "$CHANGED_GITLINKS" ]; then
         # A submodule pointer moved. Try to confirm whether a dependency
@@ -635,16 +665,31 @@ else
     # than it needs to be; changing what the script DOES is a separate
     # decision from correcting what it SAYS, and this is the latter.
     NEEDS_INTERNET=1
-    if [ -z "$PREV_DEPLOYED_SHA" ]; then
-        echo "  • No previous-deploy record found — cannot confirm this update is offline-safe."
-    elif [ "$PREV_DEPLOYED_SHA" = "$CURRENT_SHA" ]; then
-        echo "  • Already deployed at this commit, so there is no change to inspect;"
-        echo "    treating the update as possibly needing internet anyway."
-    else
-        echo "  • The recorded previous deploy ($PREV_DEPLOYED_SHA) is not in this"
-        echo "    repository, so the change cannot be inspected — cannot confirm"
-        echo "    this update is offline-safe."
-    fi
+    case "$PREV_RECORD_STATE:$PREV_OBJ_STATE" in
+        absent:*)
+            echo "  • No previous-deploy record found — cannot confirm this update is offline-safe." ;;
+        unreadable:*)
+            echo "  • The previous-deploy record exists but could not be read, so the"
+            echo "    change cannot be inspected — cannot confirm this update is"
+            echo "    offline-safe." ;;
+        empty:*)
+            echo "  • The previous-deploy record is empty — cannot confirm this update"
+            echo "    is offline-safe." ;;
+        *:missing)
+            echo "  • The recorded previous deploy ($PREV_DEPLOYED_SHA) is not in this"
+            echo "    repository, so the change cannot be inspected — cannot confirm"
+            echo "    this update is offline-safe." ;;
+        *:uncheckable)
+            echo "  • Could not check whether the recorded previous deploy"
+            echo "    ($PREV_DEPLOYED_SHA) is in this repository, so the change cannot be"
+            echo "    inspected — cannot confirm this update is offline-safe." ;;
+        *)
+            # The record is present and equals HEAD: an ordinary redeploy of the
+            # commit already deployed. The record is correct; there is simply no
+            # change to inspect.
+            echo "  • Already deployed at this commit, so there is no change to inspect;"
+            echo "    treating the update as possibly needing internet anyway." ;;
+    esac
 fi
 
 if [ "$NEEDS_INTERNET" -eq 1 ]; then

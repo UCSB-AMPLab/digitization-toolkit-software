@@ -72,11 +72,19 @@ fi
 DATABASE_USER="${DATABASE_USER:-user}"
 DATABASE_NAME="${DATABASE_NAME:-digitization_toolkit}"
 
-# Resolve real user (same logic as setup.sh / update.sh)
+# Resolve real user. The fallback is the CHECKOUT'S OWNER, not whoami: with no
+# SUDO_USER -- a systemd unit, NEH-186's admin-triggered path, anything that is
+# not an interactive sudo -- whoami is root, and root-run git on a user-owned
+# checkout fails dubious-ownership. In this script that is not cosmetic. The
+# database is restored before the target commit is validated below, so a git
+# call that falsely reports the commit unavailable leaves the OLD database
+# restored under the NEW code, and the backend then refuses to start on the
+# revision mismatch. update.sh already asks the filesystem who owns the
+# checkout; this script was never given the same treatment.
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
-    DTK_USER="$(whoami)"
+    DTK_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || whoami)"
 fi
 DTK_USER_HOME=$(eval echo "~$DTK_USER")
 
@@ -264,14 +272,29 @@ if [ -n "$TARGET_SHA" ]; then
         # input on this repository, and a lookup that cannot answer must fall
         # through to the conservative message rather than abort a rollback
         # that has already moved the tree.
+        # Three outcomes, not two. A grep that cannot run exits 2, and folding
+        # that into "no" would state as a fact that the target does not fetch
+        # on the strength of a failed test. 0 is yes, 1 is no, anything else is
+        # unknown -- and unknown prints the same recovery as no, so the only
+        # thing the distinction costs is a false claim.
+        #
+        # The markers allow for `export DO_PULL=1` and for a case arm with
+        # alternatives (`--offline|--no-pull)`), both of which a line-anchored
+        # pattern missed. They are still spelling rather than structure: a
+        # `DO_PULL=1` inside a heredoc comment would read as pulling. That
+        # direction is the dangerous one, so the `yes` branch below carries the
+        # recovery too.
         TARGET_UPDATE_PULLS=unknown
         if TARGET_UPDATE_SH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" show "$TARGET_SHA:scripts/update.sh" 2>/dev/null)"; then
-            if printf '%s\n' "$TARGET_UPDATE_SH" \
-                | grep -qE '^[[:space:]]*--no-pull\)|^[[:space:]]*DO_PULL='; then
-                TARGET_UPDATE_PULLS=yes
-            else
-                TARGET_UPDATE_PULLS=no
-            fi
+            TARGET_GREP_STATUS=0
+            printf '%s\n' "$TARGET_UPDATE_SH" \
+                | grep -qE '(^|[[:space:];&|(])DO_PULL=|--no-pull[^)]*\)' \
+                || TARGET_GREP_STATUS=$?
+            case "$TARGET_GREP_STATUS" in
+                0) TARGET_UPDATE_PULLS=yes ;;
+                1) TARGET_UPDATE_PULLS=no ;;
+                *) TARGET_UPDATE_PULLS=unknown ;;
+            esac
         fi
         ROLLBACK_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
         # Run git as the repo owner (dubious-ownership under sudo) WITH the
@@ -309,6 +332,10 @@ if [ -n "$TARGET_SHA" ]; then
         if [ "$TARGET_UPDATE_PULLS" = yes ]; then
             if [ -n "$ROLLBACK_BRANCH" ]; then
                 echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
+                echo "    If that update reports no change, this version's update.sh did not"
+                echo "    fetch after all; run these two and deploy again:"
+                echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT pull --ff-only"
+                echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
             fi
         else
             if [ "$TARGET_UPDATE_PULLS" = no ]; then
