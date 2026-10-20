@@ -59,6 +59,44 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
+# Assert the mode on every boot (NEH-269). setup.sh creates .env with
+# `install -m 600 -o $DTK_USER`, but nothing afterwards re-checked it, so a
+# mode loosened once stayed loosened — a hand-edit with a tool that recreates
+# the file under the default umask is the likely cause — and every secret
+# written below inherited it. Asserting it here also covers the run that
+# decides it has nothing to do: a unit whose secrets are already its own was
+# previously left world-readable for good.
+#
+# Ownership comes FIRST, and the mode is only tightened when it is safe to.
+# Tightening alone is not: a `.env` that is root-owned and 644 — which a hand
+# `sudo cp` produces, the very scenario above — is readable by `pi` today, and
+# chmod 600 would make it root-only while dtk.service runs as User=pi. That
+# turns a world-readable file into an appliance that cannot start. The service
+# user is taken to be the owner of the checkout, which is what setup.sh
+# provisioned `.env` as; where no non-root owner can be established the mode
+# is left alone and the problem reported, because a visibly insecure unit
+# beats a silently unserving one.
+ENV_OWNER="$(stat -c %U "$ENV_FILE" 2>/dev/null || echo "")"
+REPO_OWNER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || echo "")"
+ENV_MODE="$(stat -c %a "$ENV_FILE" 2>/dev/null || echo "")"
+if [ "$ENV_OWNER" = "root" ] && [ -n "$REPO_OWNER" ] && [ "$REPO_OWNER" != "root" ]; then
+    chown "$REPO_OWNER":"$REPO_OWNER" "$ENV_FILE"
+    log "chowned $ENV_FILE root -> $REPO_OWNER (the service runs as the checkout's owner)"
+    ENV_OWNER="$REPO_OWNER"
+fi
+# Whether the writers below may assert 600 as well.
+ENV_FORCE_600=1
+if [ -z "$ENV_OWNER" ] || [ "$ENV_OWNER" = "root" ]; then
+    ENV_FORCE_600=0
+    log "WARNING: $ENV_FILE is owned by ${ENV_OWNER:-an unknown user} and no"
+    log "         non-root owner could be established, so its mode is left as"
+    log "         ${ENV_MODE:-unknown}. 600 here would stop the dtk service reading it."
+    log "         Fix by hand:  chown pi:pi $ENV_FILE && chmod 600 $ENV_FILE"
+elif [ "$ENV_MODE" != "600" ]; then
+    chmod 600 "$ENV_FILE"
+    log "set $ENV_FILE mode ${ENV_MODE:-unreadable} -> 600"
+fi
+
 get_env() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | xargs; }
 
 # Atomically update a .env key, preserving owner/mode. Used for BOOTSTRAP_TOKEN backfill.
@@ -72,7 +110,16 @@ set_env_atomic() {
         echo "$var=$val" >> "$tmp"
     fi
     chown --reference="$ENV_FILE" "$tmp"
-    chmod --reference="$ENV_FILE" "$tmp"
+    # Mode asserted rather than copied: --reference propagated a loose mode
+    # onto a file it had just written a fresh secret into (NEH-269). Ownership
+    # still follows the real file, which the block above has already corrected
+    # where it could. When it could not, the old copying behaviour is kept so
+    # the unit stays able to read its own configuration.
+    if [ "$ENV_FORCE_600" -eq 1 ]; then
+        chmod 600 "$tmp"
+    else
+        chmod --reference="$ENV_FILE" "$tmp"
+    fi
     mv "$tmp" "$ENV_FILE"
     sync
 }
@@ -203,7 +250,12 @@ set_env SECRET_KEY "$NEW_SECRET"
 set_env DATABASE_PASSWORD "$NEW_DBPASS"
 set_env BOOTSTRAP_TOKEN "$NEW_BOOTSTRAP"
 chown --reference="$ENV_FILE" "$TMP_ENV"
-chmod --reference="$ENV_FILE" "$TMP_ENV"
+# Mode asserted where safe — see set_env_atomic above (NEH-269).
+if [ "$ENV_FORCE_600" -eq 1 ]; then
+    chmod 600 "$TMP_ENV"
+else
+    chmod --reference="$ENV_FILE" "$TMP_ENV"
+fi
 mv "$TMP_ENV" "$ENV_FILE"
 sync
 
