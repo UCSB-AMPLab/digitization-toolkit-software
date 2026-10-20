@@ -624,11 +624,27 @@ if [ -n "$PREV_DEPLOYED_SHA" ] && [ "$PREV_DEPLOYED_SHA" != "$CURRENT_SHA" ] \
         done
     fi
 else
-    # No record of a previous deploy (first run of this newer update.sh), or
-    # the recorded commit is unreachable. We cannot prove the update is
-    # offline-safe, so warn conservatively.
+    # Three different situations reach this branch, and only the first is a
+    # missing record. Saying "not found" for all three told an operator the
+    # record was missing when it was present and correct, in the one situation
+    # she is most likely to be anxious about: an ordinary redeploy of the
+    # commit already checked out.
+    #
+    # The conservative NEEDS_INTERNET=1 stays in all three. For a redeploy of
+    # the same commit nothing can have changed, so it is arguably stricter
+    # than it needs to be; changing what the script DOES is a separate
+    # decision from correcting what it SAYS, and this is the latter.
     NEEDS_INTERNET=1
-    echo "  • No previous-deploy record found — cannot confirm this update is offline-safe."
+    if [ -z "$PREV_DEPLOYED_SHA" ]; then
+        echo "  • No previous-deploy record found — cannot confirm this update is offline-safe."
+    elif [ "$PREV_DEPLOYED_SHA" = "$CURRENT_SHA" ]; then
+        echo "  • Already deployed at this commit, so there is no change to inspect;"
+        echo "    treating the update as possibly needing internet anyway."
+    else
+        echo "  • The recorded previous deploy ($PREV_DEPLOYED_SHA) is not in this"
+        echo "    repository, so the change cannot be inspected — cannot confirm"
+        echo "    this update is offline-safe."
+    fi
 fi
 
 if [ "$NEEDS_INTERNET" -eq 1 ]; then

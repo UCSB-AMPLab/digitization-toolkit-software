@@ -244,6 +244,35 @@ if [ -n "$TARGET_SHA" ]; then
         # stays on it, which keeps the next `git pull --ff-only` working:
         # the target is an ancestor of the remote tip in the case that
         # matters, a rollback to the previously deployed commit.
+        # scripts/ lives in this repository, so a rollback replaces this script
+        # and update.sh along with the application code. The copy on disk
+        # afterwards is the target's own, and if the target predates the
+        # self-pulling step (NEH-270) that copy does not fetch: it redeploys the
+        # commit already checked out and prints "Update complete". An operator
+        # reads that as an update. This script is the newer one at the moment it
+        # runs, so it is the only thing in a position to say otherwise.
+        #
+        # Classified structurally rather than by text. The marker is the
+        # target's own argument handling -- a `--no-pull)` case arm or a
+        # DO_PULL assignment -- which exists only in an implementation that
+        # pulls. Searching for "git pull" would match the operator instructions
+        # in the header comment of versions that never pull at all.
+        #
+        # Every step is guarded, because this answer is used after the restore
+        # and before the service restart, under `set -e`. `git show` exits 128
+        # when scripts/update.sh does not exist at that commit, which is a real
+        # input on this repository, and a lookup that cannot answer must fall
+        # through to the conservative message rather than abort a rollback
+        # that has already moved the tree.
+        TARGET_UPDATE_PULLS=unknown
+        if TARGET_UPDATE_SH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" show "$TARGET_SHA:scripts/update.sh" 2>/dev/null)"; then
+            if printf '%s\n' "$TARGET_UPDATE_SH" \
+                | grep -qE '^[[:space:]]*--no-pull\)|^[[:space:]]*DO_PULL='; then
+                TARGET_UPDATE_PULLS=yes
+            else
+                TARGET_UPDATE_PULLS=no
+            fi
+        fi
         ROLLBACK_BRANCH="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
         # Run git as the repo owner (dubious-ownership under sudo) WITH the
         # owner's HOME, so the appliance's global insteadOf rewrite (NEH-217)
@@ -277,8 +306,24 @@ if [ -n "$TARGET_SHA" ]; then
         sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive
         CODE_ROLLED_BACK=1
         echo "  ✓ Code restored to the pre-update version."
-        if [ -n "$ROLLBACK_BRANCH" ]; then
-            echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
+        if [ "$TARGET_UPDATE_PULLS" = yes ]; then
+            if [ -n "$ROLLBACK_BRANCH" ]; then
+                echo "    Branch '$ROLLBACK_BRANCH' now points at it, so the next update can run."
+            fi
+        else
+            if [ "$TARGET_UPDATE_PULLS" = no ]; then
+                echo "  ⚠ scripts/ was rolled back with everything else, and this version's"
+                echo "    update.sh does not fetch. Running it would redeploy the commit"
+                echo "    already checked out and report 'Update complete'."
+            else
+                echo "  ⚠ scripts/ was rolled back with everything else, and this version's"
+                echo "    update.sh could not be read, so whether it fetches is unknown."
+                echo "    It may redeploy the commit already checked out and report success."
+            fi
+            echo "    To return to the current version, run these two first:"
+            echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT pull --ff-only"
+            echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+            echo "    and then deploy with scripts/update.sh."
         fi
         # The code is now the rolled-back version, so the deploy record has
         # to say so. Leaving it naming the commit we rolled AWAY from made
