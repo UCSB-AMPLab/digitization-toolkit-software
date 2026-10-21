@@ -24,10 +24,16 @@ set -e
 
 # Resolve the real (non-root) user the same way setup.sh and update.sh do,
 # so this script behaves identically whichever one calls it, or run by hand.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
-    DTK_USER="$(whoami)"
+    # No SUDO_USER means a service unit or a plain root shell, where whoami
+    # is root, and what this script does for "the user" would then be done
+    # for root. The checkout's owner is the user the backend runs as.
+    # Reproduced on the bench unit 2026-10-20 through provision-rclone.sh.
+    DTK_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || whoami)"
 fi
 
 # A CHDK body is a plain USB device that pychdk drives through pyusb, not
