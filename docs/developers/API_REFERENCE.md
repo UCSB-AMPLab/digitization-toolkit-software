@@ -299,7 +299,7 @@ Five things worth knowing, each of which the previous version of this section go
 
 - **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
 - **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
-- **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
+- **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/core/config.py:92`, `backend/app/core/export_service.py:113`).
 - **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files, as does deleting a single image (`delete_record` and the image delete handler in `backend/app/api/records.py`); each takes the master, the thumbnail and the `_preview.jpg` sidecar beside the master. There is no recovery directory, and on a backup-less appliance a delete is final.
 - **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
 
@@ -364,7 +364,7 @@ Captured images follow the format: `YYYYMMDD_HHMMSS_mmm_cX.jpg`
 ```
 Record (title, capture_mode, project_id, collection_id)
     └─> RecordImage[] (file_path, filename, format, role)
-            ├─> CameraSettings (camera_model, white_balance, lens_position)
+            ├─> CameraSettings (camera_model, white_balance, lens_model)
             └─> ExifData (raw_exif, datetime_original, GPS)
 
 Project (name, description)
@@ -389,7 +389,7 @@ real throughput and six to eight times the real file sizes.
 | picamera2 (IMX519 ×2) | 7–8 s | too slow for production; NEH-173 tracks the fix |
 
 Both already fire the two cameras in parallel (ThreadPool with a 20 ms stagger,
-`capture/service.py:388-393`), and both backends lock per camera index rather
+`capture/service.py:605`), and both backends lock per camera index rather
 than globally, so the cost is per-capture work and not serialisation.
 
 **Throughput** follows from the above: roughly 900 pages/hour on picamera2 and
@@ -402,7 +402,7 @@ exclude page turning, which dominates in practice.
 This figure does not transfer to gphoto2. No file sizes were measured on the
 DSLR path, and the resolution presets do not apply to it at all — most
 `CameraConfig` fields are picamera2-specific and are silently ignored by the
-gphoto2 backend (`capture/backends/gphoto2_backend.py:443-446`), which shoots
+gphoto2 backend (`capture/backends/gphoto2_backend.py`, `capture_image()`), which shoots
 at whatever the body is set to. Sizing storage for a DSLR unit from the number
 above will under-provision badly. The low and high picamera2 presets are also
 unmeasured.
@@ -673,10 +673,11 @@ def gallery_view(token):
      - reviewer: cannot create or edit records, projects or collections,
        BUT is not passive — reviewers drive the QA workflow, annotating
        records and moving them in_review -> approved / rejected
-       (schemas/record.py:11-18), and may trigger a BagIt export
-       (collections.py:443). They cannot send a record back to captured;
-       reopening for re-capture is operator/admin, and from approved it is
-       admin only.
+       (STATUS_TRANSITIONS, schemas/record.py:55), and may trigger a BagIt export
+       (export_collection_bagit, collections.py:633). They cannot send a
+       record back to captured: rejected -> captured is operator/admin, and
+       there is no approved -> captured for anyone -- an approved record goes
+       back to in_review first (reviewer/admin).
        Note each router defines its own allow_read_only — the one in
        records.py governs records; the one in auth.py governs only auth
        endpoints.
@@ -692,18 +693,19 @@ def gallery_view(token):
 8. On logout, clear BOTH keys:
    localStorage.removeItem("access_token")
    localStorage.removeItem("auth_user")
-   The client stores the user alongside the token (stores/auth.ts:78-79),
+   The client stores the user alongside the token (stores/auth.ts:82),
    and the two keys hydrate independently, so half-cleared state is
    reachable. The hazard is a leftover TOKEN, not a leftover user:
-   isAuthenticated() tests token !== null alone (stores/auth.ts:113-114,
-   149-151), so a session with auth_user removed still reads as
+   isAuthenticated() tests token !== null alone (stores/auth.ts:123,
+   159), so a session with auth_user removed still reads as
    authenticated, with userRole silently null. (The root route is
-   stricter, requiring both and bouncing to login — routes/+page.svelte:24.)
+   stricter: a token with no user is cleared and the client is sent to
+   /welcome — routes/+page.svelte:28.)
 ```
 
 ---
 
-### Configuration Page (`pages/configurations`)
+### Configuration Page (`/dashboard/config`)
 
 **Goals:** Camera device testing and calibration.
 
@@ -727,7 +729,7 @@ def gallery_view(token):
 
 ---
 
-### Live Scan Page (`pages/scan`)
+### Live Scan Page (`/live-preview`)
 
 **Goals:** Capture images, automatic database record creation.
 
@@ -751,7 +753,7 @@ def gallery_view(token):
 
 ---
 
-### Gallery Page (`pages/gallery`)
+### Gallery Page (`/dashboard/projects/{projectId}/collections/{collectionId}`)
 
 **Goals:** Display all captured records, view details.
 
@@ -831,7 +833,7 @@ Changing the address the backend actually binds to, as opposed to filtering acce
 
 ### CORS Configuration
 
-Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied at `app/main.py:33`. Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
+Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied at `app/main.py:62`. Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
 
 ```env
 CORS_ORIGINS=["http://digitool.local","http://localhost:5173","http://localhost:3000"]
@@ -847,7 +849,7 @@ In the production stack the browser reaches both the frontend and `/api/` throug
 
 Default: 8 hours (28800 seconds), per `ACCESS_TOKEN_EXPIRE_SECONDS` in `app/core/config.py`. Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`.
 
-This is the bound on how long a deactivated user keeps a working session, so shorten it on units in shared spaces.
+Deactivation does not wait for this: `get_current_user` checks `is_active` on every request (`app/api/auth.py:222`), so a deactivated user is refused on the next call. What the expiry bounds is how long a token that has left its owner keeps working, so shorten it on units in shared spaces.
 
 ---
 
