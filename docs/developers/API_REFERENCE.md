@@ -792,7 +792,7 @@ def gallery_view(token):
 1. `GET /auth/users` — List all users
 2. `PATCH /auth/users/{id}/role` — Promote/demote user
 3. `PATCH /auth/users/{id}/active` — Activate/deactivate user
-4. `DELETE /auth/{id}` — Delete user
+4. `DELETE /auth/users/{id}` — Delete user
 
 ---
 
@@ -854,7 +854,7 @@ This is the bound on how long a deactivated user keeps a working session, so sho
 ## Architecture Overview
 
 ### Security
-- **Password Hashing**: PBKDF2 with 100,000 iterations
+- **Password Hashing**: PBKDF2-HMAC-SHA256 with 600,000 iterations (`PBKDF2_ITERATIONS`, `backend/app/core/security.py`). 100,000 is the *legacy* count, kept only to verify hashes stored before the format carried its own iteration count; login re-hashes those at the current count on the next successful sign-in.
 - **Tokens**: HMAC-SHA256 signed, time-based expiration
 - **Authentication**: HTTPBearer scheme with automatic dependency injection
 - **Authorization**: Role-based via `RoleChecker` dependency (`admin`, `operator`, `reviewer`)
