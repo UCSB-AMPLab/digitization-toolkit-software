@@ -112,7 +112,10 @@
 
 set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f, so a script reached through a symlink still finds the checkout
+# it belongs to rather than the symlink's parent.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 ADVISORY=0
 # Relocates every path this script writes under one directory. It is an
@@ -176,7 +179,12 @@ done
 if [ -n "${SUDO_USER:-}" ]; then
     DTK_USER="$SUDO_USER"
 else
-    DTK_USER="$(whoami)"
+    # No SUDO_USER means a service unit or a plain root shell, where whoami
+    # is root: the file this script writes would then be unreadable by the
+    # user the backend runs as. The checkout's owner is that user. Reproduced
+    # on the bench unit 2026-10-20: update.sh under systemd-run wrote
+    # offsite.env as root 0600 and the backend could not start.
+    DTK_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || whoami)"
 fi
 
 # ── Pin ─────────────────────────────────────────────────────────────────────

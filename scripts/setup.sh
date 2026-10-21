@@ -16,14 +16,20 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f, so a script reached through a symlink still finds the checkout
+# it belongs to rather than the symlink's parent.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Resolve the real (non-root) user so pixi runs under the correct home dir
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
-    DTK_USER="$(whoami)"
+    # No SUDO_USER means a service unit or a plain root shell, where whoami
+    # is root, and what this script does for "the user" would then be done
+    # for root. The checkout's owner is the user the backend runs as.
+    # Reproduced on the bench unit 2026-10-20 through provision-rclone.sh.
+    DTK_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || whoami)"
 fi
 DTK_USER_HOME=$(eval echo "~$DTK_USER")
 PIXI_BIN="$DTK_USER_HOME/.pixi/bin/pixi"
