@@ -97,7 +97,22 @@ The endpoint list, path and query parameters, and request/response schemas are *
 
 FastAPI derives these from the routers themselves, so they cannot fall out of step with the implementation. This document deliberately does not duplicate them.
 
-Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: FastAPI adds a `422` with an `HTTPValidationError` body automatically wherever a route validates input, but no route in `backend/app/api/` declares `responses=`, so **the application's own error codes — 400, 401, 403, 404, 409, 413, 501, 502, 503 — do not appear**. For those, read the route: `HTTPException` calls are explicit and easy to follow.
+Two limits worth knowing, because the schema is only as complete as the routes declare it. Endpoints without a `response_model` — `POST /auth/login` and `GET /auth/setup/status` among them — appear with no response schema. On errors, the schema is partial: no route in `backend/app/api/` declares `responses=`, so the only error FastAPI advertises is the `422` with an `HTTPValidationError` body it adds automatically wherever a route validates input. **Every other code the application raises is absent from the schema: 400, 401, 403, 404, 409, 413, 429, 500, 501, 502, 503 and 504** — and so is the application's own `422`, which is a different thing from the automatic one. Two more can reach a client from the framework beneath the application, and the grep below does not see them: `405` from Starlette's router when the path exists and the method does not, and `416` from `FileResponse` when a `Range` header cannot be satisfied — the image download at `records.py:602` returns one.
+
+Three of those are worth knowing individually, because a client that assumes the list is shorter will mis-handle them.
+
+- **`422` is two codes wearing one number.** FastAPI's is a validation failure whose body is an object with a `detail` array. Nineteen places in `backend/app/api/` raise their own, carrying a `detail` string or, on the handover and export refusals in `collections.py`, a dict — `{message, blocking_record_ids}`. The move refusal that names records the same way is a `409`, not a `422` (`collections.py:321`). And a refusal from the background export job never arrives as an error status at all: the job records it, and `GET .../export/status/{job_id}` returns it at `200` with the message in a top-level `error` field (`collections.py:703`). A client that reads 422 as "your request was malformed" will report a collection refused for unapproved records as a bug in itself.
+- **`401` comes from one file, and `403` mostly does.** All fourteen 401s are in `app/api/auth.py`. Three are in `get_current_user`, the dependency of every route except `/health` and five auth routes, so a client can meet them anywhere. The other eleven are raised by the auth routes themselves — login, register, refresh and reset-password — for that route's own reason: a wrong password, a wrong bootstrap token at first-user registration (`_authorize_bootstrap`, called only there, `auth.py:63`), and at refresh and reset an invalid or expired token as well (`auth.py:172`, `:192`). Which of them mean the session is gone is the route's, not the status code's, to say. Three of the five 403s are in `auth.py` too, one of them `RoleChecker.__call__` (`auth.py:232`), the role gate routes declare as a dependency. The other two are domain rules: an annotation with a recorded creator may only be deleted by that creator or an admin, and one with none by anyone who can reach the route (`records.py:715`); and `_apply_status_change` checks the caller's role (`records.py:868`). That helper is also called from `promote_collection`, so a role refusal can arrive from the handover — but the bulk status route calls it too and catches the refusal and returns `200` with the records it accepted — including a record already in the requested status, which is a no-op (`records.py:857`, `:954-963`); a refused record is logged on the server and not reported to the client.
+- **`500` is a documented outcome, not only a crash.** Fifteen routes raise it deliberately: a camera control that failed, a storage command (`lsblk`, mount, unmount) that failed, a file operation that failed, or a database commit that failed after files had already changed. One of them reports a half-completed operation: `POST /collections/{id}/images/renumber` says the files were renumbered on disk and the database update was not (`collections.py:477`). `POST /records/{id}/images` is the opposite case — when its commit fails it unlinks the saved file and thumbnail before raising (`records.py:421-427`). A failure after the commit, in the refresh at `records.py:428`, is also a 500 and cleans nothing up, so the two cannot be told apart from the status alone.
+
+To re-derive this rather than trust it, which is what let the previous list go stale:
+
+```bash
+grep -rhoE 'HTTPException\(\s*(status_code\s*=\s*)?(status\.HTTP_)?[0-9]{3}|status_code\s*=\s*(status\.HTTP_)?[0-9]{3}' backend/app/ \
+  | grep -oE '[0-9]{3}' | sort -u
+```
+
+Then drop the success codes the decorators declare — 200, 201, 202, 204. One raiser sits outside `backend/app/api/`: `app/core/db_errors.py`, which turns any `IntegrityError` — not only a unique-constraint one — into a 409 carrying a message and, when one could be recovered, the constraint name. For any single route, read it: the `HTTPException` calls are explicit, and seven callables in `backend/app/api/` raise on a route's behalf — `_authorize_bootstrap`, `get_current_user` and `RoleChecker.__call__` in `auth.py`, `_resolve_capture_target` in `cameras.py`, `assert_movable`, `_assert_promotable` and `_apply_status_change` in `records.py` — so a route can return a code its own body never names.
 
 It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
@@ -284,7 +299,7 @@ Five things worth knowing, each of which the previous version of this section go
 
 - **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
 - **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
-- **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/api/collections.py:495-496, 584`).
+- **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/core/config.py:92`, `backend/app/core/export_service.py:113`).
 - **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files, as does deleting a single image (`delete_record` and the image delete handler in `backend/app/api/records.py`); each takes the master, the thumbnail and the `_preview.jpg` sidecar beside the master. There is no recovery directory, and on a backup-less appliance a delete is final.
 - **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
 
@@ -349,7 +364,7 @@ Captured images follow the format: `YYYYMMDD_HHMMSS_mmm_cX.jpg`
 ```
 Record (title, capture_mode, project_id, collection_id)
     └─> RecordImage[] (file_path, filename, format, role)
-            ├─> CameraSettings (camera_model, white_balance, lens_position)
+            ├─> CameraSettings (camera_model, white_balance, lens_model)
             └─> ExifData (raw_exif, datetime_original, GPS)
 
 Project (name, description)
@@ -374,7 +389,7 @@ real throughput and six to eight times the real file sizes.
 | picamera2 (IMX519 ×2) | 7–8 s | too slow for production; NEH-173 tracks the fix |
 
 Both already fire the two cameras in parallel (ThreadPool with a 20 ms stagger,
-`capture/service.py:388-393`), and both backends lock per camera index rather
+`capture/service.py:605`), and both backends lock per camera index rather
 than globally, so the cost is per-capture work and not serialisation.
 
 **Throughput** follows from the above: roughly 900 pages/hour on picamera2 and
@@ -387,7 +402,7 @@ exclude page turning, which dominates in practice.
 This figure does not transfer to gphoto2. No file sizes were measured on the
 DSLR path, and the resolution presets do not apply to it at all — most
 `CameraConfig` fields are picamera2-specific and are silently ignored by the
-gphoto2 backend (`capture/backends/gphoto2_backend.py:443-446`), which shoots
+gphoto2 backend (`capture/backends/gphoto2_backend.py`, `capture_image()`), which shoots
 at whatever the body is set to. Sizing storage for a DSLR unit from the number
 above will under-provision badly. The low and high picamera2 presets are also
 unmeasured.
@@ -658,10 +673,12 @@ def gallery_view(token):
      - reviewer: cannot create or edit records, projects or collections,
        BUT is not passive — reviewers drive the QA workflow, annotating
        records and moving them in_review -> approved / rejected
-       (schemas/record.py:11-18), and may trigger a BagIt export
-       (collections.py:443). They cannot send a record back to captured;
-       reopening for re-capture is operator/admin, and from approved it is
-       admin only.
+       (approval: STATUS_TRANSITIONS, schemas/record.py:55;
+       rejection is its own route, POST /records/{id}/reject, records.py:970), and may trigger a BagIt export
+       (export_collection_bagit, collections.py:633). They cannot send a
+       record back to captured: rejected -> captured is operator/admin, and
+       there is no approved -> captured for anyone -- an approved record goes
+       back to in_review first (reviewer/admin).
        Note each router defines its own allow_read_only — the one in
        records.py governs records; the one in auth.py governs only auth
        endpoints.
@@ -677,84 +694,19 @@ def gallery_view(token):
 8. On logout, clear BOTH keys:
    localStorage.removeItem("access_token")
    localStorage.removeItem("auth_user")
-   The client stores the user alongside the token (stores/auth.ts:78-79),
+   The client stores the user alongside the token (stores/auth.ts:82),
    and the two keys hydrate independently, so half-cleared state is
    reachable. The hazard is a leftover TOKEN, not a leftover user:
-   isAuthenticated() tests token !== null alone (stores/auth.ts:113-114,
-   149-151), so a session with auth_user removed still reads as
+   isAuthenticated() tests token !== null alone (stores/auth.ts:123,
+   159), so a session with auth_user removed still reads as
    authenticated, with userRole silently null. (The root route is
-   stricter, requiring both and bouncing to login — routes/+page.svelte:24.)
+   stricter: a token with no user is cleared and the client is sent to
+   /welcome — routes/+page.svelte:28.)
 ```
 
 ---
 
-### Configuration Page (`pages/configurations`)
-
-**Goals:** Camera device testing and calibration.
-
-**API Calls:**
-1. `POST /auth/login` — User login
-2. `GET /users/me` — Get role for UI gating
-3. `GET /cameras/devices` — Show available cameras with calibration status
-4. `POST /cameras/calibrate` — Calibrate autofocus (operator+ required)
-5. `POST /cameras/calibrate/white-balance` — Calibrate white balance (operator+ required)
-
-**Frontend Flow:**
-```
-1. POST /auth/login → receive token
-2. GET /users/me → get role
-3. Show camera list: GET /cameras/devices
-4. Display cameras with calibration status indicators
-5. If operator/admin: show calibration controls
-   - POST /cameras/calibrate → get lens position
-   - POST /cameras/calibrate/white-balance → get AWB gains
-```
-
----
-
-### Live Scan Page (`pages/scan`)
-
-**Goals:** Capture images, automatic database record creation.
-
-**API Calls:**
-1. `GET /cameras/devices` — List cameras on load (reviewer+)
-2. `POST /cameras/capture` — Capture + automatic RecordImage creation (operator+)
-3. `GET /records/` — List recent captures (reviewer+)
-4. `PATCH /records/{id}` — Update metadata after capture (operator+)
-
-**Frontend Flow:**
-```
-1. GET /cameras/devices → show camera selector
-2. User selects resolution (low/medium/high)
-3. User clicks "Capture"
-4. POST /cameras/capture with project_name, camera_index, resolution
-   → Backend creates RecordImage + CameraSettings + ExifData
-   → Returns file_path
-5. Show success, file path, and option to update metadata
-6. Optional: PATCH /records/{id} with title, author, etc.
-```
-
----
-
-### Gallery Page (`pages/gallery`)
-
-**Goals:** Display all captured records, view details.
-
-**API Calls:**
-1. `GET /records/` — List all records (reviewer+)
-2. `GET /records/{id}` — Get full record with images (reviewer+)
-3. `GET /records/images/{img_id}/thumbnail?token=<token>` — Display thumbnails (reviewer+)
-4. `DELETE /records/{id}` — Delete record (operator+)
-
-**Frontend Flow:**
-```
-1. GET /records/?limit=50 → display grid
-2. Use /records/images/{img_id}/thumbnail?token=<token> for <img src>
-   (the session token is a custom HMAC-SHA256 string, not a JWT — see
-    core/security.py:68-90; using JWT libraries here is a documented no)
-3. Click record → GET /records/{id} → detail view
-4. If operator/admin: show edit/delete controls
-```
+The three capture-side pages — system configuration at `/dashboard/config`, capture at `/live-preview`, and the collection view at `/dashboard/projects/{projectId}/collections/{collectionId}` — used to be described here with the API calls each makes. The lists were wrong in substance by the time anyone checked them, in the same way the endpoint table above was: a hand-written account of what a page does drifts the moment the page changes, and nothing fails when it does. The frontend source under `frontend/src/routes/` is the reference for what a page calls; the sections below cover only what the backend enforces regardless of which page is calling.
 
 ---
 
@@ -777,7 +729,7 @@ def gallery_view(token):
 1. `GET /auth/users` — List all users
 2. `PATCH /auth/users/{id}/role` — Promote/demote user
 3. `PATCH /auth/users/{id}/active` — Activate/deactivate user
-4. `DELETE /auth/{id}` — Delete user
+4. `DELETE /auth/users/{id}` — Delete user
 
 ---
 
@@ -816,7 +768,7 @@ Changing the address the backend actually binds to, as opposed to filtering acce
 
 ### CORS Configuration
 
-Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied at `app/main.py:33`. Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
+Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied at `app/main.py:62`. Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
 
 ```env
 CORS_ORIGINS=["http://digitool.local","http://localhost:5173","http://localhost:3000"]
@@ -832,14 +784,14 @@ In the production stack the browser reaches both the frontend and `/api/` throug
 
 Default: 8 hours (28800 seconds), per `ACCESS_TOKEN_EXPIRE_SECONDS` in `app/core/config.py`. Change via `ACCESS_TOKEN_EXPIRE_SECONDS` in `.env`.
 
-This is the bound on how long a deactivated user keeps a working session, so shorten it on units in shared spaces.
+Deactivation does not wait for this: `get_current_user` checks `is_active` on every request (`app/api/auth.py:222`), so a deactivated user is refused on the next call to any route that depends on it. `POST /auth/password-reset` does not (`auth.py:181`, `:195`): it verifies the token and the old password and changes the password without checking `is_active`. What the expiry bounds is how long a token that has left its owner keeps working, so shorten it on units in shared spaces.
 
 ---
 
 ## Architecture Overview
 
 ### Security
-- **Password Hashing**: PBKDF2 with 100,000 iterations
+- **Password Hashing**: PBKDF2-HMAC-SHA256 with 600,000 iterations (`PBKDF2_ITERATIONS`, `backend/app/core/security.py`). 100,000 is the *legacy* count, kept only to verify hashes stored before the format carried its own iteration count; login re-hashes those at the current count on the next successful sign-in.
 - **Tokens**: HMAC-SHA256 signed, time-based expiration
 - **Authentication**: HTTPBearer scheme with automatic dependency injection
 - **Authorization**: Role-based via `RoleChecker` dependency (`admin`, `operator`, `reviewer`)
