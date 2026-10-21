@@ -197,11 +197,11 @@ fi
 # The command a second run is told to use. This form is right when the
 # checkout has not been replaced (no commit recorded, so no code move); 1b
 # replaces it with the kept copy once there is one.
-RESUME_CMD="$PROJECT_ROOT/scripts/rollback-update.sh"
+RESUME_CMD="$(printf '%q' "$PROJECT_ROOT/scripts/rollback-update.sh")"
 if [ "$ASSUME_YES" -eq 1 ]; then
     RESUME_CMD="$RESUME_CMD --yes"
 fi
-RESUME_CMD="$RESUME_CMD $DUMP_FILE"
+RESUME_CMD="$RESUME_CMD $(printf '%q' "$DUMP_FILE")"
 
 # The recorded commit has four states, not two. An absent record is a
 # legitimate older backup: the code rollback is skipped and the operator is told
@@ -306,8 +306,14 @@ if [ -n "$TARGET_SHA" ]; then
     # never fetched it -- an SD card written from an image, a checkout replaced
     # by hand -- there is nothing to return the code to, and restoring the dump
     # would leave the database older than the code running over it.
-    if ! sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
-            git -C "$PROJECT_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2>/dev/null; then
+    # Resolved to the full id, not only checked for presence: update.sh writes
+    # the full `rev-parse HEAD`, but a record edited by hand may hold an
+    # abbreviation, and the post-move check compares HEAD against this value
+    # byte for byte -- an abbreviation would pass here and then fail that
+    # check on every run, including every resume.
+    if ! TARGET_FULL="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
+            git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$TARGET_SHA^{commit}" 2>/dev/null)" \
+            || [ -z "$TARGET_FULL" ]; then
         echo "✗ Recorded commit $TARGET_SHA is not present in $PROJECT_ROOT."
         echo "  The backup was taken at that commit, so restoring it under the"
         echo "  code now checked out would leave the two disagreeing and the"
@@ -317,31 +323,40 @@ if [ -n "$TARGET_SHA" ]; then
         echo "  Aborting with nothing changed — the database is untouched."
         exit 1
     fi
+    TARGET_SHA="$TARGET_FULL"
 
     # A copy of this script outside the checkout. Step 3 replaces scripts/
     # with the target's, and a target can predate this script altogether
     # (f50aa4f has no scripts/rollback-update.sh) or carry an older one that
     # would be the thing "run this again" ran. Not re-copied when this IS the
-    # copy. A failed copy is a warning and not a refusal: the rollback can
-    # still complete in one run, and the risk is only to a second one.
-    SCRIPT_COPY_OK=0
-    if [ "$THIS_SCRIPT" -ef "$ROLLBACK_SCRIPT_COPY" ]; then
-        SCRIPT_COPY_OK=1
-    elif cp "$THIS_SCRIPT" "$ROLLBACK_SCRIPT_COPY" 2>/dev/null && chmod 755 "$ROLLBACK_SCRIPT_COPY" 2>/dev/null; then
-        SCRIPT_COPY_OK=1
+    # copy -- and only when the copy is a regular file: a symlink at that
+    # path pointing into the checkout would satisfy -ef and then vanish with
+    # the checkout, so it is replaced like anything else. Written to a
+    # temporary name and renamed, which replaces a symlink rather than
+    # writing through it. A failed copy is a refusal, with the appliance
+    # still running: without it, every "run this again" below would name a
+    # file the checkout may have removed.
+    if [ "$THIS_SCRIPT" -ef "$ROLLBACK_SCRIPT_COPY" ] && [ -f "$ROLLBACK_SCRIPT_COPY" ] && [ ! -L "$ROLLBACK_SCRIPT_COPY" ]; then
+        :
+    elif cp "$THIS_SCRIPT" "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null \
+            && chmod 755 "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null \
+            && mv -f "$ROLLBACK_SCRIPT_COPY.tmp" "$ROLLBACK_SCRIPT_COPY" 2>/dev/null; then
+        :
     else
-        echo "⚠  Could not copy this script to $ROLLBACK_SCRIPT_COPY. If the rollback"
-        echo "   has to be finished in a second run, the copy in scripts/ may by then"
-        echo "   be the target's own, older version."
-        echo ""
+        rm -f "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null || true
+        echo "✗ Could not copy this script to $ROLLBACK_SCRIPT_COPY."
+        echo "  The rollback replaces scripts/ along with the rest of the checkout, so"
+        echo "  a copy outside it is the only thing a second run can be sure to find."
+        echo "  Check that $STATE_DIR is writable, then run this again."
+        echo "  Aborting with nothing changed — the database is untouched."
+        exit 1
     fi
-    if [ "$SCRIPT_COPY_OK" -eq 1 ]; then
-        RESUME_CMD="$ROLLBACK_SCRIPT_COPY --project-root=$PROJECT_ROOT"
-        if [ "$ASSUME_YES" -eq 1 ]; then
-            RESUME_CMD="$RESUME_CMD --yes"
-        fi
-        RESUME_CMD="$RESUME_CMD $DUMP_FILE"
+    # Quoted word by word, so a dump path with a space survives being pasted.
+    RESUME_CMD="$(printf '%q' "$ROLLBACK_SCRIPT_COPY") --project-root=$(printf '%q' "$PROJECT_ROOT")"
+    if [ "$ASSUME_YES" -eq 1 ]; then
+        RESUME_CMD="$RESUME_CMD --yes"
     fi
+    RESUME_CMD="$RESUME_CMD $(printf '%q' "$DUMP_FILE")"
 
     # Whether a previous run was interrupted part-way through moving the code
     # to this same commit. If so, a tree between the two versions is what an
@@ -377,11 +392,12 @@ if [ -n "$TARGET_SHA" ]; then
     # submodule initialised and at the commit the index pins. Refused rather
     # than preserved or worked around, because the only things this script
     # does to the checkout are `checkout` and `submodule update`, and what
-    # those do to local state depends on what the state is. update.sh leaves
-    # exactly this state behind when it deploys -- it copies modifications
-    # aside under $STATE_DIR/local-mods-<timestamp>/ and resets -- so a unit
-    # arriving here from an update passes, and a unit someone has edited
-    # since is told what to clear.
+    # those do to local state depends on what the state is. On its pull path
+    # update.sh copies modified files aside under
+    # $STATE_DIR/local-mods-<timestamp>/ and resets, so a unit arriving from
+    # an update usually passes; one updated with --no-pull, or carrying a
+    # staged edit whose file matches HEAD (which that inventory does not see),
+    # may not, and is told what to clear.
     #
     # Three outcomes from tree_clean, not two: 0 is clean, 1 is dirty and
     # anything else is a read that failed, which is a refusal and not a pass.
@@ -396,14 +412,46 @@ if [ -n "$TARGET_SHA" ]; then
                 echo "  do. To see them:"
                 echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT status"
                 echo "  Commit them, or copy them aside and discard them, then run this again."
-                echo "  (A unit that has just run update.sh has none: it saves and resets them"
-                echo "   under $STATE_DIR/local-mods-<timestamp>/ before it deploys.)"
+                echo "  (An update that pulled will have saved its own under"
+                echo "   $STATE_DIR/local-mods-<timestamp>/ before resetting; check there"
+                echo "   before discarding anything.)"
                 echo "  Aborting with nothing changed — the database is untouched."
                 exit 1 ;;
             *)
                 echo "✗ Could not read the state of the checkout at $PROJECT_ROOT (git diff"
                 echo "  exited $TREE_STATUS). This says why:"
                 echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT status"
+                echo "  Aborting with nothing changed — the database is untouched."
+                exit 1 ;;
+        esac
+        # An entry marked assume-unchanged or skip-worktree is invisible to
+        # both diffs by design, and a checkout keeps such an entry when the
+        # two commits agree on that path -- so a file modified under either
+        # bit would survive the move with the restore run over it. Refused,
+        # in the superproject and in every submodule; the bits are set only
+        # by hand, and clearing them is one command.
+        if ! FLAGGED="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" ls-files -v 2>/dev/null \
+                && sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git ls-files -v | sed "s|^\(..\)|\1$displaypath/|"' 2>/dev/null)"; then
+            echo "✗ Could not list the checkout's index entries at $PROJECT_ROOT."
+            echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT ls-files -v"
+            echo "  Aborting with nothing changed — the database is untouched."
+            exit 1
+        fi
+        FLAG_STATUS=0
+        printf '%s\n' "$FLAGGED" | grep -q '^[hS] ' || FLAG_STATUS=$?
+        case "$FLAG_STATUS" in
+            0)
+                echo "✗ These files are marked assume-unchanged (h) or skip-worktree (S), so"
+                echo "  git will not report changes to them and the move could carry a"
+                echo "  modified file across unseen:"
+                printf '%s\n' "$FLAGGED" | grep '^[hS] ' | sed 's/^/      /'
+                echo "  Clear the bit and run this again:"
+                echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT update-index --no-assume-unchanged --no-skip-worktree <file>"
+                echo "  Aborting with nothing changed — the database is untouched."
+                exit 1 ;;
+            1) ;;
+            *)
+                echo "✗ Could not check the index entries at $PROJECT_ROOT (grep exited $FLAG_STATUS)."
                 echo "  Aborting with nothing changed — the database is untouched."
                 exit 1 ;;
         esac
@@ -419,7 +467,17 @@ if [ -n "$TARGET_SHA" ]; then
             echo "  Aborting with nothing changed — the database is untouched."
             exit 1
         fi
-        if [ -n "$SUB_STATUS" ] && printf '%s\n' "$SUB_STATUS" | grep -q '^-'; then
+        UNINIT_STATUS=1
+        if [ -n "$SUB_STATUS" ]; then
+            UNINIT_STATUS=0
+            printf '%s\n' "$SUB_STATUS" | grep -q '^-' || UNINIT_STATUS=$?
+        fi
+        if [ "$UNINIT_STATUS" -ne 0 ] && [ "$UNINIT_STATUS" -ne 1 ]; then
+            echo "✗ Could not check the submodule state (grep exited $UNINIT_STATUS)."
+            echo "  Aborting with nothing changed — the database is untouched."
+            exit 1
+        fi
+        if [ "$UNINIT_STATUS" -eq 0 ]; then
             echo "✗ A submodule is not initialised:"
             printf '%s\n' "$SUB_STATUS" | grep '^-' | sed 's/^/      /'
             echo "  The move would leave it that way and then stop, with the appliance"
@@ -583,10 +641,8 @@ stop_before_restore() {
     echo "  Clear what is named above, then finish the rollback. This command"
     echo "  knows a move to $TARGET_SHA was interrupted and continues it:"
     echo "      sudo $RESUME_CMD"
-    if [ "$SCRIPT_COPY_OK" -eq 1 ]; then
-        echo "  ($ROLLBACK_SCRIPT_COPY is a copy of this script kept outside the"
-        echo "   checkout; the checkout's own copy may now be the target's.)"
-    fi
+    echo "  ($ROLLBACK_SCRIPT_COPY is a copy of this script kept outside the"
+    echo "   checkout; the checkout's own copy may now be the target's.)"
     exit 1
 }
 
@@ -631,13 +687,22 @@ if [ -n "$TARGET_SHA" ]; then
     # if the record cannot be written: without it an interrupted move would be
     # refused as a dirty tree, with no way through but by hand. Nothing has
     # moved yet, so the stop restarts the appliance.
-    if ! printf 'target: %s\nproject-root: %s\ndump: %s\nstarted: %s\n' \
-            "$TARGET_SHA" "$PROJECT_ROOT" "$DUMP_FILE" "$(date +%Y%m%d-%H%M%S)" \
-            > "$ROLLBACK_MARKER" 2>/dev/null; then
-        stop_before_restore "could not write $ROLLBACK_MARKER"
+    # Written to a temporary name and renamed, so an interruption leaves
+    # either the old marker or the new one and never a truncated file that
+    # every later run would refuse. Not rewritten on a resume: the marker
+    # that got us here is the record, and rewriting it is the one way to
+    # lose it.
+    if [ "$RESUMING" -ne 1 ]; then
+        if ! printf 'target: %s\nproject-root: %s\ndump: %s\nstarted: %s\n' \
+                "$TARGET_SHA" "$PROJECT_ROOT" "$DUMP_FILE" "$(date +%Y%m%d-%H%M%S)" \
+                > "$ROLLBACK_MARKER.tmp" 2>/dev/null \
+                || ! mv -f "$ROLLBACK_MARKER.tmp" "$ROLLBACK_MARKER" 2>/dev/null; then
+            rm -f "$ROLLBACK_MARKER.tmp" 2>/dev/null || true
+            stop_before_restore "could not write $ROLLBACK_MARKER"
+        fi
     fi
     if [ -n "$PREV_BRANCH" ]; then
-        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout -B "$PREV_BRANCH" "$TARGET_SHA" \
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout --no-overwrite-ignore -B "$PREV_BRANCH" "$TARGET_SHA" \
             || stop_before_restore "the checkout to $TARGET_SHA failed"
     else
         # Already detached before we started — there is no branch to
@@ -645,7 +710,7 @@ if [ -n "$TARGET_SHA" ]; then
         echo "  ⚠ This repository was already on a detached HEAD, so the"
         echo "    rollback leaves it detached. Before the next update, run:"
         echo "        sudo -u $DTK_USER git -C $PROJECT_ROOT checkout dev"
-        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout "$TARGET_SHA" \
+        sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" checkout --no-overwrite-ignore "$TARGET_SHA" \
             || stop_before_restore "the checkout to $TARGET_SHA failed"
     fi
     sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule update --init --recursive \
@@ -673,7 +738,15 @@ if [ -n "$TARGET_SHA" ]; then
     if ! SUB_STATUS="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)"; then
         stop_before_restore "the submodule state could not be read after the move"
     fi
-    if [ -n "$SUB_STATUS" ] && printf '%s\n' "$SUB_STATUS" | grep -qv '^ '; then
+    OFFPIN_STATUS=1
+    if [ -n "$SUB_STATUS" ]; then
+        OFFPIN_STATUS=0
+        printf '%s\n' "$SUB_STATUS" | grep -qv '^ ' || OFFPIN_STATUS=$?
+    fi
+    if [ "$OFFPIN_STATUS" -ne 0 ] && [ "$OFFPIN_STATUS" -ne 1 ]; then
+        stop_before_restore "the submodule state could not be checked after the move (grep exited $OFFPIN_STATUS)"
+    fi
+    if [ "$OFFPIN_STATUS" -eq 0 ]; then
         echo "  Submodules not at the commits $TARGET_SHA pins:"
         printf '%s\n' "$SUB_STATUS" | grep -v '^ ' | sed 's/^/      /'
         stop_before_restore "a submodule is not at the commit $TARGET_SHA pins"
