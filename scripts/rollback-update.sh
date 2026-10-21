@@ -7,7 +7,22 @@
 #   • a gzipped SQL dump  →  /var/lib/dtk/backups/pre-update-YYYYmmdd-HHMMSS.sql.gz
 #   • the pre-update commit  →  /var/lib/dtk/backups/pre-update-SHA
 #
-# What this script does, loudly, for possibly non-technical venue staff:
+# Who runs this: the project's own operators, over SSH or at the unit. It is
+# not written for venue staff, and its messages assume someone who can read
+# `git status` and act on it.
+#
+# What it starts from: the state update.sh leaves behind on its pull path -- a
+# clean tree, every submodule initialised and on its pin -- which step 1b
+# checks rather than assumes, because a unit updated with --no-pull, or edited
+# since, may not be in it. A tree outside that state is refused with the
+# appliance still running. States 1b cannot see are unsupported rather than
+# handled: an ignored file inside a submodule at a path the target tracks (the
+# inner checkout `submodule update` runs overwrites it, and this script has no
+# way to tell it not to); an index bit set by hand beyond the ones 1b lists;
+# an interruption between two writes under /var/lib/dtk. In those the script
+# stops and says where things stand. It does not promise to put anything back.
+#
+# What this script does, loudly:
 #   1. Checks what can be checked without doing anything: who git runs as,
 #      that the checkout is readable as that user, that the pre-update commit
 #      is present, and that the checkout is in a state the move can start
@@ -325,6 +340,19 @@ if [ -n "$TARGET_SHA" ]; then
     fi
     TARGET_SHA="$TARGET_FULL"
 
+    # Both paths this script writes under $STATE_DIR have to be files or
+    # absent. A directory at either would make the copy below land inside it
+    # with a clean exit, and the marker read below return nothing.
+    for path in "$ROLLBACK_SCRIPT_COPY" "$ROLLBACK_MARKER"; do
+        if [ -d "$path" ] || [ -d "$path.tmp" ]; then
+            echo "✗ A directory is in the way at $path (or its .tmp)."
+            echo "  This script needs that path for a file. Move the directory aside and"
+            echo "  run this again."
+            echo "  Aborting with nothing changed — the database is untouched."
+            exit 1
+        fi
+    done
+
     # A copy of this script outside the checkout. Step 3 replaces scripts/
     # with the target's, and a target can predate this script altogether
     # (f50aa4f has no scripts/rollback-update.sh) or carry an older one that
@@ -430,23 +458,36 @@ if [ -n "$TARGET_SHA" ]; then
         # bit would survive the move with the restore run over it. Refused,
         # in the superproject and in every submodule; the bits are set only
         # by hand, and clearing them is one command.
-        if ! FLAGGED="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" ls-files -v 2>/dev/null \
-                && sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git ls-files -v | sed "s|^\(..\)|\1$displaypath/|"' 2>/dev/null)"; then
-            echo "✗ Could not list the checkout's index entries at $PROJECT_ROOT."
+        # Two reads, each with its own exit status, and no pipe inside the
+        # foreach: a `| sed` there would have reported sed's status and turned
+        # a failed listing into an empty one. `submodule foreach` stops on the
+        # first non-zero command and exits non-zero itself. The tag is any
+        # lowercase letter (assume-unchanged, whatever the base tag) or S.
+        if ! FLAGGED_SUPER="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" ls-files -v 2>/dev/null)"; then
+            echo "✗ Could not list the index at $PROJECT_ROOT."
             echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT ls-files -v"
             echo "  Aborting with nothing changed — the database is untouched."
             exit 1
         fi
+        if ! FLAGGED_SUBS="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git ls-files -v' 2>/dev/null)"; then
+            echo "✗ Could not list the index of every submodule under $PROJECT_ROOT."
+            echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT submodule foreach git ls-files -v"
+            echo "  Aborting with nothing changed — the database is untouched."
+            exit 1
+        fi
+        FLAGGED="$(printf '%s\n%s\n' "$FLAGGED_SUPER" "$FLAGGED_SUBS")"
         FLAG_STATUS=0
-        printf '%s\n' "$FLAGGED" | grep -q '^[hS] ' || FLAG_STATUS=$?
+        printf '%s\n' "$FLAGGED" | grep -q '^[a-zS] ' || FLAG_STATUS=$?
         case "$FLAG_STATUS" in
             0)
-                echo "✗ These files are marked assume-unchanged (h) or skip-worktree (S), so"
-                echo "  git will not report changes to them and the move could carry a"
-                echo "  modified file across unseen:"
-                printf '%s\n' "$FLAGGED" | grep '^[hS] ' | sed 's/^/      /'
-                echo "  Clear the bit and run this again:"
-                echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT update-index --no-assume-unchanged --no-skip-worktree <file>"
+                echo "✗ These index entries are marked assume-unchanged (lowercase tag) or"
+                echo "  skip-worktree (S), so git does not report changes to them and the move"
+                echo "  could carry a modified file across unseen:"
+                printf '%s\n' "$FLAGGED" | grep '^[a-zS] ' | sed 's/^/      /'
+                echo "  A path with no directory prefix belongs to the superproject; a path"
+                echo "  from a submodule is relative to that submodule. Clear the bit in the"
+                echo "  repository that owns the file, then run this again:"
+                echo "      sudo -u $DTK_USER git -C <that repository> update-index --no-assume-unchanged --no-skip-worktree <file>"
                 echo "  Aborting with nothing changed — the database is untouched."
                 exit 1 ;;
             1) ;;
