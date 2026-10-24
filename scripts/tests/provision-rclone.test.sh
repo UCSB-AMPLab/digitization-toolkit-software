@@ -492,11 +492,55 @@ cp "$(env_file)" "$WORK/saved.env"
 run -- --advisory
 expect_same "$(env_file)" "$WORK/saved.env"
 
-case_ "a changed tenant is applied and said"
+case_ "a changed tenant without --change-tenant is refused"
+cp "$(env_file)" "$WORK/saved.env"
 run -- --tenant sbmal
+expect_status 1
+expect_out "refusing to replace the recorded tenant ahr"
+expect_out "keep their keys there; new ones would go under sbmal/"
+expect_out "was NOT recorded"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+case_ "a changed tenant without --change-tenant, under --advisory"
+run -- --advisory --tenant sbmal
+expect_status 0
+expect_out "refusing to replace the recorded tenant ahr"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+case_ "the same tenant again needs no flag"
+run -- --tenant ahr
+expect_status 0
+expect_not_out "refusing to replace"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+case_ "a changed tenant with --change-tenant is applied and said"
+run -- --tenant sbmal --change-tenant
 expect_status 0
 expect_out "replaces the recorded tenant ahr"
 expect_line "$(env_file)" "DTK_OFFSITE_TENANT=sbmal"
+expect_line "$(env_file)" "DTK_OFFSITE_DUMP_RECIPIENT=$RCPT"
+
+case_ "--change-tenant on a unit with no recorded tenant"
+new_unit
+run -- --tenant ahr --change-tenant
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=ahr"
+
+case_ "--change-tenant alone is a caller error"
+new_unit
+run -- --change-tenant
+expect_status 1
+expect_out "--change-tenant needs --tenant NAME"
+expect_absent "$(env_file)"
+
+case_ "a changed recipient is applied with a note, no flag needed"
+legacy_unit
+run -- --dump-recipient "$RCPT"
+expect_status 0
+run -- --dump-recipient "$RCPT_UPPER"
+expect_status 0
+expect_out "--dump-recipient replaces the recorded recipient"
+expect_line "$(env_file)" "DTK_OFFSITE_DUMP_RECIPIENT=$RCPT_UPPER"
 
 case_ "offsite.env with a line this script does not write: options not recorded"
 legacy_unit

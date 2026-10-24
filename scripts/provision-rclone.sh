@@ -120,7 +120,8 @@
 #
 #   DTK_OFFSITE_TENANT          --tenant NAME. The prefix every object of this
 #                               unit is keyed under. The rule is TENANT_PATTERN
-#                               in backend app/core/image_upload.py.
+#                               in backend app/core/image_upload.py. Replacing
+#                               a recorded tenant also needs --change-tenant.
 #   DTK_OFFSITE_DUMP_RECIPIENT  --dump-recipient age1... The age X25519 PUBLIC
 #                               key the catalogue dump is encrypted to
 #                               (backend app/core/catalogue_backup.py,
@@ -169,10 +170,15 @@ CONFIG_PATH_ARG=""
 # ERR trap and provision_failed exist, so that a refusal honours --advisory.
 TENANT_ARG=""
 RECIPIENT_ARG=""
+# Replacing a tenant that offsite.env already records needs this flag as well
+# as --tenant: the prefix decides where every new object goes, and a mistyped
+# one on a unit that has been uploading splits its objects across two prefixes.
+CHANGE_TENANT=0
 usage() {
     echo "  Usage: provision-rclone.sh [--advisory] [--prefix DIR]"
     echo "                             [--config-path FILE]"
-    echo "                             [--tenant NAME] [--dump-recipient AGE1_PUBLIC_KEY]"
+    echo "                             [--tenant NAME [--change-tenant]]"
+    echo "                             [--dump-recipient AGE1_PUBLIC_KEY]"
     echo "  Key material, for the write key and the optional read key, comes"
     echo "  from the file named by DTK_OFFSITE_KEY_FILE; run with no key"
     echo "  material to see its format."
@@ -184,6 +190,7 @@ looks_like_age_secret() { [[ "$1" =~ [Aa][Gg][Ee]-[Ss][Ee][Cc][Rr][Ee][Tt]-[Kk][
 while [ $# -gt 0 ]; do
     case "$1" in
         --advisory) ADVISORY=1 ;;
+        --change-tenant) CHANGE_TENANT=1 ;;
         --tenant)
             if [ $# -lt 2 ] || [ -z "$2" ]; then
                 echo "✗ provision-rclone.sh: --tenant needs a tenant prefix."
@@ -236,6 +243,12 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+# A caller bug, like a missing argument value: the flag means nothing alone.
+if [ "$CHANGE_TENANT" -eq 1 ] && [ -z "$TENANT_ARG" ]; then
+    echo "✗ provision-rclone.sh: --change-tenant needs --tenant NAME beside it."
+    usage
+    exit 1
+fi
 
 # Resolve the real (non-root) user the same way setup.sh, update.sh and
 # provision-chdk-usb.sh do, so this script behaves identically whichever one
@@ -2255,10 +2268,23 @@ fi
 TENANT_FINAL="${TENANT_ARG:-$OFFSITE_TENANT_REC}"
 RECIPIENT_FINAL="${RECIPIENT_ARG:-$OFFSITE_RECIPIENT_REC}"
 READ_REMOTE_FINAL="$OFFSITE_READ_REMOTE_REC"
+# A different tenant over a recorded one is refused unless --change-tenant
+# says it is meant: nothing moves the objects already uploaded, so a change
+# leaves the unit's images under two prefixes. A recipient change is not
+# guarded the same way: dumps are whole and each one stands alone.
 if [ -n "$TENANT_ARG" ] && [ -n "$OFFSITE_TENANT_REC" ] && [ "$TENANT_ARG" != "$OFFSITE_TENANT_REC" ]; then
-    echo "  note: --tenant $TENANT_ARG replaces the recorded tenant $OFFSITE_TENANT_REC."
-    echo "        Objects already uploaded under $OFFSITE_TENANT_REC/ stay there; the"
-    echo "        backend keys new ones under $TENANT_ARG/."
+    if [ "$CHANGE_TENANT" -ne 1 ]; then
+        echo "✗ rclone: refusing to replace the recorded tenant $OFFSITE_TENANT_REC"
+        echo "  with $TENANT_ARG. Images already uploaded under $OFFSITE_TENANT_REC/"
+        echo "  keep their keys there; new ones would go under $TENANT_ARG/. Nothing"
+        echo "  was written and nothing was changed. If the change is meant, re-run"
+        echo "  with --change-tenant beside --tenant $TENANT_ARG."
+        provision_failed
+    fi
+    echo "  note: --tenant $TENANT_ARG replaces the recorded tenant $OFFSITE_TENANT_REC"
+    echo "        (--change-tenant). Images already uploaded under"
+    echo "        $OFFSITE_TENANT_REC/ keep their keys there; new ones go under"
+    echo "        $TENANT_ARG/."
 fi
 if [ -n "$RECIPIENT_ARG" ] && [ -n "$OFFSITE_RECIPIENT_REC" ] && [ "$RECIPIENT_ARG" != "$OFFSITE_RECIPIENT_REC" ]; then
     echo "  note: --dump-recipient replaces the recorded recipient"
