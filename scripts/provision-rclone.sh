@@ -66,7 +66,7 @@ set +x
 #      about the unit, from a read failure that became empty data to an empty
 #      quoted value that came back as two literal quote characters.
 #      .env.example's own offsite section records the division: this script
-#      writes its six keys to offsite.env, the backend reads that file in
+#      writes its eight keys to offsite.env, the backend reads that file in
 #      addition to .env, and offsite.env wins on a conflict.
 #
 # Network use: none at all when a new-enough rclone is already installed AND
@@ -145,6 +145,33 @@ set +x
 # script, and a value this script records should not be steerable from .env.
 # A run given neither keeps what offsite.env already records, so setup.sh and
 # update.sh carry them forward unchanged.
+#
+# ── THE FISQUA LINK ─────────────────────────────────────────────────────────
+#
+# Two more keys, for the unit's calls to Fisqua, whose base URL is
+# https://<tenant>.fisqua.org:
+#
+#   DTK_FISQUA_TOKEN  this unit's token, from a FISQUA_TOKEN= line in the key
+#                     file named by DTK_OFFSITE_KEY_FILE, and from nowhere
+#                     else. Handled as the B2 application keys are: never
+#                     printed, never in a diagnostic, never on an argument
+#                     list, and refused unprinted when it is outside
+#                     FISQUA_TOKEN_RULE. Refused when no tenant is given or
+#                     recorded, since the base URL is built from the tenant.
+#                     Not taken under --advisory, for the read key's reason
+#                     (see 2.2b).
+#   DTK_FISQUA_ENV    --fisqua-env production|staging.
+#
+# Both are carried forward on a run that does not give them, like the other
+# keys. A changed value of either is applied with a note. Neither has a guard
+# like --change-tenant: a changed tenant strands every object already uploaded
+# under the old prefix, and a changed token or environment strands nothing. It
+# only redirects the calls the unit makes from then on, and the next run can
+# change it back.
+#
+# NO NETWORK PROBE is made for Fisqua. This script does not call Fisqua to
+# check the token: a wrong one is reported by the backend itself, which gets a
+# 401 on its first call and records it.
 
 set -Eeuo pipefail
 
@@ -181,14 +208,17 @@ RECIPIENT_ARG=""
 # as --tenant: the prefix decides where every new object goes, and a mistyped
 # one on a unit that has been uploading splits its objects across two prefixes.
 CHANGE_TENANT=0
+# --fisqua-env, production or staging. Empty means "not given", as above.
+FISQUA_ENV_ARG=""
 usage() {
     echo "  Usage: provision-rclone.sh [--advisory] [--prefix DIR]"
     echo "                             [--config-path FILE]"
     echo "                             [--tenant NAME [--change-tenant]]"
     echo "                             [--dump-recipient AGE1_PUBLIC_KEY]"
-    echo "  Key material, for the write key and the optional read key, comes"
-    echo "  from the file named by DTK_OFFSITE_KEY_FILE; run with no key"
-    echo "  material to see its format."
+    echo "                             [--fisqua-env production|staging]"
+    echo "  Key material, for the write key, the optional read key and the"
+    echo "  optional Fisqua token, comes from the file named by"
+    echo "  DTK_OFFSITE_KEY_FILE; run with no key material to see its format."
 }
 # An age private key, in either case. Checked wherever a value might be
 # echoed, so that the one secret this script is most likely to be handed by
@@ -224,6 +254,14 @@ while [ $# -gt 0 ]; do
                 exit 1
             fi
             RECIPIENT_ARG="$2"
+            shift
+            ;;
+        --fisqua-env)
+            if [ $# -lt 2 ] || [ -z "$2" ]; then
+                echo "✗ provision-rclone.sh: --fisqua-env needs production or staging."
+                exit 1
+            fi
+            FISQUA_ENV_ARG="$2"
             shift
             ;;
         --prefix)
@@ -644,6 +682,39 @@ valid_age_recipient() {
 }
 RECIPIENT_RULE="an age X25519 public key: age1 and 58 more bech32 characters (62 in all), one case throughout, with a valid checksum"
 
+# DTK_FISQUA_TOKEN. Fisqua's token format has not been agreed (backend
+# app/core/fisqua_outbox.py), so the class is not Fisqua's rule: it is the
+# conservative one this file can hold. The value goes into offsite.env,
+# which python-dotenv reads, and every character outside this class means
+# something to some parser on the way: whitespace ends or pads a value, a
+# quote starts a quoted one, '#' after whitespace starts a comment, '$'
+# starts an interpolation, '\' an escape, and '=' is refused because it is
+# the separator. What is left covers hex, base64url and dotted tokens. The
+# length floor turns away a placeholder left in the key file ('...', 'TODO').
+# It is the offsite.env value class, so the backstop in write_offsite_env and
+# the whole-file reader apply to it unchanged.
+# The length is checked apart from the class: a regex bound above 255
+# (RE_DUP_MAX) does not compile on every platform's regex library.
+valid_fisqua_token() {
+    holds_age_secret_key "$1" && return 1
+    [ "${#1}" -ge 16 ] && [ "${#1}" -le 4096 ] && [[ "$1" =~ ^[A-Za-z0-9._:/+-]+$ ]]
+}
+FISQUA_TOKEN_RULE="16 to 4096 characters of letters, digits, and . _ : / + - only (no whitespace, quotes, = \$ # or \\)"
+# DTK_FISQUA_ENV: one of two words, spelled exactly.
+valid_fisqua_env() { [ "$1" = production ] || [ "$1" = staging ]; }
+FISQUA_ENV_RULE="production or staging"
+
+# The refusal for a token. Never the value, wherever it came from.
+reject_fisqua_token() {   # reject_fisqua_token <where it came from>
+    echo "✗ rclone: refusing the Fisqua token $1."
+    echo "    must match: $FISQUA_TOKEN_RULE"
+    echo "  The value is not printed, because it is a secret. No credential"
+    echo "  was written and $OFFSITE_ENV_PATH was not changed."
+    echo "  If the token was copied out of a web page or a message, copy it"
+    echo "  again as plain text: a hidden character or a trailing space is the"
+    echo "  most likely cause of this message."
+}
+
 # The refusal for a recipient, which is not reject_value: when what was given
 # is a private key, the value must not be printed.
 reject_recipient() {   # reject_recipient <where it came from> <the value>
@@ -712,7 +783,7 @@ reject_value() {   # reject_value <what it is> <the value> <the rule>
 # whether to write.
 #
 # So every line must be either a '#' comment or exactly KEY=value, with KEY
-# one of the six this script writes, no key twice, and the value inside
+# one of the eight this script writes, no key twice, and the value inside
 # OFFSITE_VALUE_CLASS. No quoting, no `export`, no indentation, no trailing
 # comment, nothing else. Anything else makes the file MALFORMED: it is not
 # read at all, nothing is changed, and the operator is told which line did it.
@@ -737,6 +808,8 @@ OFFSITE_REMOTE=""      # DTK_OFFSITE_REMOTE as recorded, when non-empty
 OFFSITE_TENANT_REC=""  # DTK_OFFSITE_TENANT as recorded, when non-empty
 OFFSITE_RECIPIENT_REC=""   # DTK_OFFSITE_DUMP_RECIPIENT as recorded
 OFFSITE_READ_REMOTE_REC=""  # DTK_OFFSITE_READ_REMOTE as recorded
+OFFSITE_FISQUA_TOKEN_REC=""  # DTK_FISQUA_TOKEN as recorded; never printed
+OFFSITE_FISQUA_ENV_REC=""    # DTK_FISQUA_ENV as recorded
 OFFSITE_BAD_LINE=""    # the offending line when malformed
 OFFSITE_BAD_WHY=""     # why that line is not in the grammar
 read_offsite_env() {
@@ -744,6 +817,7 @@ read_offsite_env() {
     OFFSITE_STATUS="absent"
     OFFSITE_CFG=""; OFFSITE_REMOTE=""
     OFFSITE_TENANT_REC=""; OFFSITE_RECIPIENT_REC=""; OFFSITE_READ_REMOTE_REC=""
+    OFFSITE_FISQUA_TOKEN_REC=""; OFFSITE_FISQUA_ENV_REC=""
     OFFSITE_BAD_LINE=""; OFFSITE_BAD_WHY=""
     [ -e "$OFFSITE_ENV_PATH" ] || return 0
     # `unreadable` is its own answer and not absence, and absence is what
@@ -799,13 +873,13 @@ read_offsite_env() {
         case "$line" in
             "#"*) continue ;;
         esac
-        if ! [[ "$line" =~ ^(DTK_RCLONE_BIN|DTK_RCLONE_CONFIG|DTK_OFFSITE_REMOTE|DTK_OFFSITE_READ_REMOTE|DTK_OFFSITE_TENANT|DTK_OFFSITE_DUMP_RECIPIENT)=[A-Za-z0-9._:/+-]*$ ]]; then
+        if ! [[ "$line" =~ ^(DTK_RCLONE_BIN|DTK_RCLONE_CONFIG|DTK_OFFSITE_REMOTE|DTK_OFFSITE_READ_REMOTE|DTK_OFFSITE_TENANT|DTK_OFFSITE_DUMP_RECIPIENT|DTK_FISQUA_TOKEN|DTK_FISQUA_ENV)=[A-Za-z0-9._:/+-]*$ ]]; then
             OFFSITE_STATUS="malformed"
             OFFSITE_BAD_LINE="$line"
             if [ -z "$line" ]; then
                 OFFSITE_BAD_WHY="an empty line, or an empty file"
             else
-                OFFSITE_BAD_WHY="not a plain KEY=value in one of the six keys this script writes"
+                OFFSITE_BAD_WHY="not a plain KEY=value in one of the eight keys this script writes"
             fi
             return 0
         fi
@@ -826,6 +900,8 @@ read_offsite_env() {
             DTK_OFFSITE_READ_REMOTE)    OFFSITE_READ_REMOTE_REC="$value" ;;
             DTK_OFFSITE_TENANT)         OFFSITE_TENANT_REC="$value" ;;
             DTK_OFFSITE_DUMP_RECIPIENT) OFFSITE_RECIPIENT_REC="$value" ;;
+            DTK_FISQUA_TOKEN)           OFFSITE_FISQUA_TOKEN_REC="$value" ;;
+            DTK_FISQUA_ENV)             OFFSITE_FISQUA_ENV_REC="$value" ;;
         esac
     done <<< "$content"
     OFFSITE_STATUS="ok"
@@ -850,6 +926,9 @@ offsite_malformed() {
     echo "    was NOT read and nothing was changed."
     if looks_like_age_secret "$OFFSITE_BAD_LINE"; then
         echo "        (not printed: the line resembles an age private key)"
+    elif [[ "$OFFSITE_BAD_LINE" =~ [Tt][Oo][Kk][Ee][Nn]|[Ff][Ii][Ss][Qq][Uu][Aa] ]]; then
+        # A line naming the token may hold it, quoted or misspelt.
+        echo "        (not printed: the line may hold the Fisqua token)"
     else
         echo "        $OFFSITE_BAD_LINE"
     fi
@@ -863,7 +942,8 @@ offsite_malformed() {
     echo "    Delete it and re-run to have it rebuilt, or reduce every line to"
     echo "    a '#' comment or a plain KEY=value in DTK_RCLONE_BIN,"
     echo "    DTK_RCLONE_CONFIG, DTK_OFFSITE_REMOTE, DTK_OFFSITE_READ_REMOTE,"
-    echo "    DTK_OFFSITE_TENANT or DTK_OFFSITE_DUMP_RECIPIENT."
+    echo "    DTK_OFFSITE_TENANT, DTK_OFFSITE_DUMP_RECIPIENT, DTK_FISQUA_TOKEN"
+    echo "    or DTK_FISQUA_ENV."
 }
 
 # Write offsite.env whole, atomically: a temp file in the same directory, all
@@ -897,15 +977,22 @@ offsite_malformed() {
 #   recorded only when THIS RUN established it: it wrote a credential there,
 #   or it read that same path out of offsite.env.
 #
-#   <read-remote>, <tenant>, <recipient>: the same rule, for the same reason.
-#   Each is written when this run was given it or found it recorded here, and
-#   is otherwise left out, so whatever .env sets for it stays in force.
-write_offsite_env() {   # <bin> <config-path> <remote> <read-remote> <tenant> <recipient>, each but bin may be empty
+#   <read-remote>, <tenant>, <recipient>, <fisqua-token>, <fisqua-env>: the
+#   same rule, for the same reason. Each is written when this run was given it
+#   or found it recorded here, and is otherwise left out, so whatever .env sets
+#   for it stays in force.
+#
+# The Fisqua token is a secret, and nothing here prints it or puts it on an
+# argument list: the file is written by shell builtins, and the check that
+# each line landed hands grep its pattern on stdin, not in argv.
+write_offsite_env() {   # <bin> <config-path> <remote> <read-remote> <tenant> <recipient> <fisqua-token> <fisqua-env>, each but bin may be empty
     local bin="$1" cfg="$2" remote="$3" read_remote="$4" tenant="$5" recipient="$6"
-    local tmp v want key st
+    local fisqua_token="$7" fisqua_env="$8"
+    local tmp v want key st shown
     # Every value is validated by its caller; this is the backstop, so no code
     # path can write something unexpected into a file python-dotenv parses.
-    for v in "$bin" "$cfg" "$remote" "$read_remote" "$tenant" "$recipient"; do
+    for v in "$bin" "$cfg" "$remote" "$read_remote" "$tenant" "$recipient" \
+             "$fisqua_token" "$fisqua_env"; do
         if holds_age_secret_key "$v"; then
             echo "✗ rclone: refusing to write $OFFSITE_ENV_PATH — one of the"
             echo "  values is shaped like an age private key (not printed)."
@@ -960,19 +1047,31 @@ write_offsite_env() {   # <bin> <config-path> <remote> <read-remote> <tenant> <r
     else
         omitted+=("DTK_OFFSITE_DUMP_RECIPIENT")
     fi
+    if [ -n "$fisqua_token" ]; then
+        wants+=("DTK_FISQUA_TOKEN=$fisqua_token")
+    else
+        omitted+=("DTK_FISQUA_TOKEN")
+    fi
+    if [ -n "$fisqua_env" ]; then
+        wants+=("DTK_FISQUA_ENV=$fisqua_env")
+    else
+        omitted+=("DTK_FISQUA_ENV")
+    fi
     if ! {
         echo "# Digitization Toolkit — offsite catalogue backup (NEH-249, NEH-227)."
         echo "# Written whole by scripts/provision-rclone.sh at provisioning and on"
         echo "# every update. DO NOT EDIT: the next run replaces this file, and a"
         echo "# line that is not a '#' comment or a plain KEY=value in one of the"
-        echo "# six keys it writes makes the whole file unreadable to that script."
+        echo "# eight keys it writes makes the whole file unreadable to that script."
         echo "#"
         echo "# The backend reads this in addition to the project .env, and a key"
         echo "# present here wins over the same key in .env. A key that is ABSENT"
         echo "# here overrides nothing: DTK_OFFSITE_REMOTE is written only when a"
         echo "# remote was actually recorded, DTK_RCLONE_CONFIG only when the run"
         echo "# that wrote this file established the config path itself, and the"
-        echo "# read remote, tenant and dump recipient only when given or recorded."
+        echo "# read remote, tenant, dump recipient and Fisqua settings only when"
+        echo "# given or recorded. DTK_FISQUA_TOKEN is a secret: this file stays"
+        echo "# mode 0600."
         printf '%s\n' "${wants[@]}"
     } > "$tmp"; then
         rm -f "$tmp"
@@ -984,16 +1083,25 @@ write_offsite_env() {   # <bin> <config-path> <remote> <read-remote> <tenant> <r
     # to be right — and a write that ran out of space mid-file returns
     # success often enough that the status alone is not evidence. Each line is
     # matched whole and literally, and a check that could not RUN is a refusal
-    # rather than a pass. (None of these values is a secret: two paths, two
-    # remote names with their bucket, a prefix and an age PUBLIC key. The B2
-    # application keys go only to the rclone config file and never through
-    # here, and an age private key is refused before it reaches this.)
+    # rather than a pass. (One of these values is a secret: DTK_FISQUA_TOKEN.
+    # The rest are two paths, two remote names with their bucket, a prefix, an
+    # age PUBLIC key and an environment name. The B2 application keys go only
+    # to the rclone config file and never through here, and an age private key
+    # is refused before it reaches this.) The pattern goes to grep on stdin,
+    # so the token is never on grep's argument list, and a failure names the
+    # token's key and not its value.
     for want in "${wants[@]}"; do
-        st="$(grep_status -qxF "$want" "$tmp")"
+        if printf '%s\n' "$want" | grep -qxF -f /dev/stdin "$tmp" >/dev/null 2>&1; then
+            st=0
+        else
+            st=$?
+        fi
         if [ "$st" -ne 0 ]; then
             rm -f "$tmp"
+            shown="$want"
+            case "$want" in DTK_FISQUA_TOKEN=*) shown="DTK_FISQUA_TOKEN=(not printed)" ;; esac
             echo "✗ rclone: the new $OFFSITE_ENV_PATH was not promoted. The check for"
-            echo "      $want"
+            echo "      $shown"
             if [ "$st" -eq 1 ]; then
                 echo "  found that line absent."
             else
@@ -1768,15 +1876,22 @@ SETTINGS_WRITTEN=0
 TENANT_FINAL=""
 RECIPIENT_FINAL=""
 READ_REMOTE_FINAL=""
+FISQUA_TOKEN_FINAL=""   # never printed
+FISQUA_ENV_FINAL=""
+# The token read from the key file for this run, once 2.2c has read it. Kept
+# apart from FISQUA_TOKEN_FINAL so that a refusal can say a token was given.
+FISQUA_TOKEN_GIVEN=""
 # A --tenant or --dump-recipient that never reached offsite.env is said out
 # loud: an operator who typed one will otherwise assume it was recorded.
 OPTIONS_NOTE_PRINTED=0
 note_options_not_recorded() {
     [ "$OPTIONS_NOTE_PRINTED" -eq 0 ] || return 0
-    if [ "$SETTINGS_WRITTEN" -eq 0 ] && { [ -n "$TENANT_ARG" ] || [ -n "$RECIPIENT_ARG" ]; }; then
+    if [ "$SETTINGS_WRITTEN" -eq 0 ] && { [ -n "$TENANT_ARG" ] || [ -n "$RECIPIENT_ARG" ] \
+            || [ -n "$FISQUA_ENV_ARG" ] || [ -n "$FISQUA_TOKEN_GIVEN" ]; }; then
         OPTIONS_NOTE_PRINTED=1
         echo "  note: $OFFSITE_ENV_PATH was not written by this run, so the"
-        echo "        --tenant or --dump-recipient given was NOT recorded."
+        echo "        --tenant, --dump-recipient, --fisqua-env or FISQUA_TOKEN"
+        echo "        given was NOT recorded."
     fi
 }
 run_report() {
@@ -1834,7 +1949,8 @@ offsite_write_or_fail() {   # <remote-or-empty>
         cfg="$RCLONE_CONFIG_PATH"
     fi
     if ! write_offsite_env "$RCLONE_USE_BIN" "$cfg" "$1" \
-            "$READ_REMOTE_FINAL" "$TENANT_FINAL" "$RECIPIENT_FINAL"; then
+            "$READ_REMOTE_FINAL" "$TENANT_FINAL" "$RECIPIENT_FINAL" \
+            "$FISQUA_TOKEN_FINAL" "$FISQUA_ENV_FINAL"; then
         provision_failed
     fi
     SETTINGS_WRITTEN=1
@@ -1861,11 +1977,12 @@ offsite_write_or_fail() {   # <remote-or-empty>
     fi
     # The 0.1.0 settings: each written, or left out, by the same rule.
     local key val
-    for key in DTK_OFFSITE_READ_REMOTE DTK_OFFSITE_TENANT DTK_OFFSITE_DUMP_RECIPIENT; do
+    for key in DTK_OFFSITE_READ_REMOTE DTK_OFFSITE_TENANT DTK_OFFSITE_DUMP_RECIPIENT DTK_FISQUA_ENV; do
         case "$key" in
             DTK_OFFSITE_READ_REMOTE)    val="$READ_REMOTE_FINAL" ;;
             DTK_OFFSITE_TENANT)         val="$TENANT_FINAL" ;;
             DTK_OFFSITE_DUMP_RECIPIENT) val="$RECIPIENT_FINAL" ;;
+            DTK_FISQUA_ENV)             val="$FISQUA_ENV_FINAL" ;;
         esac
         if [ -n "$val" ]; then
             RUN_SETTINGS="$RUN_SETTINGS, $key=$val"
@@ -1875,6 +1992,14 @@ offsite_write_or_fail() {   # <remote-or-empty>
             echo "    no $key: not given to this run and not recorded before it."
         fi
     done
+    # The token: whether it was written, never what it is.
+    if [ -n "$FISQUA_TOKEN_FINAL" ]; then
+        RUN_SETTINGS="$RUN_SETTINGS, DTK_FISQUA_TOKEN written (not printed)"
+        echo "    DTK_FISQUA_TOKEN written (not printed)"
+    else
+        RUN_SETTINGS="$RUN_SETTINGS, no DTK_FISQUA_TOKEN"
+        echo "    no DTK_FISQUA_TOKEN: not given to this run and not recorded before it."
+    fi
 }
 
 # What the inspected config file is, in the same words everywhere. Three
@@ -2015,6 +2140,10 @@ if [ -n "$RECIPIENT_ARG" ] && ! valid_age_recipient "$RECIPIENT_ARG"; then
         echo "  app/core/catalogue_backup.py), and would then upload no"
         echo "  catalogue dump."
     fi
+    provision_failed
+fi
+if [ -n "$FISQUA_ENV_ARG" ] && ! valid_fisqua_env "$FISQUA_ENV_ARG"; then
+    reject_value "Fisqua environment given with --fisqua-env" "$FISQUA_ENV_ARG" "$FISQUA_ENV_RULE"
     provision_failed
 fi
 
@@ -2474,9 +2603,22 @@ if [ -n "$OFFSITE_READ_REMOTE_REC" ] && ! valid_remote_spec "$OFFSITE_READ_REMOT
         "$OFFSITE_READ_REMOTE_REC" "$REMOTE_SPEC_RULE"
     provision_failed
 fi
+if [ -n "$OFFSITE_FISQUA_TOKEN_REC" ] && ! valid_fisqua_token "$OFFSITE_FISQUA_TOKEN_REC"; then
+    reject_fisqua_token "recorded in $OFFSITE_ENV_PATH"
+    provision_failed
+fi
+if [ -n "$OFFSITE_FISQUA_ENV_REC" ] && ! valid_fisqua_env "$OFFSITE_FISQUA_ENV_REC"; then
+    reject_value "Fisqua environment recorded in $OFFSITE_ENV_PATH" \
+        "$OFFSITE_FISQUA_ENV_REC" "$FISQUA_ENV_RULE"
+    provision_failed
+fi
 TENANT_FINAL="${TENANT_ARG:-$OFFSITE_TENANT_REC}"
 RECIPIENT_FINAL="${RECIPIENT_ARG:-$OFFSITE_RECIPIENT_REC}"
 READ_REMOTE_FINAL="$OFFSITE_READ_REMOTE_REC"
+FISQUA_ENV_FINAL="${FISQUA_ENV_ARG:-$OFFSITE_FISQUA_ENV_REC}"
+# The recorded token is carried forward; 2.2c replaces it when the key file
+# gives one.
+FISQUA_TOKEN_FINAL="$OFFSITE_FISQUA_TOKEN_REC"
 # A different tenant over a recorded one is refused unless --change-tenant
 # says it is meant: nothing moves the objects already uploaded, so a change
 # leaves the unit's images under two prefixes. A recipient change is not
@@ -2501,6 +2643,11 @@ if [ -n "$RECIPIENT_ARG" ] && [ -n "$OFFSITE_RECIPIENT_REC" ] && [ "$RECIPIENT_A
     echo "        $OFFSITE_RECIPIENT_REC."
     echo "        Dumps already uploaded stay encrypted to that one."
 fi
+# No --change-fisqua-env: see THE FISQUA LINK at the top of this file.
+if [ -n "$FISQUA_ENV_ARG" ] && [ -n "$OFFSITE_FISQUA_ENV_REC" ] && [ "$FISQUA_ENV_ARG" != "$OFFSITE_FISQUA_ENV_REC" ]; then
+    echo "  note: --fisqua-env $FISQUA_ENV_ARG replaces the recorded $OFFSITE_FISQUA_ENV_REC."
+    echo "        The unit's calls to Fisqua go to $FISQUA_ENV_ARG from now on."
+fi
 
 # ── 2.2 Key material ────────────────────────────────────────────────────────
 print_key_instructions() {
@@ -2522,6 +2669,15 @@ print_key_instructions() {
     echo "  and must be a different key from the upload key. It is read from"
     echo "  the key file only, never from the environment."
     echo ""
+    echo "  Sending capture manifests to Fisqua needs this unit's Fisqua token,"
+    echo "  also optional:"
+    echo "    FISQUA_TOKEN  the token Fisqua issued for this unit; letters,"
+    echo "                  digits and . _ : / + - only"
+    echo "  It is written to offsite.env as DTK_FISQUA_TOKEN, needs a tenant"
+    echo "  (the calls go to https://<tenant>.fisqua.org), and is read from the"
+    echo "  key file only. --fisqua-env production or --fisqua-env staging"
+    echo "  says which Fisqua the unit calls."
+    echo ""
     echo "  Put them in a file only root can read, and point this script at it:"
     echo "    sudo install -m 0600 /dev/null /root/dtk-offsite-key"
     echo "    sudo sh -c 'cat > /root/dtk-offsite-key' <<'END'"
@@ -2530,15 +2686,18 @@ print_key_instructions() {
     echo "    BUCKET=..."
     echo "    READ_KEY_ID=..."
     echo "    READ_APP_KEY=..."
+    echo "    FISQUA_TOKEN=..."
     echo "    END"
     echo "    sudo DTK_OFFSITE_KEY_FILE=/root/dtk-offsite-key \\"
     echo "        $SCRIPT_DIR/provision-rclone.sh \\"
-    echo "        --tenant <prefix> --dump-recipient age1..."
+    echo "        --tenant <prefix> --dump-recipient age1... \\"
+    echo "        --fisqua-env production"
     echo ""
     echo "  --tenant is the prefix this unit's objects are keyed under, and"
     echo "  --dump-recipient the age PUBLIC key its catalogue dumps are"
     echo "  encrypted to. Neither is a secret; the private age key stays off"
-    echo "  the unit. Both are kept on later runs that do not give them."
+    echo "  the unit. Both are kept on later runs that do not give them, and"
+    echo "  so are --fisqua-env and the Fisqua token."
     echo ""
     echo "  Do NOT pass the key as 'sudo DTK_B2_APP_KEY=... ./provision-rclone.sh'."
     echo "  An assignment written in front of sudo is part of SUDO's argv, not"
@@ -2671,6 +2830,50 @@ elif [ -n "$B2_READ_KEY_ID" ] || [ -n "$B2_READ_APP_KEY" ]; then
     echo "  ⚠ INCOMPLETE read key material — missing: $READ_MISSING."
     echo "    No read remote will be written by this run."
     RUN_READ_CRED="not written: incomplete read key material (missing $READ_MISSING)"
+fi
+
+# ── 2.2c The Fisqua token ───────────────────────────────────────────────────
+# From the key file ONLY (FISQUA_TOKEN), never from the environment, and never
+# under --advisory, for the read key's reasons above: update.sh exports every
+# .env key and passes --advisory, and DTK_OFFSITE_KEY_FILE can come from .env
+# there. Under --advisory the line is not validated or used, and what
+# offsite.env records is carried forward.
+#
+# The token reaches only variables, builtins and the file: key_file_value
+# names the key on sed's command line, not the value, and nothing here
+# echoes it. No call is made to Fisqua to check it (see THE FISQUA LINK).
+if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
+    FISQUA_TOKEN_GIVEN="$(key_file_value "$DTK_OFFSITE_KEY_FILE" FISQUA_TOKEN)"
+    if [ "$ADVISORY" -eq 1 ] && [ -n "$FISQUA_TOKEN_GIVEN" ]; then
+        FISQUA_TOKEN_GIVEN=""
+        echo "  note: the Fisqua token is not written under --advisory, which is"
+        echo "        how update.sh calls this script; DTK_OFFSITE_KEY_FILE can"
+        echo "        come from .env there. Any token $OFFSITE_ENV_PATH records"
+        echo "        is kept. Run this script without --advisory to add or"
+        echo "        replace it."
+    fi
+fi
+if [ -n "$FISQUA_TOKEN_GIVEN" ]; then
+    if ! valid_fisqua_token "$FISQUA_TOKEN_GIVEN"; then
+        FISQUA_TOKEN_GIVEN=""
+        reject_fisqua_token "from the key file (FISQUA_TOKEN)"
+        provision_failed
+    fi
+    if [ -n "$OFFSITE_FISQUA_TOKEN_REC" ] && [ "$FISQUA_TOKEN_GIVEN" != "$OFFSITE_FISQUA_TOKEN_REC" ]; then
+        echo "  note: the key file's FISQUA_TOKEN replaces the recorded Fisqua"
+        echo "        token (neither is printed)."
+    fi
+    FISQUA_TOKEN_FINAL="$FISQUA_TOKEN_GIVEN"
+fi
+# The base URL is https://<tenant>.fisqua.org, so a token with no tenant is a
+# token for no site. Refused whether it was given now or recorded before.
+if [ -n "$FISQUA_TOKEN_FINAL" ] && [ -z "$TENANT_FINAL" ]; then
+    echo "✗ rclone: refusing the Fisqua token: this unit has no tenant prefix,"
+    echo "  given with --tenant or recorded in $OFFSITE_ENV_PATH, and the"
+    echo "  unit's calls to Fisqua go to https://<tenant>.fisqua.org. The token"
+    echo "  is not printed. No credential was written and $OFFSITE_ENV_PATH"
+    echo "  was not changed. Re-run with --tenant NAME beside the key file."
+    provision_failed
 fi
 
 # The read key, when supplied, on a path that records no upload remote. A read
