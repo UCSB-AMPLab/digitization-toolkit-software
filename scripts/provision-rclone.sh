@@ -196,13 +196,15 @@ usage() {
 #
 # Two matchers, for two decisions. looks_like_age_secret is loose — the words
 # alone — and decides only whether a value may be PRINTED: a refusal withholds
-# anything that merely resembles a key. holds_age_secret_key is the full shape
-# of one, AGE-SECRET-KEY-1 and 58 bech32 characters in either case, and decides
-# whether a value is REFUSED, so that a tenant, bucket or path that only
-# contains the words is not turned away.
+# anything that merely resembles a key. holds_age_secret_key decides whether a
+# value is REFUSED: AGE-SECRET-KEY-1 followed by at least 8 bech32 characters,
+# in either case. Not the full 58, so that a key truncated in the paste (44
+# characters, say) is still refused rather than recorded and printed; and not
+# the words alone, so that a tenant, bucket or path such as
+# age-secret-key-test is not turned away.
 looks_like_age_secret() { [[ "$1" =~ [Aa][Gg][Ee]-[Ss][Ee][Cc][Rr][Ee][Tt]-[Kk][Ee][Yy]- ]]; }
 holds_age_secret_key() {
-    [[ "$1" =~ [Aa][Gg][Ee]-[Ss][Ee][Cc][Rr][Ee][Tt]-[Kk][Ee][Yy]-1[qpzry9x8gf2tvdw0s3jn54khce6mua7lQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58} ]]
+    [[ "$1" =~ [Aa][Gg][Ee]-[Ss][Ee][Cc][Rr][Ee][Tt]-[Kk][Ee][Yy]-1[qpzry9x8gf2tvdw0s3jn54khce6mua7lQPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{8,} ]]
 }
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -1298,8 +1300,27 @@ probe_listing_once() {
     # why §2 refuses to run at all when such a variable is set, and why the
     # line this prints says a listing succeeded rather than what the key can
     # do.
+    #
+    # WHAT IT LISTS. With a tenant prefix recorded, the prefix: that is the
+    # only part of the bucket the backend ever lists (remote_dir() and
+    # remote_path() in backend app/core/catalogue_backup.py and
+    # image_upload.py both address <remote>/<tenant>/...), and a key scoped to
+    # that prefix, as an upload key may be, is refused a listing of the bucket
+    # root while every listing the backend makes succeeds. The probe's purpose
+    # is unchanged — a wrong key id, application key or bucket still fails it
+    # — and it now asks the same question the read probe asks, of the same
+    # place. With no tenant, the backend uploads nothing (configured_tenant),
+    # and the probe lists the bucket as it always has.
+    #
+    # Nothing is inferred from the two probes together. Both keys may list,
+    # so a failed upload listing beside a successful read listing does not
+    # say which key is which.
+    local where="$RCLONE_REMOTE_NAME:$B2_BUCKET"
+    if [ -n "$TENANT_FINAL" ]; then
+        where="$RCLONE_REMOTE_NAME:$B2_BUCKET/$TENANT_FINAL"
+    fi
     if reachable "https://api.backblazeb2.com"; then
-        echo "  Listing $RCLONE_REMOTE_NAME:$B2_BUCKET once..."
+        echo "  Listing $where once..."
         # --ask-password=false for the same reason the classification carries
         # it, and `bounded` for the same reason too: the flags below are
         # per-operation and idle timeouts, not a maximum runtime, and this
@@ -1309,18 +1330,17 @@ probe_listing_once() {
                 "$RCLONE_USE_BIN" --config "$RCLONE_CONFIG_PATH" \
                 --ask-password=false lsf --max-depth 1 \
                 --retries 1 --low-level-retries 1 --contimeout 10s --timeout 20s \
-                "$RCLONE_REMOTE_NAME:$B2_BUCKET" >/dev/null 2>&1; then
-            echo "  a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET succeeded  ✓"
-            RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET succeeded"
+                "$where" >/dev/null 2>&1; then
+            echo "  a listing of $where succeeded  ✓"
+            RUN_PROBE="a listing of $where succeeded"
         else
-            echo "  ⚠ the listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed. The"
+            echo "  ⚠ the listing of $where did not succeed. The"
             echo "    remote is recorded; check the key id, the application key, the"
-            echo "    bucket name, and that the key grants listFiles on that bucket. Run"
+            echo "    bucket name, and that the key grants listFiles there. Run"
             echo "    this to see what rclone says:"
             echo "      sudo -u $DTK_USER $RCLONE_USE_BIN --config $RCLONE_CONFIG_PATH \\"
-            echo "          lsf --max-depth 1 $RCLONE_REMOTE_NAME:$B2_BUCKET"
-            RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed"
-            UP_PROBE_FAILED=1
+            echo "          lsf --max-depth 1 $where"
+            RUN_PROBE="a listing of $where did not succeed"
         fi
     else
         echo "  (api.backblazeb2.com did not answer a HEAD request from here, so"
@@ -1688,17 +1708,6 @@ probe_read_listing_once() {
                 "$RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL" >/dev/null 2>&1; then
             echo "  a listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL succeeded  ✓"
             RUN_READ_PROBE="a listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL succeeded"
-            # No new call: the two listings this run already made, read
-            # together. The upload key cannot read and the read key cannot
-            # write, but both can list, so this pair is what a swap produces
-            # when the upload listing fails for want of the key's bucket or
-            # prefix scope.
-            if [ "$UP_PROBE_FAILED" -eq 1 ]; then
-                echo "  ⚠ the upload listing failed and the read listing succeeded: the"
-                echo "    two keys are probably swapped. KEY_ID and APP_KEY must be the"
-                echo "    upload key, READ_KEY_ID and READ_APP_KEY the read key."
-                RUN_READ_PROBE="$RUN_READ_PROBE; the upload listing did not, so the keys are probably swapped"
-            fi
         else
             echo "  ⚠ the listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL did not"
             echo "    succeed. The read remote is recorded; check the read key id, its"
@@ -1753,7 +1762,6 @@ RUN_PROBE="not run"
 RUN_SETTINGS="not written by this run"
 RUN_READ_CRED="no read section was written by this run"
 RUN_READ_PROBE="not run"
-UP_PROBE_FAILED=0
 SETTINGS_WRITTEN=0
 # What offsite.env will carry for the 0.1.0 keys: set from the command line or
 # from what offsite.env records, once that file has been read (2.1b).
@@ -2594,8 +2602,10 @@ fi
 # be planted by a line in .env — and that includes DTK_OFFSITE_KEY_FILE
 # itself: a DTK_OFFSITE_KEY_FILE= line in .env would feed whatever file it
 # names into the rclone config on every update. update.sh is the one caller
-# that passes --advisory, so under --advisory the read key is not read at
-# all; an operator adds it with a plain run, naming the file for that run.
+# that passes --advisory, so under --advisory the read key is never written:
+# READ_KEY_ID is read only to compare it with KEY_ID, so that a file giving
+# both remotes the same key is refused there exactly as on a plain run, and
+# HAVE_READ_KEY stays 0. An operator adds the read key with a plain run.
 # The same token class as the write key, for the same reason: both values go
 # into the same INI file. The application key is never printed.
 #
@@ -2605,13 +2615,20 @@ fi
 # remote must name the bucket the uploads went to, and it is derived from it.
 B2_READ_KEY_ID=""
 B2_READ_APP_KEY=""
-if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ "$ADVISORY" -eq 1 ]; then
-    echo "  note: the read key is not read under --advisory, which is how"
-    echo "        update.sh calls this script; DTK_OFFSITE_KEY_FILE can come"
-    echo "        from .env there. Run this script without --advisory to add it."
-elif [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
+READ_KEY_FOR_COMPARISON_ONLY=0
+if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
     B2_READ_KEY_ID="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_KEY_ID)"
     B2_READ_APP_KEY="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_APP_KEY)"
+    if [ "$ADVISORY" -eq 1 ] && { [ -n "$B2_READ_KEY_ID" ] || [ -n "$B2_READ_APP_KEY" ]; }; then
+        READ_KEY_FOR_COMPARISON_ONLY=1
+        # The application key is dropped at once; only the id is kept, for
+        # the same-id comparison below.
+        B2_READ_APP_KEY=""
+        echo "  note: the read key is not written under --advisory, which is how"
+        echo "        update.sh calls this script; DTK_OFFSITE_KEY_FILE can come"
+        echo "        from .env there. Its id is still compared with the upload"
+        echo "        key's. Run this script without --advisory to add it."
+    fi
 fi
 if [ -n "$B2_READ_KEY_ID" ] && ! valid_b2_token "$B2_READ_KEY_ID"; then
     reject_value "B2 read key id" "$B2_READ_KEY_ID" "$B2_TOKEN_CLASS"
@@ -2642,7 +2659,10 @@ if [ -n "$B2_KEY_ID" ] && [ -n "$B2_READ_KEY_ID" ] && [ "$B2_KEY_ID" = "$B2_READ
     provision_failed
 fi
 HAVE_READ_KEY=0
-if [ -n "$B2_READ_KEY_ID" ] && [ -n "$B2_READ_APP_KEY" ]; then
+if [ "$READ_KEY_FOR_COMPARISON_ONLY" -eq 1 ]; then
+    # Compared above; never written. Cleared so that nothing below can use it.
+    B2_READ_KEY_ID=""
+elif [ -n "$B2_READ_KEY_ID" ] && [ -n "$B2_READ_APP_KEY" ]; then
     HAVE_READ_KEY=1
 elif [ -n "$B2_READ_KEY_ID" ] || [ -n "$B2_READ_APP_KEY" ]; then
     # Half a read key is an operator part way through, exactly as half a write

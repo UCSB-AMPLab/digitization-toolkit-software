@@ -132,8 +132,13 @@ if rest[-2:] == ["config", "dump"]:
     sys.exit(0)
 if "lsf" in rest:
     # FAKE_LSF_FAIL=<remote>: a listing through that remote fails.
+    # FAKE_LSF_PREFIX_ONLY=<prefix>: every key is scoped to that name prefix,
+    # as B2 scopes one, so a listing outside <bucket>/<prefix> fails.
     target = rest[-1]
     if os.environ.get("FAKE_LSF_FAIL") and target.startswith(os.environ["FAKE_LSF_FAIL"] + ":"):
+        sys.exit(1)
+    only = os.environ.get("FAKE_LSF_PREFIX_ONLY")
+    if only and target.split(":", 1)[-1].split("/", 1)[1:] != [only]:
         sys.exit(1)
     sys.exit(0)
 sys.exit(2)
@@ -391,12 +396,13 @@ expect_no_secrets
 expect_absent "$(conf_file)"
 expect_absent "$(env_file)"
 
-case_ "same key id under --advisory: the read key is not read at all"
+case_ "same key id under --advisory: still refused, and nothing written"
 run DTK_OFFSITE_KEY_FILE="$KF" -- --advisory
 expect_status 0
-expect_out "not read under --advisory"
-expect_not_out "the read key id is the same as the upload key id"
-if grep -q '^\[b2read\]' "$(conf_file)"; then bad "a read section was written under --advisory"; else ok; fi
+expect_out "the read key id is the same as the upload key id"
+expect_out "--advisory: not failing the caller"
+expect_absent "$(conf_file)"
+expect_absent "$(env_file)"
 
 case_ "read key id equal to the installed upload section's"
 new_unit
@@ -750,20 +756,34 @@ expect_status 1
 expect_out "not the upload remote's bucket"
 expect_same "$(env_file)" "$WORK/saved.env"
 
-# M4: a failed upload listing beside a successful read listing.
-case_ "online probes: swapped keys are pointed out"
+# M4, revised: listings cannot tell the two keys' roles apart (both keys
+# list), so nothing infers a swap from them. With a tenant, both probes list
+# the tenant prefix, which is all the backend ever lists and all a
+# prefix-scoped key may list; without one the upload probe lists the bucket.
+case_ "online probes: prefix-scoped keys, both probes list the tenant prefix"
 new_unit
 KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run FAKE_ONLINE=1 FAKE_LSF_PREFIX_ONLY=ahr DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+expect_status 0
+expect_out "a listing of b2unit:$BUCKET/ahr succeeded"
+expect_out "a listing of b2read:$BUCKET/ahr succeeded"
+expect_not_out "did not succeed"
+expect_not_out "swapped"
+expect_no_secrets
+case_ "online probes: an upload listing that fails says nothing about a swap"
+new_unit
 run FAKE_ONLINE=1 FAKE_LSF_FAIL=b2unit DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
 expect_status 0
-expect_out "probably swapped"
-expect_no_secrets
-case_ "online probes: both succeed, no swap note"
-new_unit
-run FAKE_ONLINE=1 DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
-expect_status 0
-expect_not_out "probably swapped"
+expect_out "the listing of b2unit:$BUCKET/ahr did not succeed"
 expect_out "a listing of b2read:$BUCKET/ahr succeeded"
+expect_not_out "swapped"
+case_ "online probes: with no tenant the upload probe lists the bucket"
+new_unit
+KF="$(key_file up.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET")"
+run FAKE_ONLINE=1 DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_out "a listing of b2unit:$BUCKET succeeded"
+if grep -q "^lsf .* b2unit:$BUCKET\$" "$ROOT/rclone.log"; then ok; else bad "the upload probe did not list the bucket root"; fi
 
 # M5: the read key comes from the key file only.
 case_ "read key in the environment is ignored"
@@ -953,6 +973,27 @@ expect_status 1
 expect_not_out "$MIXED_SECRET"
 expect_absent "$(env_file)"
 
+# R3-1: a truncated private key is still a key for refusing; a value that
+# only resembles the words is not.
+case_ "truncated lowercase age secret as tenant is refused unprinted"
+new_unit
+TRUNC_SECRET="age-secret-key-1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
+run -- --tenant "$TRUNC_SECRET"
+expect_status 1
+expect_not_out "$TRUNC_SECRET"
+expect_absent "$(env_file)"
+case_ "eight bech32 characters after the prefix is enough to refuse"
+new_unit
+run -- --tenant "age-secret-key-1qqqqqqqq"
+expect_status 1
+expect_not_out "age-secret-key-1qqqqqqqq"
+expect_absent "$(env_file)"
+case_ "age-secret-key-test as tenant is accepted"
+new_unit
+run -- --tenant age-secret-key-test
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=age-secret-key-test"
+
 # N5: the whole-file refusal names a line.
 case_ "whole-file refusal says a line"
 new_unit
@@ -970,9 +1011,14 @@ cp "$(conf_file)" "$WORK/saved.conf"
 KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
 run DTK_OFFSITE_KEY_FILE="$KF" -- --advisory
 expect_status 0
-expect_out "not read under --advisory"
+expect_out "not written under --advisory"
 expect_same "$(conf_file)" "$WORK/saved.conf"
 expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
+case_ "advisory run with no read keys in the file prints no note"
+KF2="$(key_file uponly.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF2" -- --advisory
+expect_status 0
+expect_not_out "under --advisory, which is how"
 case_ "the same run without --advisory adds it"
 run DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
