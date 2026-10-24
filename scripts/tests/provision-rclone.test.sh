@@ -391,11 +391,12 @@ expect_no_secrets
 expect_absent "$(conf_file)"
 expect_absent "$(env_file)"
 
-case_ "same key id under --advisory: refused, exit 0"
+case_ "same key id under --advisory: the read key is not read at all"
 run DTK_OFFSITE_KEY_FILE="$KF" -- --advisory
 expect_status 0
-expect_out "the read key id is the same as the upload key id"
-expect_absent "$(conf_file)"
+expect_out "not read under --advisory"
+expect_not_out "the read key id is the same as the upload key id"
+if grep -q '^\[b2read\]' "$(conf_file)"; then bad "a read section was written under --advisory"; else ok; fi
 
 case_ "read key id equal to the installed upload section's"
 new_unit
@@ -857,6 +858,125 @@ chmod 0644 "$(conf_file)"
 run DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
 if [ "$(mode_of "$(conf_file)")" = "0o600" ]; then ok; else bad "mode $(mode_of "$(conf_file)") after mv"; fi
+
+# ── Review round 2 ──────────────────────────────────────────────────────────
+
+# N1: on the kept path, a complete [b2read] at a config path this run has not
+# established is not recorded.
+case_ "kept path: complete [b2read] at an unestablished path is not recorded"
+new_unit
+cat > "$(conf_file)" <<EOF
+[b2unit]
+type = b2
+account = $UP_ID
+key = $UP_KEY
+[b2read]
+type = b2
+account = $RD_ID
+key = $RD_KEY
+EOF
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_REMOTE=b2unit:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "has not established that file"
+expect_same "$(env_file)" "$WORK/saved.env"
+expect_no_secrets
+case_ "kept path: the same with --config-path is recorded"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --config-path "$(conf_file)"
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
+
+# N2: a recorded read remote naming the upload remote is refused before the
+# fresh write publishes anything.
+case_ "fresh write: recorded read remote naming the upload remote is refused first"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_READ_REMOTE=b2unit:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+KF="$(key_file up.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "names the upload remote"
+expect_absent "$(conf_file)"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "fresh write: the same with a read key supplied replaces it"
+KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
+
+# N3: with no upload remote recorded, a recorded read remote is dropped.
+case_ "no upload remote: a recorded read remote is dropped"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_READ_REMOTE=b2read:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
+run --
+expect_status 0
+expect_out "dropped"
+expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
+case_ "no upload remote: a recorded read remote naming b2unit is refused"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_READ_REMOTE=b2unit:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+run --
+expect_status 1
+expect_out "names the upload remote"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+# N4: a value that merely contains the words is not a key.
+case_ "tenant containing age-secret-key but not a key is accepted"
+new_unit
+run -- --tenant age-secret-key-archive
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=age-secret-key-archive"
+case_ "and a later run reads that file back"
+run -- --advisory
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=age-secret-key-archive"
+case_ "bucket containing age-secret-key but not a key is accepted"
+new_unit
+KF="$(key_file up.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=age-secret-key-bucket")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:age-secret-key-bucket"
+case_ "config path containing age-secret-key but not a key is accepted"
+new_unit
+mkdir -p "$ROOT/srv/age-secret-key-notes"
+run -- --config-path "$ROOT/srv/age-secret-key-notes/rclone.conf"
+expect_status 0
+expect_line "$(env_file)" "DTK_RCLONE_CONFIG=$ROOT/srv/age-secret-key-notes/rclone.conf"
+case_ "the full key shape in mixed case is still refused unprinted"
+new_unit
+MIXED_SECRET="AGE-secret-KEY-1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+run -- --tenant "$MIXED_SECRET"
+expect_status 1
+expect_not_out "$MIXED_SECRET"
+expect_absent "$(env_file)"
+
+# N5: the whole-file refusal names a line.
+case_ "whole-file refusal says a line"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_TENANT=%s\n' "$ROOT/usr/local/bin/rclone" "$FAKE_SECRET_LOWER" > "$(env_file)"
+run --
+expect_status 1
+expect_out "holds a line shaped like an age"
+expect_no_secrets
+
+# M5 residual: under --advisory (update.sh), the read key is not taken from
+# a key file, since DTK_OFFSITE_KEY_FILE can come from .env there.
+case_ "advisory run ignores the read key in DTK_OFFSITE_KEY_FILE"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --advisory
+expect_status 0
+expect_out "not read under --advisory"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
+case_ "the same run without --advisory adds it"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
 
 # ── Nothing read was ever passed to rclone on its command line ──────────────
 case_ "no key on any rclone argument list"
