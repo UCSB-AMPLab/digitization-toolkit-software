@@ -51,12 +51,16 @@ RCPT_HRP="agx1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq7gf884"
 RCPT_SHORT="age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqar9jk6"
 # Shaped like an age private key; not one.
 FAKE_SECRET="AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+FAKE_SECRET_LOWER="age-secret-key-1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
 
 # ── Fakes ───────────────────────────────────────────────────────────────────
 FAKEBIN="$WORK/fakebin"
 mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/curl" <<'EOF'
 #!/bin/sh
+# Offline, unless a case sets FAKE_ONLINE=1 to reach the listing probes. Even
+# then nothing leaves the machine: curl is only ever asked for a HEAD.
+[ "${FAKE_ONLINE:-}" = 1 ] && exit 0
 exit 7
 EOF
 cat > "$FAKEBIN/timeout" <<'EOF'
@@ -68,6 +72,13 @@ exec "$@"
 EOF
 cat > "$FAKEBIN/chown" <<'EOF'
 #!/bin/sh
+# FAKE_CHOWN_FAIL=<text>: fail for any path containing it, to interrupt a run
+# at a chosen write.
+if [ -n "${FAKE_CHOWN_FAIL:-}" ]; then
+    for a in "$@"; do
+        case "$a" in *"$FAKE_CHOWN_FAIL"*) exit 1 ;; esac
+    done
+fi
 exit 0
 EOF
 cat > "$WORK/fake-rclone.py" <<'EOF'
@@ -111,13 +122,46 @@ if rest[-2:] == ["config", "dump"]:
     # read section leaves every other section as rclone read it.
     if os.environ.get("FAKE_RCLONE_DRIFT") and cfg and not cfg.endswith(".conf") and "b2unit" in data:
         data["b2unit"]["hard_delete"] = "true"
+    # FAKE_RCLONE_TOUCH=<file>: when a temporary copy is read, change <file>,
+    # as a second writer would between the copy and the rename.
+    touch = os.environ.get("FAKE_RCLONE_TOUCH")
+    if touch and cfg and not cfg.endswith(".conf"):
+        with open(touch, "a") as fh:
+            fh.write("# changed by another writer\n")
     print(json.dumps(data))
     sys.exit(0)
 if "lsf" in rest:
+    # FAKE_LSF_FAIL=<remote>: a listing through that remote fails.
+    target = rest[-1]
+    if os.environ.get("FAKE_LSF_FAIL") and target.startswith(os.environ["FAKE_LSF_FAIL"] + ":"):
+        sys.exit(1)
     sys.exit(0)
 sys.exit(2)
 EOF
 chmod +x "$FAKEBIN"/*
+
+# flock(1): the Pi has it; macOS does not. Where it is missing, a fake that
+# always takes the lock stands in, so the cases that need the lock run on
+# both. NOLOCKBIN is the system's bin directories with flock left out, for the
+# case that needs it absent.
+FLOCKBIN="$WORK/flockbin"
+mkdir -p "$FLOCKBIN"
+if ! command -v flock >/dev/null 2>&1; then
+    printf '#!/bin/sh\nexit 0\n' > "$FLOCKBIN/flock"
+    chmod +x "$FLOCKBIN/flock"
+fi
+NOLOCKBIN="$WORK/nolockbin"
+mkdir -p "$NOLOCKBIN"
+for d in /usr/bin /bin /usr/sbin /sbin; do
+    for f in "$d"/*; do
+        n="${f##*/}"
+        [ "$n" = flock ] && continue
+        [ -e "$NOLOCKBIN/$n" ] || ln -s "$f" "$NOLOCKBIN/$n" 2>/dev/null
+    done
+done
+DEFAULT_PATH="$FAKEBIN:$FLOCKBIN:/usr/bin:/bin:/usr/sbin:/sbin"
+RUN_PATH="$DEFAULT_PATH"
+RUN_SHELL="/bin/bash"
 
 # ── Harness ─────────────────────────────────────────────────────────────────
 ROOT=""
@@ -138,9 +182,11 @@ run() {
     local -a envs=()
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     [ "${1:-}" = "--" ] && shift
-    OUT="$(env -i HOME="$WORK" PATH="$FAKEBIN:/usr/bin:/bin:/usr/sbin:/sbin" \
+    # RUN_SHELL is word-split on purpose, so a case can run "/bin/bash -x".
+    # shellcheck disable=SC2086
+    OUT="$(env -i HOME="$WORK" PATH="$RUN_PATH" \
               FAKE_RCLONE_LOG="$ROOT/rclone.log" ${envs[@]+"${envs[@]}"} \
-              /bin/bash "$SCRIPT" --prefix "$ROOT" "$@" 2>&1)"
+              $RUN_SHELL "$SCRIPT" --prefix "$ROOT" "$@" 2>&1)"
     STATUS=$?
 }
 
@@ -182,7 +228,20 @@ expect_no_secrets() {
     expect_not_out "$UP_KEY"
     expect_not_out "$RD_KEY"
     expect_not_out "$FAKE_SECRET"
+    expect_not_out "$FAKE_SECRET_LOWER"
 }
+# The age-secret-shaped value appears in neither the output nor offsite.env.
+expect_secret_kept_out() {
+    expect_no_secrets
+    if [ -f "$(env_file)" ] && grep -qi 'age-secret-key-' "$(env_file)" \
+            && ! grep -qi 'age-secret-key-' "$WORK/planted.env" 2>/dev/null; then
+        bad "offsite.env holds an age-secret-shaped value"
+    else
+        ok
+    fi
+}
+# The permission bits, following a symlink, as e.g. 0o600.
+mode_of() { python3 -I -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 
 # ── Tenant ──────────────────────────────────────────────────────────────────
 for t in ahr sbmal captua-test a1-b2-c3; do
@@ -266,7 +325,7 @@ printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_DUMP_RECIPIENT=%s\n' "$ROOT/usr/local/bin
 cp "$(env_file)" "$WORK/saved.env"
 run --
 expect_status 1
-expect_out "age PRIVATE key"
+expect_out "shaped like an age"
 expect_no_secrets
 expect_same "$(env_file)" "$WORK/saved.env"
 
@@ -573,6 +632,231 @@ run DTK_OFFSITE_KEY_FILE="$KF" -- --config-path "$(conf_file)"
 expect_status 0
 expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
 expect_line "$(conf_file)" "[b2read]"
+
+# ── Review round 1 (Codex and adversarial review) ───────────────────────────
+
+# B1: an age-secret-shaped value is never printed and never written, wherever
+# it comes from.
+secret_case() {   # secret_case <label> <expected status> -- <run args...>
+    local label="$1" want="$2"
+    shift 3
+    case_ "age secret via $label"
+    run "$@"
+    expect_status "$want"
+    expect_secret_kept_out
+    expect_out "not printed"
+}
+for s in "$FAKE_SECRET" "$FAKE_SECRET_LOWER"; do
+    new_unit
+    secret_case "--tenant ${s:0:4}" 1 -- -- --tenant "$s"
+    new_unit
+    secret_case "--config-path ${s:0:4}" 1 -- -- --config-path "/$s"
+    new_unit
+    secret_case "--prefix ${s:0:4}" 1 -- -- --prefix "$ROOT/$s"
+done
+for key in DTK_OFFSITE_TENANT DTK_RCLONE_CONFIG DTK_OFFSITE_REMOTE DTK_OFFSITE_READ_REMOTE DTK_OFFSITE_BWLIMIT; do
+    for s in "$FAKE_SECRET" "$FAKE_SECRET_LOWER"; do
+        new_unit
+        case "$key" in
+            DTK_RCLONE_CONFIG) v="/$s" ;;
+            DTK_OFFSITE_REMOTE|DTK_OFFSITE_READ_REMOTE) v="b2unit:$s" ;;
+            *) v="$s" ;;
+        esac
+        printf 'DTK_RCLONE_BIN=%s\n%s=%s\n' "$ROOT/usr/local/bin/rclone" "$key" "$v" > "$(env_file)"
+        cp "$(env_file)" "$WORK/planted.env"
+        secret_case "recorded $key ${s:0:4}" 1 -- --
+        expect_same "$(env_file)" "$WORK/planted.env"
+    done
+done
+rm -f "$WORK/planted.env"
+for field in KEY_ID BUCKET READ_KEY_ID; do
+    new_unit
+    lines=("KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")
+    for i in 0 1 2 3 4; do
+        case "${lines[i]}" in "$field="*) lines[i]="$field=$FAKE_SECRET" ;; esac
+    done
+    KF="$(key_file secret.key "${lines[@]}")"
+    secret_case "key file $field" 1 -- DTK_OFFSITE_KEY_FILE="$KF" --
+    expect_absent "$(conf_file)"
+done
+
+# B2: a run interrupted after the config was written, with read keys in the
+# key file, resumes on the next run.
+case_ "interrupted run with read keys: the first run fails at offsite.env"
+new_unit
+KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run FAKE_CHOWN_FAIL="offsite.env." DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+expect_status 1
+expect_absent "$(env_file)"
+expect_line "$(conf_file)" "[b2read]"
+cp "$(conf_file)" "$WORK/saved.conf"
+case_ "interrupted run with read keys: the re-run resumes"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+expect_status 0
+expect_out "already holds a complete [b2read]"
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$BUCKET"
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+
+# M1: the file an append would rename over must be a path of the safe class.
+case_ "symlinked config whose target has a quote in its name"
+legacy_unit
+EVIL="$ROOT/x';touch pwned;'.conf"
+mv "$(conf_file)" "$EVIL"
+ln -s "$EVIL" "$(conf_file)"
+KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "refusing the resolved rclone config path"
+if [ -L "$(conf_file)" ]; then ok; else bad "the case did not set up its symlink"; fi
+if grep -q '^\[b2read\]' "$EVIL"; then bad "appended through an unsafe target"; else ok; fi
+
+# M2: a recorded read remote that cannot belong to a freshly written upload
+# remote is dropped, and said.
+case_ "fresh write: recorded read remote on another bucket is dropped"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_REMOTE=b2unit:old-bucket-1\nDTK_OFFSITE_READ_REMOTE=b2read:old-bucket-1\n' \
+    "$ROOT/usr/local/bin/rclone" > "$(env_file)"
+KF="$(key_file up.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_out "dropped"
+expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$BUCKET"
+case_ "fresh write: recorded read remote with no section in the new file is dropped"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_READ_REMOTE=b2read:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_out "dropped"
+expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
+
+# M3: a recorded read remote must not name the upload remote, nor another bucket.
+case_ "recorded read remote naming the upload remote is refused"
+legacy_unit
+echo "DTK_OFFSITE_READ_REMOTE=b2unit:$BUCKET" >> "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+run --
+expect_status 1
+expect_out "names the upload remote"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "recorded read remote on another bucket than the upload remote is refused"
+legacy_unit
+echo "DTK_OFFSITE_READ_REMOTE=b2read:other-bucket-2" >> "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+run --
+expect_status 1
+expect_out "not the upload remote's bucket"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+# M4: a failed upload listing beside a successful read listing.
+case_ "online probes: swapped keys are pointed out"
+new_unit
+KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run FAKE_ONLINE=1 FAKE_LSF_FAIL=b2unit DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+expect_status 0
+expect_out "probably swapped"
+expect_no_secrets
+case_ "online probes: both succeed, no swap note"
+new_unit
+run FAKE_ONLINE=1 DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+expect_status 0
+expect_not_out "probably swapped"
+expect_out "a listing of b2read:$BUCKET/ahr succeeded"
+
+# M5: the read key comes from the key file only.
+case_ "read key in the environment is ignored"
+new_unit
+KF="$(key_file up.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET")"
+run DTK_B2_READ_KEY_ID="$RD_ID" DTK_B2_READ_APP_KEY="$RD_KEY" DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+if grep -q '^\[b2read\]' "$(conf_file)"; then bad "a read section was written from the environment"; else ok; fi
+expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
+
+# M6: the append replaces a file, so it needs the lock.
+case_ "append without flock is refused"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+RUN_PATH="$FAKEBIN:$NOLOCKBIN"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+RUN_PATH="$DEFAULT_PATH"
+expect_status 1
+expect_out "flock is not installed"
+expect_out "refusing to add the read key"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+case_ "fresh write without flock still works"
+new_unit
+KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+RUN_PATH="$FAKEBIN:$NOLOCKBIN"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+RUN_PATH="$DEFAULT_PATH"
+expect_status 0
+expect_line "$(conf_file)" "[b2read]"
+
+# M7: refusals say what was left, not that nothing changed.
+case_ "read refusal says what was left"
+legacy_unit
+KF="$(key_file rdsame.key "READ_KEY_ID=$UP_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "No [b2read] section was written and $(env_file) was not changed"
+expect_not_out "nothing was changed"
+expect_out "What this run did:"
+case_ "same key id refusal says what was left"
+new_unit
+KF="$(key_file same.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$UP_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "No credential was written and $(env_file) was not changed"
+expect_not_out "nothing was changed"
+
+# M8: xtrace in the caller never reaches the keys.
+case_ "bash -x prints no key"
+new_unit
+KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+RUN_SHELL="/bin/bash -x"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+RUN_SHELL="/bin/bash"
+expect_status 0
+expect_no_secrets
+case_ "SHELLOPTS=xtrace prints no key"
+new_unit
+run SHELLOPTS=xtrace DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_no_secrets
+
+# M9: the old-bytes check, the symlink branch and the mode after the rename.
+case_ "append: the old file changing between copy and rename stops it"
+legacy_unit
+KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run FAKE_RCLONE_TOUCH="$(conf_file)" DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "old file: changed or unread"
+if grep -q '^\[b2read\]' "$(conf_file)"; then bad "promoted over a changed file"; else ok; fi
+LEFT=0
+for f in "$ROOT"/var/lib/dtk/rclone.conf.*; do [ -e "$f" ] && LEFT=1; done
+if [ "$LEFT" -eq 1 ]; then bad "a temporary config was left behind"; else ok; fi
+
+case_ "append through a symlink writes the target and keeps the link"
+legacy_unit
+mkdir -p "$ROOT/mnt"
+mv "$(conf_file)" "$ROOT/mnt/live.conf"
+chmod 0644 "$ROOT/mnt/live.conf"
+ln -s "$ROOT/mnt/live.conf" "$(conf_file)"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+if [ -L "$(conf_file)" ]; then ok; else bad "the symlink was replaced by a file"; fi
+expect_line "$ROOT/mnt/live.conf" "[b2read]"
+if [ "$(mode_of "$ROOT/mnt/live.conf")" = "0o600" ]; then ok; else bad "target mode $(mode_of "$ROOT/mnt/live.conf") after mv"; fi
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
+
+case_ "append to a plain file: mode 0600 after the rename"
+legacy_unit
+chmod 0644 "$(conf_file)"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+if [ "$(mode_of "$(conf_file)")" = "0o600" ]; then ok; else bad "mode $(mode_of "$(conf_file)") after mv"; fi
 
 # ── Nothing read was ever passed to rclone on its command line ──────────────
 case_ "no key on any rclone argument list"

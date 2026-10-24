@@ -1,4 +1,10 @@
 #!/bin/bash
+# xtrace off before anything else runs. This script holds B2 application keys
+# in variables and writes them through heredocs, and an xtrace inherited from
+# `bash -x`, from SHELLOPTS=xtrace in the environment, or from a caller that
+# sourced it, would print every one of those lines, keys included, to stderr
+# and into whatever log captures it.
+set +x
 # provision-rclone.sh — pinned rclone binary + per-unit B2 remote for the
 # offsite catalogue backup (NEH-249, NEH-227). Idempotent: safe to re-run on
 # every provision and every update.
@@ -130,8 +136,9 @@
 #   DTK_OFFSITE_READ_REMOTE     <name>:<bucket>, the remote an admin restore of
 #                               freed files reads through. Written when a READ
 #                               key is supplied, as a second section in the
-#                               same rclone config, from the same key file the
-#                               write key comes from (READ_KEY_ID, READ_APP_KEY).
+#                               same rclone config, from the key file named by
+#                               DTK_OFFSITE_KEY_FILE (READ_KEY_ID, READ_APP_KEY)
+#                               and never from the environment.
 #
 # The tenant and the recipient are ARGUMENTS for the reason --prefix is: the
 # callers pass none, update.sh exports every .env key before calling this
@@ -513,7 +520,7 @@ bounded() {   # bounded <seconds> <command> [args...]
 # One naming note, not a rule for this validator: B2's S3-compatible API is
 # stricter than the native one and accepts lowercase only, so a bucket that
 # will ever be served over the S3 endpoint should be named in lowercase.
-valid_bucket()   { [[ "$1" =~ ^[A-Za-z0-9.-]{6,63}$ ]]; }
+valid_bucket()   { ! looks_like_age_secret "$1" && [[ "$1" =~ ^[A-Za-z0-9.-]{6,63}$ ]]; }
 # Beside the pattern, for the same reason B2_TOKEN_CLASS is: these were in two
 # places, and only the pattern fails loudly when the two drift apart.
 B2_BUCKET_RULE="6-63 characters of letters, digits, hyphens and periods"
@@ -537,7 +544,7 @@ B2_BUCKET_RULE="6-63 characters of letters, digits, hyphens and periods"
 # naming what happened — instead of becoming a backup that fails every thirty
 # minutes looking like a credentials problem, which is the exact failure
 # NEH-227 already lost a day to.
-valid_b2_token() { [[ "$1" =~ ^[A-Za-z0-9_+/=-]+$ ]]; }
+valid_b2_token() { ! looks_like_age_secret "$1" && [[ "$1" =~ ^[A-Za-z0-9_+/=-]+$ ]]; }
 # Kept beside the pattern on purpose. These were 400 lines apart, and a
 # mutation test caught the consequence: with the pattern reverted and the
 # wording left alone, the script enforced one class while naming another. Only
@@ -545,7 +552,7 @@ valid_b2_token() { [[ "$1" =~ ^[A-Za-z0-9_+/=-]+$ ]]; }
 B2_TOKEN_CLASS="letters, digits, and _ + / = - only"
 # An absolute path with no character that could change the meaning of a file
 # this script writes.
-valid_abs_path() { [[ "$1" =~ ^/[A-Za-z0-9._/+-]+$ ]]; }
+valid_abs_path() { ! looks_like_age_secret "$1" && [[ "$1" =~ ^/[A-Za-z0-9._/+-]+$ ]]; }
 ABS_PATH_RULE="an absolute path, characters A-Z a-z 0-9 . _ / + -"
 # The class every value written into offsite.env must match.
 OFFSITE_VALUE_CLASS='^[A-Za-z0-9._:/+-]*$'
@@ -562,7 +569,14 @@ OFFSITE_VALUE_CLASS='^[A-Za-z0-9._:/+-]*$'
 # The backend strips surrounding whitespace and slashes before matching; this
 # script refuses them instead, so offsite.env holds the one form the backend
 # uses rather than a form it has to normalise.
+#
+# One value TENANT_PATTERN would accept is refused here explicitly: an age
+# private key in lower case (age-secret-key-1...) is lowercase letters and
+# digits joined by hyphens, and would otherwise become this unit's prefix in
+# offsite.env and in every object key. Every validator in this script refuses
+# an age-secret-shaped value for the same reason (looks_like_age_secret).
 valid_tenant() {
+    looks_like_age_secret "$1" && return 1
     [[ "$1" =~ ^[abcdefghijklmnopqrstuvwxyz0123456789]+(-[abcdefghijklmnopqrstuvwxyz0123456789]+)*$ ]]
 }
 TENANT_RULE="lowercase letters and digits joined by single hyphens, e.g. ahr, sbmal, captua-test"
@@ -624,7 +638,7 @@ reject_recipient() {   # reject_recipient <where it came from> <the value>
     if looks_like_age_secret "$2"; then
         echo "✗ rclone: refusing the catalogue dump recipient from $1: it is an"
         echo "  age PRIVATE key (AGE-SECRET-KEY-...), not the public recipient."
-        echo "  The value is not printed, and nothing was written."
+        echo "  The value is not printed, and it was not written to offsite.env."
         echo "  The unit holds only the public half (age1...), never the private"
         echo "  key. Pass the line age-keygen prints as 'Public key: age1...', or"
         echo "  the output of 'age-keygen -y' on the private key file. A value"
@@ -643,18 +657,27 @@ reject_recipient() {   # reject_recipient <where it came from> <the value>
 # object key to it, so it must name the remote and bucket the uploads went to.
 valid_remote_spec() {
     local name="${1%%:*}" bucket="${1#*:}"
+    looks_like_age_secret "$1" && return 1
     case "$1" in *:*) ;; *) return 1 ;; esac
     [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] && valid_bucket "$bucket"
 }
 REMOTE_SPEC_RULE="<remote>:<bucket>, the remote name in letters, digits, _ . - and a bucket of $B2_BUCKET_RULE"
 
+# Never prints a value shaped like an age private key, whatever it was given
+# as: a refusal is exactly where a pasted secret would otherwise be echoed.
 reject_value() {   # reject_value <what it is> <the value> <the rule>
     echo "✗ rclone: refusing the $1."
-    echo "    value: $2"
+    if looks_like_age_secret "$2"; then
+        echo "    value: not printed: it is shaped like an age private key"
+        echo "           (AGE-SECRET-KEY-...), which belongs nowhere on this unit"
+    else
+        echo "    value: $2"
+    fi
     echo "    must match: $3"
     echo "  This is our check, not B2's: the value is written into files a"
     echo "  parser reads — the rclone config, and the offsite settings the"
-    echo "  backend loads. Nothing was written and nothing was changed."
+    echo "  backend loads. No credential was written and $OFFSITE_ENV_PATH"
+    echo "  was not changed."
 }
 
 # ── offsite.env: the file this script owns ──────────────────────────────────
@@ -696,7 +719,7 @@ reject_value() {   # reject_value <what it is> <the value> <the rule>
 # grammar below with the NUL gone and validate, while python-dotenv in the
 # backend reads a key name this script never wrote. The file's bytes are
 # therefore counted before any of its lines are read.
-OFFSITE_STATUS=""      # ok | absent | malformed | unreadable
+OFFSITE_STATUS=""      # ok | absent | malformed | unreadable | secret
 OFFSITE_CFG=""         # DTK_RCLONE_CONFIG as recorded, when non-empty
 OFFSITE_REMOTE=""      # DTK_OFFSITE_REMOTE as recorded, when non-empty
 OFFSITE_TENANT_REC=""  # DTK_OFFSITE_TENANT as recorded, when non-empty
@@ -750,6 +773,13 @@ read_offsite_env() {
         # Not the line itself: it holds a NUL, and this goes to a terminal.
         OFFSITE_BAD_LINE="(not printed: the line holds a NUL byte)"
         OFFSITE_BAD_WHY="the file contains a NUL byte, which this script never writes, and which the backend's parser and this one would read differently"
+        return 0
+    fi
+    # Before any line is parsed or printed: a file holding a value shaped
+    # like an age private key is refused whole, so that no message below,
+    # the malformed-line one included, can echo it.
+    if looks_like_age_secret "$content"; then
+        OFFSITE_STATUS="secret"
         return 0
     fi
     while IFS= read -r line; do
@@ -859,6 +889,12 @@ write_offsite_env() {   # <bin> <config-path> <remote> <read-remote> <tenant> <r
     # Every value is validated by its caller; this is the backstop, so no code
     # path can write something unexpected into a file python-dotenv parses.
     for v in "$bin" "$cfg" "$remote" "$read_remote" "$tenant" "$recipient"; do
+        if looks_like_age_secret "$v"; then
+            echo "✗ rclone: refusing to write $OFFSITE_ENV_PATH — one of the"
+            echo "  values is shaped like an age private key (not printed)."
+            echo "  Nothing was written."
+            return 1
+        fi
         if ! [[ "$v" =~ $OFFSITE_VALUE_CLASS ]]; then
             echo "✗ rclone: refusing to write $OFFSITE_ENV_PATH — one of the"
             echo "  values contains characters this format does not allow."
@@ -1269,6 +1305,7 @@ probe_listing_once() {
             echo "      sudo -u $DTK_USER $RCLONE_USE_BIN --config $RCLONE_CONFIG_PATH \\"
             echo "          lsf --max-depth 1 $RCLONE_REMOTE_NAME:$B2_BUCKET"
             RUN_PROBE="a listing of $RCLONE_REMOTE_NAME:$B2_BUCKET did not succeed"
+            UP_PROBE_FAILED=1
         fi
     else
         echo "  (api.backblazeb2.com did not answer a HEAD request from here, so"
@@ -1360,23 +1397,92 @@ RCLONE_READ_CONF
 
 READ_CONFIRMED=0   # 1 once [b2read] holds the supplied read key, written or found
 READ_BUCKET=""
+READ_TMP=""        # the append's temporary file, named by the EXIT trap
+LOCK_HELD=0        # 1 once flock(1) holds the run lock
 
+# What a refusal leaves is stated exactly: no [b2read] was written and
+# offsite.env was not touched. Anything else this run had already done, such
+# as re-asserting the config file's mode and owner, is in the report printed
+# with it.
 read_refused() {   # read_refused <lines...>: print, report, stop
     local line
     for line in "$@"; do echo "$line"; done
-    echo "  The read key supplied was not used, and nothing was changed."
+    echo "  The read key supplied was not used. No [$RCLONE_READ_REMOTE_NAME] section was written and $OFFSITE_ENV_PATH was not changed."
     RUN_READ_CRED="not written: refused (see above)"
+    run_report
     provision_failed
+}
+
+# A recorded read remote, carried forward when no read key is supplied, is
+# checked against the upload remote this run records beside it:
+#
+#   • naming the upload remote itself is refused: the two keys would be one;
+#   • on another bucket, it is DROPPED when this run records a new upload
+#     remote (fresh, new) — the restore would read a bucket the uploads do not
+#     go to — and REFUSED when the upload remote is the one already recorded
+#     (kept), where the pair as recorded is inconsistent and this script will
+#     not choose between them;
+#   • after a fresh write, whose config this run produced whole, a read remote
+#     with no complete section in it is dropped as well;
+#   • otherwise it is carried forward, with a warning when rclone finds no
+#     complete section behind it.
+reconcile_recorded_read_remote() {   # <upload remote name> <bucket> <fresh|new|kept>
+    local up="$1" bucket="$2" mode="$3" name rbucket state
+    [ -n "$READ_REMOTE_FINAL" ] || return 0
+    name="${READ_REMOTE_FINAL%%:*}"
+    rbucket="${READ_REMOTE_FINAL#*:}"
+    if [ "$name" = "$up" ] || [ "$name" = "$RCLONE_REMOTE_NAME" ]; then
+        echo "✗ rclone: $OFFSITE_ENV_PATH records DTK_OFFSITE_READ_REMOTE=$READ_REMOTE_FINAL,"
+        echo "  which names the upload remote [$name]. The read remote must be a"
+        echo "  section of its own, holding a different key. $OFFSITE_ENV_PATH"
+        echo "  was not changed. Remove that line, or supply READ_KEY_ID and"
+        echo "  READ_APP_KEY in the key file to write [$RCLONE_READ_REMOTE_NAME]."
+        RUN_READ_CRED="refused: the recorded read remote names the upload remote"
+        run_report
+        provision_failed
+    fi
+    if [ "$rbucket" != "$bucket" ]; then
+        if [ "$mode" = "kept" ]; then
+            echo "✗ rclone: $OFFSITE_ENV_PATH records DTK_OFFSITE_READ_REMOTE=$READ_REMOTE_FINAL,"
+            echo "  on bucket $rbucket, not the upload remote's bucket $bucket. A"
+            echo "  restore reads the objects the upload wrote, so the two must share"
+            echo "  a bucket. $OFFSITE_ENV_PATH was not changed; correct or remove"
+            echo "  that line and re-run."
+            RUN_READ_CRED="refused: the recorded read remote is on another bucket"
+            run_report
+            provision_failed
+        fi
+        echo "  ⚠ DTK_OFFSITE_READ_REMOTE=$READ_REMOTE_FINAL was recorded on bucket"
+        echo "    $rbucket, and this run records the upload remote on $bucket. It"
+        echo "    was dropped from $OFFSITE_ENV_PATH. Supply READ_KEY_ID and"
+        echo "    READ_APP_KEY to write a read remote for $bucket."
+        RUN_READ_CRED="dropped the recorded $READ_REMOTE_FINAL: another bucket than $bucket"
+        READ_REMOTE_FINAL=""
+        return 0
+    fi
+    if [ "$mode" = "fresh" ]; then
+        state="$(config_remote_state "$RCLONE_USE_BIN" "$RCLONE_CONFIG_PATH" "$name")"
+        if [ "$state" != "complete" ]; then
+            echo "  ⚠ DTK_OFFSITE_READ_REMOTE=$READ_REMOTE_FINAL was recorded, and the"
+            echo "    config this run wrote has no complete [$name] section. It was"
+            echo "    dropped from $OFFSITE_ENV_PATH. Supply READ_KEY_ID and"
+            echo "    READ_APP_KEY to write one."
+            RUN_READ_CRED="dropped the recorded $READ_REMOTE_FINAL: no [$name] in the config this run wrote"
+            READ_REMOTE_FINAL=""
+            return 0
+        fi
+    fi
+    warn_recorded_read_remote
 }
 
 # Put the read key beside an upload credential that is already installed and
 # complete at RCLONE_CONFIG_PATH. Called only from the paths that go on to
 # record <upload remote>:<bucket>, before offsite.env is written, so that a
 # read remote is never recorded ahead of the section behind it.
-provision_read_remote() {   # <upload remote name> <bucket>
-    local up_name="$1" bucket="$2" same state target before after tmp d_old d_new
+provision_read_remote() {   # <upload remote name> <bucket> <new|kept>
+    local up_name="$1" bucket="$2" mode="$3" same state target before after d_old d_new
     if [ "$HAVE_READ_KEY" -ne 1 ]; then
-        warn_recorded_read_remote
+        reconcile_recorded_read_remote "$up_name" "$bucket" "$mode"
         return 0
     fi
     if ! valid_bucket "$bucket"; then
@@ -1387,16 +1493,10 @@ provision_read_remote() {   # <upload remote name> <bucket>
         read_refused "✗ rclone: the upload remote is named [$up_name], which is the name" \
                      "  this script gives the read remote. One section cannot hold both keys."
     fi
-    # Appending to a file is writing it, and this run may only write a config
-    # it has established as the one the backend reads — the same rule the
-    # bucket-only recovery follows, for the same counterexample.
-    if [ "$CONFIG_PATH_ESTABLISHED" -ne 1 ]; then
-        read_refused "✗ rclone: the read key would be added to $RCLONE_CONFIG_PATH, and this" \
-                     "  run has not established that file as the backend's config:" \
-                     "  $OFFSITE_ENV_PATH records no DTK_RCLONE_CONFIG and no" \
-                     "  --config-path was given. Name the file that holds [$up_name]" \
-                     "  with --config-path and re-run."
-    fi
+    # The checks below only READ the file. The two that guard a WRITE — an
+    # established path and the run lock — come after the state check, so that
+    # a [b2read] already holding the supplied key (a run interrupted after it
+    # wrote the config) resumes rather than being refused.
     same="$(config_section_key_id_matches "$RCLONE_USE_BIN" "$RCLONE_CONFIG_PATH" "$up_name" "$B2_READ_KEY_ID")"
     case "$same" in
         differ) ;;
@@ -1436,12 +1536,39 @@ provision_read_remote() {   # <upload remote name> <bucket>
             ;;
     esac
 
+    # From here on the file is rewritten. Appending to a file is writing it,
+    # and this run may only write a config it has established as the one the
+    # backend reads — the same rule the bucket-only recovery follows, for the
+    # same counterexample.
+    if [ "$CONFIG_PATH_ESTABLISHED" -ne 1 ]; then
+        read_refused "✗ rclone: the read key would be added to $RCLONE_CONFIG_PATH, and this" \
+                     "  run has not established that file as the backend's config:" \
+                     "  $OFFSITE_ENV_PATH records no DTK_RCLONE_CONFIG and no" \
+                     "  --config-path was given. Name the file that holds [$up_name]" \
+                     "  with --config-path and re-run."
+    fi
+    # The rename replaces the file, so unlike the upload write it is not safe
+    # against a second run without the lock: the second run's file would be
+    # renamed over, or rename over, this one's.
+    if [ "$LOCK_HELD" -ne 1 ]; then
+        read_refused "✗ rclone: refusing to add the read key to $RCLONE_CONFIG_PATH without" \
+                     "  the run lock: flock is not installed, so this run is not" \
+                     "  serialised against another copy of itself, and adding a section" \
+                     "  replaces the file. Install util-linux and re-run."
+    fi
+
     target="$RCLONE_CONFIG_PATH"
     if [ -L "$target" ]; then
         if ! target="$(readlink -f "$RCLONE_CONFIG_PATH" 2>/dev/null)" || [ ! -f "$target" ]; then
             read_refused "✗ rclone: could not resolve the symlink $RCLONE_CONFIG_PATH to the file" \
                          "  the read key would be added to."
         fi
+    fi
+    # The resolved target is named in a trap, in mktemp's template and in
+    # messages; it is held to the same class as every other path here.
+    if ! valid_abs_path "$target"; then
+        reject_value "resolved rclone config path" "$target" "$ABS_PATH_RULE"
+        read_refused "  (The symlink $RCLONE_CONFIG_PATH resolves to that path.)"
     fi
     if ! before="$(sha256_of "$target")" || [ -z "$before" ]; then
         read_refused "✗ rclone: could not take a checksum of $target before changing it."
@@ -1451,28 +1578,30 @@ provision_read_remote() {   # <upload remote name> <bucket>
         read_refused "✗ rclone: could not read $target as rclone does before changing it."
     fi
     echo "  Adding the [$RCLONE_READ_REMOTE_NAME] remote to $target..."
-    if ! tmp="$(mktemp "${target}.XXXXXX")"; then
+    if ! READ_TMP="$(mktemp "${target}.XXXXXX")"; then
+        READ_TMP=""
         read_refused "✗ rclone: could not create a temporary file beside $target."
     fi
-    # shellcheck disable=SC2064  # expand the path now, not at trap time
-    trap "rm -f '$tmp'" EXIT
-    if ! chmod 0600 "$tmp" \
+    # Single quotes: the path is read from the variable when the trap fires,
+    # never pasted into the trap's text.
+    trap 'rm -f -- "$READ_TMP"' EXIT
+    if ! chmod 0600 "$READ_TMP" \
             || ! { cat "$target"
                    if [ -n "$(tail -c 1 "$target")" ]; then echo; fi
-                   emit_read_section; } > "$tmp" \
-            || ! chown "$DTK_USER:$DTK_USER" "$tmp"; then
-        rm -f "$tmp"; trap - EXIT
+                   emit_read_section; } > "$READ_TMP" \
+            || ! chown "$DTK_USER:$DTK_USER" "$READ_TMP"; then
+        rm -f -- "$READ_TMP"; trap - EXIT
         read_refused "✗ rclone: could not write the new $target beside the old one." \
                      "  The existing file was left exactly as it was."
     fi
-    d_new="$(config_others_digest "$RCLONE_USE_BIN" "$tmp" "$RCLONE_READ_REMOTE_NAME")"
-    state="$(config_remote_state "$RCLONE_USE_BIN" "$tmp" "$RCLONE_READ_REMOTE_NAME")"
-    same="$(config_section_key_id_matches "$RCLONE_USE_BIN" "$tmp" "$RCLONE_READ_REMOTE_NAME" "$B2_READ_KEY_ID")"
+    d_new="$(config_others_digest "$RCLONE_USE_BIN" "$READ_TMP" "$RCLONE_READ_REMOTE_NAME")"
+    state="$(config_remote_state "$RCLONE_USE_BIN" "$READ_TMP" "$RCLONE_READ_REMOTE_NAME")"
+    same="$(config_section_key_id_matches "$RCLONE_USE_BIN" "$READ_TMP" "$RCLONE_READ_REMOTE_NAME" "$B2_READ_KEY_ID")"
     if ! after="$(sha256_of "$target")"; then after=""; fi
     if [ "$state" != "complete" ] || [ "$same" != "match" ] \
             || [ "$d_new" = "undetermined" ] || [ "$d_new" != "$d_old" ] \
             || [ "$after" != "$before" ]; then
-        rm -f "$tmp"; trap - EXIT
+        rm -f -- "$READ_TMP"; trap - EXIT
         read_refused "✗ rclone: the new $target was not promoted. Before the rename, rclone" \
                      "  had to read it as a complete [$RCLONE_READ_REMOTE_NAME] with the read key" \
                      "  id and every other section unchanged, and the old file had to be" \
@@ -1482,8 +1611,8 @@ provision_read_remote() {   # <upload remote name> <bucket>
                      "  old file: $( [ "$after" = "$before" ] && echo unchanged || echo "changed or unread"))." \
                      "  The existing file was left exactly as it was."
     fi
-    if ! mv "$tmp" "$target"; then
-        rm -f "$tmp"; trap - EXIT
+    if ! mv -- "$READ_TMP" "$target"; then
+        rm -f -- "$READ_TMP"; trap - EXIT
         read_refused "✗ rclone: could not put the new $target in place. The existing file" \
                      "  was left exactly as it was."
     fi
@@ -1530,6 +1659,17 @@ probe_read_listing_once() {
                 "$RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL" >/dev/null 2>&1; then
             echo "  a listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL succeeded  ✓"
             RUN_READ_PROBE="a listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL succeeded"
+            # No new call: the two listings this run already made, read
+            # together. The upload key cannot read and the read key cannot
+            # write, but both can list, so this pair is what a swap produces
+            # when the upload listing fails for want of the key's bucket or
+            # prefix scope.
+            if [ "$UP_PROBE_FAILED" -eq 1 ]; then
+                echo "  ⚠ the upload listing failed and the read listing succeeded: the"
+                echo "    two keys are probably swapped. KEY_ID and APP_KEY must be the"
+                echo "    upload key, READ_KEY_ID and READ_APP_KEY the read key."
+                RUN_READ_PROBE="$RUN_READ_PROBE; the upload listing did not, so the keys are probably swapped"
+            fi
         else
             echo "  ⚠ the listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL did not"
             echo "    succeed. The read remote is recorded; check the read key id, its"
@@ -1584,6 +1724,7 @@ RUN_PROBE="not run"
 RUN_SETTINGS="not written by this run"
 RUN_READ_CRED="no read section was written by this run"
 RUN_READ_PROBE="not run"
+UP_PROBE_FAILED=0
 SETTINGS_WRITTEN=0
 # What offsite.env will carry for the 0.1.0 keys: set from the command line or
 # from what offsite.env records, once that file has been read (2.1b).
@@ -1784,6 +1925,22 @@ on_unexpected_error() {
 }
 trap 'on_unexpected_error "$?" "$BASH_COMMAND"' ERR
 
+# Before any path is printed: --prefix and --config-path become part of every
+# path this script names, so an age private key pasted into either would be
+# echoed by every message below, including the refusals. Refused here with a
+# message that names no path, and directly rather than through
+# provision_failed, which itself prints one.
+if looks_like_age_secret "$PREFIX" || looks_like_age_secret "$CONFIG_PATH_ARG"; then
+    echo "✗ provision-rclone.sh: --prefix or --config-path is shaped like an age"
+    echo "  private key (AGE-SECRET-KEY-...). It is not printed, and nothing was"
+    echo "  read or written."
+    if [ "$ADVISORY" -eq 1 ]; then
+        echo "  --advisory: not failing the caller."
+        exit 0
+    fi
+    exit 1
+fi
+
 # No .env guard is needed any more, and its absence is the point: the install
 # destination and the settings file are derived from constants and from
 # --prefix, which is an argument. There is no environment variable for .env to
@@ -1840,9 +1997,13 @@ fi
 # `missing` first. The second invocation waits and then sees the finished
 # state, which every branch below already handles.
 #
-# The lock is not the only guard. The credential publish is also atomic and
-# non-replacing (see 2b), so a run without a lock cannot clobber a credential
-# either — which is what makes a missing flock(1) a warning, not a refusal.
+# The lock is not the only guard for the UPLOAD credential: its publish is
+# also atomic and non-replacing (see 2b), so a run without a lock cannot
+# clobber it either — which is what makes a missing flock(1) a warning, not a
+# refusal, for every path that writes only that. Adding the read section to a
+# config that already exists is different: it renames a rebuilt file over the
+# old one, which a second run could race, so that path refuses to run without
+# the lock (provision_read_remote, LOCK_HELD).
 LOCK_PATH="${PREFIX}/var/lib/dtk/provision-rclone.lock"
 if ! mkdir -p "$(dirname "$LOCK_PATH")"; then
     echo "✗ rclone: could not create $(dirname "$LOCK_PATH"), so the run lock"
@@ -1912,12 +2073,15 @@ if command -v flock >/dev/null 2>&1; then
         echo "    sudo ls -l $LOCK_PATH"
         provision_failed
     fi
+    LOCK_HELD=1
 else
     echo "  ⚠ flock is not installed, so this run is NOT serialised against"
     echo "    another copy of this script running at the same time. The"
-    echo "    credential write below is still atomic and will not replace an"
-    echo "    existing credential, so a concurrent run cannot overwrite one;"
-    echo "    what it can do is make the two runs report different states."
+    echo "    upload credential write below is still atomic and will not"
+    echo "    replace an existing credential, so a concurrent run cannot"
+    echo "    overwrite one; what it can do is make the two runs report"
+    echo "    different states. Adding a read key to a config that already"
+    echo "    exists replaces that file, and is refused without the lock."
     echo "    Install util-linux to restore the lock."
 fi
 
@@ -2156,6 +2320,14 @@ case "$OFFSITE_STATUS" in
     unreadable)
         offsite_read_failed
         ;;
+    secret)
+        echo "✗ rclone: $OFFSITE_ENV_PATH holds a value shaped like an age"
+        echo "  private key (AGE-SECRET-KEY-...). It is not printed, the file was"
+        echo "  not read further, and it was not changed. This script never"
+        echo "  writes such a value, so the file was edited by something else."
+        echo "  Remove that line, or delete the file and re-run to rebuild it."
+        provision_failed
+        ;;
     malformed)
         offsite_malformed
         run_report
@@ -2276,9 +2448,10 @@ if [ -n "$TENANT_ARG" ] && [ -n "$OFFSITE_TENANT_REC" ] && [ "$TENANT_ARG" != "$
     if [ "$CHANGE_TENANT" -ne 1 ]; then
         echo "✗ rclone: refusing to replace the recorded tenant $OFFSITE_TENANT_REC"
         echo "  with $TENANT_ARG. Images already uploaded under $OFFSITE_TENANT_REC/"
-        echo "  keep their keys there; new ones would go under $TENANT_ARG/. Nothing"
-        echo "  was written and nothing was changed. If the change is meant, re-run"
-        echo "  with --change-tenant beside --tenant $TENANT_ARG."
+        echo "  keep their keys there; new ones would go under $TENANT_ARG/."
+        echo "  No credential was written and $OFFSITE_ENV_PATH was not changed."
+        echo "  If the change is meant, re-run with --change-tenant beside"
+        echo "  --tenant $TENANT_ARG."
         provision_failed
     fi
     echo "  note: --tenant $TENANT_ARG replaces the recorded tenant $OFFSITE_TENANT_REC"
@@ -2309,7 +2482,8 @@ print_key_instructions() {
     echo "                  and readFiles ONLY"
     echo "    READ_APP_KEY  its application key"
     echo "  It is written as the [$RCLONE_READ_REMOTE_NAME] remote beside [$RCLONE_REMOTE_NAME],"
-    echo "  and must be a different key from the upload key."
+    echo "  and must be a different key from the upload key. It is read from"
+    echo "  the key file only, never from the environment."
     echo ""
     echo "  Put them in a file only root can read, and point this script at it:"
     echo "    sudo install -m 0600 /dev/null /root/dtk-offsite-key"
@@ -2383,20 +2557,25 @@ if [ -n "$B2_KEY_ID" ] && [ -n "$B2_APP_KEY" ] && [ -n "$B2_BUCKET" ]; then
 fi
 
 # ── 2.2b The read key ───────────────────────────────────────────────────────
-# Supplied the way the write key is: from the same key file (READ_KEY_ID,
-# READ_APP_KEY), or from DTK_B2_READ_KEY_ID and DTK_B2_READ_APP_KEY in a
-# caller's own environment. The same token class, for the same reason: both
+# From the key file ONLY (READ_KEY_ID, READ_APP_KEY), never from the
+# environment. The write key still accepts DTK_B2_KEY_ID and DTK_B2_APP_KEY,
+# as it always has; the read key is new and does not take on that exposure:
+# update.sh exports every .env key before calling this script, so an
+# environment variable could be planted by a line in .env, and a key that
+# arrives that way would be written into the rclone config on the next update.
+# The file is named by DTK_OFFSITE_KEY_FILE, which an operator sets for one
+# run. The same token class as the write key, for the same reason: both
 # values go into the same INI file. The application key is never printed.
 #
 # No bucket of its own. The backend restores a freed file by appending its
 # object key, the same key the upload wrote, to DTK_OFFSITE_READ_REMOTE
 # (read_remote_path in offsite_free.py, backend/free-local-space), so the read
 # remote must name the bucket the uploads went to, and it is derived from it.
-B2_READ_KEY_ID="${DTK_B2_READ_KEY_ID:-}"
-B2_READ_APP_KEY="${DTK_B2_READ_APP_KEY:-}"
+B2_READ_KEY_ID=""
+B2_READ_APP_KEY=""
 if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
-    [ -n "$B2_READ_KEY_ID" ]  || B2_READ_KEY_ID="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_KEY_ID)"
-    [ -n "$B2_READ_APP_KEY" ] || B2_READ_APP_KEY="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_APP_KEY)"
+    B2_READ_KEY_ID="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_KEY_ID)"
+    B2_READ_APP_KEY="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_APP_KEY)"
 fi
 if [ -n "$B2_READ_KEY_ID" ] && ! valid_b2_token "$B2_READ_KEY_ID"; then
     reject_value "B2 read key id" "$B2_READ_KEY_ID" "$B2_TOKEN_CLASS"
@@ -2405,7 +2584,8 @@ fi
 if [ -n "$B2_READ_APP_KEY" ] && ! valid_b2_token "$B2_READ_APP_KEY"; then
     echo "✗ rclone: refusing the B2 read application key — it must be"
     echo "  $B2_TOKEN_CLASS. The value is not printed here"
-    echo "  because it is a secret. Nothing was written."
+    echo "  because it is a secret. No credential was written and"
+    echo "  $OFFSITE_ENV_PATH was not changed."
     echo "  If you copied the key out of the Backblaze console, copy it again"
     echo "  as plain text: a highlighted copy can carry hidden formatting"
     echo "  characters, and that is the most likely cause of this message."
@@ -2421,8 +2601,8 @@ if [ -n "$B2_KEY_ID" ] && [ -n "$B2_READ_KEY_ID" ] && [ "$B2_KEY_ID" = "$B2_READ
     echo "  The upload remote [$RCLONE_REMOTE_NAME] and the read remote"
     echo "  [$RCLONE_READ_REMOTE_NAME] must hold different keys: the upload key"
     echo "  writes and lists only, and the read key lists and reads only."
-    echo "  Nothing was written and nothing was changed. Issue a separate"
-    echo "  read key for this unit and re-run."
+    echo "  No credential was written and $OFFSITE_ENV_PATH was not changed."
+    echo "  Issue a separate read key for this unit and re-run."
     provision_failed
 fi
 HAVE_READ_KEY=0
@@ -2547,7 +2727,7 @@ if [ "$HAVE_KEY" -eq 0 ] && [ -n "$SELECTED_NAME" ] && [ "$CONFIG_STATE" = "comp
     # A read key supplied now goes in beside the recorded remote, on the same
     # bucket — and only into an established config path; see
     # provision_read_remote.
-    provision_read_remote "$SELECTED_NAME" "${SELECTED_REMOTE#*:}"
+    provision_read_remote "$SELECTED_NAME" "${SELECTED_REMOTE#*:}" kept
     offsite_write_or_fail "$SELECTED_REMOTE"
     sync
     probe_read_listing_once
@@ -2647,7 +2827,7 @@ if [ "$HAVE_KEY" -eq 1 ]; then
         chmod 0600 "$RCLONE_CONFIG_PATH"
         echo "  mode 0600, owner $DTK_USER re-asserted."
         RUN_CRED="left the complete [$RCLONE_REMOTE_NAME] section in $RCLONE_CONFIG_PATH untouched (same key id as supplied); mode 0600, owner $DTK_USER re-asserted"
-        provision_read_remote "$RCLONE_REMOTE_NAME" "$B2_BUCKET"
+        provision_read_remote "$RCLONE_REMOTE_NAME" "$B2_BUCKET" new
         offsite_write_or_fail "$RCLONE_REMOTE_NAME:$B2_BUCKET"
         sync
         probe_listing_once
@@ -2780,8 +2960,11 @@ RCLONE_CONF
             echo "  read key id, beside a [$RCLONE_REMOTE_NAME] that does not"
             echo "  (classified: $WROTE_READ_STATE; read key id: $WROTE_READ_ID;"
             echo "  upload section against the read key id: $WROTE_UP_ID)."
-            echo "  $OFFSITE_ENV_PATH was NOT updated."
-            RUN_READ_CRED="written, and did not read back; nothing was recorded"
+            echo "  That file, with both sections as written, is left in place;"
+            echo "  $OFFSITE_ENV_PATH was NOT updated, so nothing points at it."
+            echo "  Move it aside before re-running: this script will not replace it."
+            RUN_READ_CRED="written to $RCLONE_CONFIG_PATH and left there; it did not read back, and offsite.env was not updated"
+            run_report
             provision_failed
         fi
         RUN_READ_CRED="wrote a [$RCLONE_READ_REMOTE_NAME] section to $RCLONE_CONFIG_PATH beside [$RCLONE_REMOTE_NAME]"
@@ -2789,7 +2972,7 @@ RCLONE_CONF
         READ_BUCKET="$B2_BUCKET"
         READ_REMOTE_FINAL="$RCLONE_READ_REMOTE_NAME:$B2_BUCKET"
     else
-        warn_recorded_read_remote
+        reconcile_recorded_read_remote "$RCLONE_REMOTE_NAME" "$B2_BUCKET" fresh
     fi
 
     if [ -n "$SELECTED_REMOTE" ] && [ "$SELECTED_REMOTE" != "$RCLONE_REMOTE_NAME:$B2_BUCKET" ]; then
@@ -2862,7 +3045,7 @@ if [ -n "$B2_BUCKET" ] && [ -z "$B2_KEY_ID" ] && [ -z "$B2_APP_KEY" ] \
     # CONFIG_PATH_ESTABLISHED is already 1 — the branch above refuses this
     # recovery otherwise — so the path written beside the selector is one
     # offsite.env recorded or --config-path named, never one inferred here.
-    provision_read_remote "$CHECK_NAME" "$B2_BUCKET"
+    provision_read_remote "$CHECK_NAME" "$B2_BUCKET" new
     offsite_write_or_fail "$CHECK_NAME:$B2_BUCKET"
     sync
     probe_read_listing_once
