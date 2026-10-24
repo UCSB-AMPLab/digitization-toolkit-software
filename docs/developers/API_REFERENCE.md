@@ -101,9 +101,9 @@ Two limits worth knowing, because the schema is only as complete as the routes d
 
 Three of those are worth knowing individually, because a client that assumes the list is shorter will mis-handle them.
 
-- **`422` is two codes wearing one number.** FastAPI's is a validation failure whose body is an object with a `detail` array. Twenty places in `backend/app/api/` raise their own, carrying a `detail` string or, on the handover and export refusals in `collections.py`, a dict — `{message, blocking_record_ids}`. The move refusal that names records the same way is a `409`, not a `422` (`collections.py:391`). And a refusal from the background export job never arrives as an error status at all: the job records it, and `GET .../export/status/{job_id}` returns it at `200` with the message in a top-level `error` field (`collections.py`). A client that reads 422 as "your request was malformed" will report a collection refused for unapproved records as a bug in itself.
-- **`401` comes from one file, and `403` mostly does.** All fourteen 401s are in `app/api/auth.py`. Three are in `get_current_user`, the dependency of every route except `/health` and five auth routes, so a client can meet them anywhere. The other eleven are raised by the auth routes themselves — login, register, refresh and reset-password — for that route's own reason: a wrong password, a wrong bootstrap token at first-user registration (`_authorize_bootstrap`, called only there, `auth.py:63`), and at refresh and reset an invalid or expired token as well (`auth.py:172`, `:192`). Which of them mean the session is gone is the route's, not the status code's, to say. Three of the five 403s are in `auth.py` too, one of them `RoleChecker.__call__` (`auth.py:232`), the role gate routes declare as a dependency. The other two are domain rules: an annotation with a recorded creator may only be deleted by that creator or an admin, and one with none by anyone who can reach the route (`records.py:886`); and `_apply_status_change` checks the caller's role (`records.py:1034`). That helper is also called from `promote_collection`, so a role refusal can arrive from the handover — but the bulk status route calls it too and catches the refusal and returns `200` with the records it accepted — including a record already in the requested status, which is a no-op (`records.py:857`, `:954-963`); a refused record is logged on the server and not reported to the client.
-- **`500` is a documented outcome, not only a crash.** Fifteen routes raise it deliberately: a camera control that failed, a storage command (`lsblk`, mount, unmount) that failed, a file operation that failed, or a database commit that failed after files had already changed. One of them reports a half-completed operation: `POST /collections/{id}/images/renumber` says the files were renumbered on disk and the database update was not (`collections.py:599`). `POST /records/{id}/images` is the opposite case — when its commit fails it unlinks the saved file and thumbnail before raising (`records.py:480-493`). A failure after the commit, in the refresh at `records.py:494`, is also a 500 and cleans nothing up, so the two cannot be told apart from the status alone.
+- **`422` is two codes wearing one number.** FastAPI's is a validation failure whose body is an object with a `detail` array. Twenty-two places in `backend/app/api/` raise their own, carrying a `detail` string or, on the handover and export refusals in `collections.py`, a dict — `{message, blocking_record_ids}`. The move refusal that names records the same way is a `409`, not a `422` (`collections.py:391`). And a refusal from the background export job never arrives as an error status at all: the job records it, and `GET .../export/status/{job_id}` returns it at `200` with the message in a top-level `error` field (`collections.py`). A client that reads 422 as "your request was malformed" will report a collection refused for unapproved records as a bug in itself.
+- **`401` comes from one file, and `403` mostly does.** All fourteen 401s are in `app/api/auth.py`. Three are in `get_current_user`, the dependency of every route except `/health` and five auth routes, so a client can meet them anywhere. The other eleven are raised by the auth routes themselves — login, register, refresh and reset-password — for that route's own reason: a wrong password, a wrong bootstrap token at first-user registration (`_authorize_bootstrap`, called only there, `auth.py:63`), and at refresh and reset an invalid or expired token as well (`auth.py:172`, `:192`). Which of them mean the session is gone is the route's, not the status code's, to say. Three of the six 403s are in `auth.py` too, one of them `RoleChecker.__call__` (`auth.py:232`), the role gate routes declare as a dependency. Two are domain rules: an annotation with a recorded creator may only be deleted by that creator or an admin, and one with none by anyone who can reach the route (`records.py:891`); and `_apply_status_change` checks the caller's role (`records.py:1045`). The sixth is the list import's: an operator's list whose project does not exist yet is refused (`imports.py:98`). That helper is also called from `promote_collection`, so a role refusal can arrive from the handover — but the bulk status route calls it too and catches the refusal and returns `200` with the records it accepted — including a record already in the requested status, which is a no-op (`records.py:1035`, `:1126-1132`); a refused record is logged on the server and not reported to the client.
+- **`500` is a documented outcome, not only a crash.** Fifteen routes raise it deliberately: a camera control that failed, a storage command (`lsblk`, mount, unmount) that failed, a file operation that failed, or a database commit that failed after files had already changed. One of them reports a half-completed operation: `POST /collections/{id}/images/renumber` says the files were renumbered on disk and the database update was not (`collections.py:599`). `POST /records/{id}/images` is the opposite case — when its commit fails it unlinks the saved file and thumbnail before raising (`records.py:490-504`). A failure after the commit, in the refresh at `records.py:505`, is also a 500 and cleans nothing up, so the two cannot be told apart from the status alone.
 
 To re-derive this rather than trust it, which is what let the previous list go stale:
 
@@ -112,7 +112,7 @@ grep -rhoE 'HTTPException\(\s*(status_code\s*=\s*)?(status\.HTTP_)?[0-9]{3}|stat
   | grep -oE '[0-9]{3}' | sort -u
 ```
 
-Then drop the success codes the decorators declare — 200, 201, 202, 204. One raiser sits outside `backend/app/api/`: `app/core/db_errors.py`, which turns any `IntegrityError` — not only a unique-constraint one — into a 409 carrying a message and, when one could be recovered, the constraint name. For any single route, read it: the `HTTPException` calls are explicit, and seven callables in `backend/app/api/` raise on a route's behalf — `_authorize_bootstrap`, `get_current_user` and `RoleChecker.__call__` in `auth.py`, `_resolve_capture_target` in `cameras.py`, `assert_movable`, `_assert_promotable` and `_apply_status_change` in `records.py` — so a route can return a code its own body never names.
+Then drop the success codes the decorators declare — 200, 201, 202, 204. One raiser sits outside `backend/app/api/`: `app/core/db_errors.py`, which turns any `IntegrityError` — not only a unique-constraint one — into a 409 carrying a message and, when one could be recovered, the constraint name. For any single route, read it: the `HTTPException` calls are explicit, and thirteen callables in `backend/app/api/` raise on a route's behalf — `_authorize_bootstrap`, `get_current_user` and `RoleChecker.__call__` in `auth.py`; `_zone` in `activity.py`; `_refuse_capture_without_volume_or_stem` and `_resolve_capture_target` in `cameras.py`; `_renumber_held` in `collections.py`; `_read_capped` in `imports.py`; `_update_project_held` in `projects.py`; `_stored_master`, `assert_movable`, `_assert_promotable` and `_apply_status_change` in `records.py` — so a route can return a code its own body never names.
 
 It used to. A hand-written endpoint table, data-model list and error-code table lived here and drifted until they covered barely half the API, documented three roles incorrectly, and presented one error shape as universal when capture endpoints report failure as `{success: false, error: ...}` at HTTP 200 — with nothing able to notice. They were removed rather than repaired.
 
@@ -120,13 +120,23 @@ What remains here is what a schema cannot express: how to get the stack running,
 
 **A volume's identity — on collection requests and responses.** A volume (a row in `collections`) carries the identity defined by exchange contract 1.1: a file name stem and the catalogue item's reference code. Records have no catalogue identifier: `records.external_id` was removed in migration `a7c1e9d2b4f6`. The schema gives the pattern and the lengths; the rules below are the ones it cannot state.
 
-- **`filename_stem`.** The slug that, under exchange contract 1.1, the volume's image file names are built from (`<stem>-img_<nnnn>_c<n>`), and which the contract requires to equal the volume's reference code. Captures do not use it yet; they are still named by timestamp (see Filename Format below). A lowercase slug (`^[a-z0-9]+(-[a-z0-9]+)*$`) of at most 27 characters, so that `<stem>-img_0000` fits the 36-character pair id; a stem that does not match, or is longer, is refused with FastAPI's validation `422`. Unique on the unit; a duplicate is refused with `409`, naming the constraint `collections_filename_stem_key`. Before the volume has captured, the stem can be set, changed or cleared. A `NULL` stem can be set at any time, including on a volume that already has images. Once a volume has a stem and has captured (`capture_counter` above 0, or any image on its own records, superseded ones included), a request to change or clear the stem is refused with `409`.
+- **`filename_stem`.** The slug that, under exchange contract 1.1, the volume's image file names are built from (`<stem>-img_<nnnn>_c<n>`), and which the contract requires to equal the volume's reference code. Captua does not build capture file names from it yet; captures are still named by timestamp (see Filename Format below). A lowercase slug (`^[a-z0-9]+(-[a-z0-9]+)*$`) of at most 27 characters, so that `<stem>-img_0000` fits the 36-character pair id; a stem that does not match, or is longer, is refused with FastAPI's validation `422`. Required on `POST /collections/`: `CollectionCreate` declares it without a default (`app/schemas/collection.py:69`), so a request without one is refused with FastAPI's validation `422`. Optional on `PATCH /collections/{id}`, and the column is nullable, so that a volume created before stems existed can be given one. Unique on the unit; a duplicate is refused with `409`, naming the constraint `collections_filename_stem_key`. Before the volume has captured, a `PATCH` can set, change or clear the stem; a volume whose stem is cleared cannot be captured into until it is given another. A `NULL` stem can be set at any time, including on a volume that already has images. Once a volume has a stem and has captured (`capture_counter` above 0, or any image on its own records, superseded ones included), a request to change or clear the stem is refused with `409`.
+- **A capture needs a volume with a stem.** `POST /cameras/capture` and `POST /cameras/capture/dual`, retakes included, call `_refuse_capture_without_volume_or_stem` (`app/api/cameras.py:49-73`) before any camera is touched. A request with no `collection_id`, or with `0`, is refused with `409` and the detail `"Captures must go into a volume."`; a `collection_id` that matches no volume, with `404`; a volume without a stem, with `409` and `"This volume has no file name stem. Give it one before capturing into it."`. A retake (a request with a `record_id`) whose record belongs to no volume is refused with the first `409`, and one that names a volume other than its record's with `409` and `"A retake must go into the record's own volume."`. `POST /records/{id}/images` refuses an upload on the same terms before it writes anything: a record attached straight to a project with the first message, a volume without a stem with the second (`app/api/records.py:409-412`). The details are plain strings, defined in `app/core/volume_stem.py:21-23`. The check is made under a lock on the volume row (`locked_volume_query`), so a `PATCH` that sets or clears the stem waits until the capture has committed. `POST /cameras/test-capture/{camera_index}` stores nothing and is not refused.
 - **`external_id`.** The item's `referenceCode` under the exchange contract. Stripped of surrounding whitespace in requests; a blank value is refused with FastAPI's validation `422` (a `detail` array). Unique; a duplicate is refused with `409`, naming `ix_collections_external_id`. Written once: a request to change or clear a stored value is refused with `409`.
 - **`capture_counter`.** Read-only. It is raised by one for each capture event (a dual capture is one event) and for each upload into a volume, by `next_capture_number` in `app/core/capture_counter.py`, a single atomic `UPDATE … RETURNING`. It is never lowered.
 - **`stem_reserved`.** Read-only: the volume has a stem and has captured. A `DELETE /collections/{id}` on such a volume is refused with `409`, even when the volume is empty, so its stem cannot be issued again.
 - `date`, `date_start`, `date_end`, `sequence` and `custom_attributes` describe the volume. An end date before its start is refused with `422` when both are in the request, and with `409` when the end is checked against a stored start.
 
 Refused identity changes and the delete refusal return `409` with `{message}`; constraint violations return `{message, constraint}`. Both rules are in `app/models/collection.py`. The write rules are attribute validators, so they apply to every ORM assignment. The delete refusal is a `before_flush` listener, so it also applies to `session.delete()`, to the delete cascades from `Project.collections` and `Collection.child_collections`, and to delete-orphan. A bulk `query().update()`, raw SQL or a database-level `ON DELETE CASCADE` goes around both.
+
+**Importing a digitisation list — `POST /imports/digitisation-list`.** The route reads artefact 1 of exchange contract 1.1 and creates one volume per item; the route is in `app/api/imports.py` and the import in `app/core/list_import.py`. The request is a multipart upload with one field, `file`, carrying the list file unchanged. Admins and operators may import. Creating a project is admin-only, as on `POST /projects/`, so a list whose project does not exist yet is refused to an operator with `403` before anything is written (`list_import.py:602`).
+
+- **Refused whole, with nothing written.** A file over 10 MB is refused with `413` (`imports.py:59`). A file that is not strict UTF-8 JSON (not UTF-8, not JSON, `NaN` or `Infinity`, a key repeated within one object, nesting too deep) is refused with `400` (`parse_list_file`, `list_import.py:163-187`). An envelope this unit does not read is refused with the application's `422`: a `contract` other than `fisqua-captua-exchange`, a `kind` other than `digitisation-list`, a `version` whose major is not `1`, an `id` that is not a UUID, a missing or blank `list.name`, or one longer than 255 characters once stripped, or `items` that are not a list (`check_envelope`, `list_import.py:207-244`). Unknown fields are ignored. A list id imported before from a file with a different SHA-256, or whose earlier hash cannot be read, is refused with `409`; a first import whose hash cannot be recorded, with `503` (`_check_hash`, `list_import.py:681-720`). Each body is `{detail}` with a string.
+- **The project.** The volumes are created directly under the project whose name matches `list.name`, compared stripped, in NFC and case-folded, with accents kept (`_name_key`, `list_import.py:377-383`); if several match, the oldest. If none matches, a project is created, and `list.notes` becomes its description when it is a non-blank string of at most 10,000 characters. An existing project's description is never changed (`_project_for`, `list_import.py:422-455`).
+- **The mapping.** `referenceCode` to `external_id`, `filenameStem` to `filename_stem`, `title` to `name`, `dates.display` to `date`, `dates.start` to `date_start`, `dates.end` to `date_end`, `sequence` to `sequence`. Every other item field, `containerPath` included, is stored in `custom_attributes` as a JSON string under a `fisqua` key, and `dates` subfields other than those three under `fisqua.dates` (`list_import.py:356-369`). No records are created.
+- **Items are skip-and-report.** Each item is checked, then created and committed on its own, so no item is rolled back because another was rejected. The first failing check gives the reason, in this order: the item is not an object; the reference code is missing, not a string of at most 255 characters, padded with whitespace, or repeated earlier in the list; the stem is missing, not a slug, longer than 27 characters, not equal to the reference code, or repeated earlier in the list; the title is missing or invalid; the dates are invalid or end before they start; the sequence is not a 32-bit integer; a volume on the unit already has the reference code, or the stem (`_check_item`, `list_import.py:283-354`, and `:497-501`). A database refusal at commit is mapped by constraint name to the same reasons, or else to `refused_by_database`. The reason codes and their messages are `REASONS` and `_CONSTRAINT_REASONS` (`list_import.py:99-131`). The reference code is never stripped. Only the import requires the stem to equal the reference code; `POST /collections/` does not check it.
+- **The report.** The response is `200` with the report: `listId`, `listName`, `projectId`, `projectName`, `projectCreated`, `projectNotesStored`, `projectNotesSkipped`, `importedAt`, `importedBy`, the counts `created` and `skipped`, `volumes` (each created volume's `position`, `referenceCode`, `filenameStem` and `captuaCollectionId`), `rejects` (each rejected item's `position`, `referenceCode` cut to 120 characters, `referenceCodeTruncated`, `reason` and `message`), `fileSha256` and `reportStored` (`list_import.py:463-474`, `:530-544`, `:609-616`). The report is also written, without `reportStored`, to `<DTK_DATA_DIR>/imports/<list-id>/import-report_<list-id>_run<NNNN>.json`, one numbered file per run, none overwritten (`store_report`, `list_import.py:795-836`). If that write fails, `reportStored` is `false` and the volumes stay created. The list's hash is kept beside the runs in a file named `sha256`. `GET /imports/digitisation-list/{list_id}/report` (admin, operator or reviewer) returns the highest-numbered run that parses as the list's report, as an attachment named `import-report_<list-id>.json`; an id that is not a UUID is refused with `422`, and a list with no readable report with `404` (`imports.py:116-135`). Each import is recorded in the activity log as `digitisation_list_imported`.
+- **Re-importing.** The same file can be imported again. Every item already on the unit is rejected as `reference_code_on_unit` (or `filename_stem_on_unit`), any other item is checked and created as on the first run, and the report is stored as the next run. A different file under the same list id is refused with `409`. Imports of one list id are serialised by an exclusive lock on `<list-id>/.lock` (`import_list`, `list_import.py:573-616`).
 
 **Reaching the schema on a deployed appliance.** A development stack is the easiest place to explore the API. On a provisioned unit, `scripts/setup-firewall.sh` allows port 8000 from the appliance's own compose network (`172.30.0.0/24`) and over `tailscale0`, but not from the venue LAN — so it is reachable for remote support, not from a laptop in the room. Note also that the proxied `/api/docs` path does not render Swagger UI, because the page requests `/openapi.json` at the site root and Nginx routes `/` to the frontend; `/api/openapi.json` does proxy correctly, so the raw schema is retrievable that way.
 
@@ -301,7 +311,7 @@ Images are stored under the active projects root, `/var/lib/dtk/projects/` by de
 Five things worth knowing, each of which the previous version of this section got wrong:
 
 - **The append-only manifests live in `metadata/`.** `append_manifest_record()` (`backend/capture/manifestHandler.py:269-275`) creates the directory and writes `project_manifest.jsonl` at init and one `manifest.jsonl` line per capture, each carrying the capture-time sha256. This is the provenance record; it is not optional and it is not in `images/`.
-- **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:57-63`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:43-56`) supplies one for every capture made against a collection. Only project-level captures use `<project>/images/main/`.
+- **Captures usually sit one level deeper than the project.** `image_output_dir()` (`backend/capture/project_manager.py:65-71`) returns `<project>/<collection>/images/main/` whenever a collection is supplied, and `_resolve_capture_target` (`backend/app/api/cameras.py:76-89`) supplies one for every capture, because the capture endpoints refuse a capture that names no volume (section 3). `<project>/images/main/` holds the images of records attached straight to a project; no capture or upload can add to them now.
 - **`packages/` is not where exports go.** It is created at project init and nothing writes into it. BagIt exports are written to `settings.exports_dir` — `/var/lib/dtk/exports` by default (`backend/app/core/config.py:92`, `backend/app/core/export_service.py:113`).
 - **There is no `temp/` or `trash/` directory under the projects root, and deletion is permanent.** Deleting a record unlinks its files, as does deleting a single image (`delete_record` and the image delete handler in `backend/app/api/records.py`); each takes the master, the thumbnail and the `_preview.jpg` sidecar beside the master. There is no recovery directory, and on a backup-less appliance a delete is final.
 - **The root is not fixed.** Activating an external storage device changes `settings.projects_dir` at runtime, so captures may live somewhere other than the default microSD path.
@@ -461,6 +471,19 @@ project_resp = requests.post(
 project = project_resp.json()
 print(f"   Project: {project['name']} (ID: {project['id']})")
 
+# A capture must go into a volume with a file name stem (409 otherwise).
+volume_resp = requests.post(
+    f"{BASE_URL}/collections/",
+    headers=headers,
+    json={
+        "name": "Volume 1",
+        "project_id": project['id'],
+        "filename_stem": "book-digitization-001"
+    }
+)
+volume = volume_resp.json()
+print(f"   Volume: {volume['name']} (ID: {volume['id']})")
+
 # 5. List devices
 print("\n5. Listing cameras...")
 devices_resp = requests.get(f"{BASE_URL}/cameras/devices", headers=headers)
@@ -479,12 +502,16 @@ capture_resp = requests.post(
     headers=headers,
     json={
         "project_name": "Book Digitization",
+        "collection_id": volume['id'],
         "camera_index": 0,
         "resolution": "medium"
     }
 )
 capture_result = capture_resp.json()
-if capture_result['success']:
+if capture_resp.status_code != 200:
+    # Refused before any camera fired: 409 for no volume or no stem, 404 or 422 otherwise.
+    print(f"   Capture refused ({capture_resp.status_code}): {capture_result['detail']}")
+elif capture_result['success']:
     print(f"   Captured: {capture_result['file_path']}")
 else:
     print(f"   Capture failed: {capture_result.get('error')}")
@@ -498,7 +525,7 @@ else:
             "capture_mode": "single",
             "author": "Unknown Scribe",
             "date": "1500-01-01",
-            "project_id": project['id']
+            "collection_id": volume['id']
         }
     )
     rec = rec_resp.json()
@@ -549,13 +576,14 @@ def configuration_page_flow(token):
 ### Live Scan Page Example
 
 ```python
-def live_scan_workflow(token, project_name):
+def live_scan_workflow(token, project_name, collection_id):
     """Workflow for the live scan page: capture → auto-save → optional metadata update.
 
-    project_name must already exist: this example sends no collection_id, and
-    an unmatched name returns 422. (If a capture does send collection_id,
-    _resolve_capture_target resolves the path from the collection and never
-    reads project_name — cameras.py:43-56.)
+    collection_id must name a volume that has a filename_stem: a capture
+    without one, or into a volume without a stem, is refused with 409 before
+    any camera fires (_refuse_capture_without_volume_or_stem, cameras.py:49-73).
+    _resolve_capture_target then resolves the path from the volume and never
+    reads project_name (cameras.py:76-89).
     """
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -573,11 +601,15 @@ def live_scan_workflow(token, project_name):
         headers=headers,
         json={
             "project_name": project_name,
+            "collection_id": collection_id,
             "camera_index": selected['index'],
             "resolution": "medium"
         }
     )
     result = capture_resp.json()
+    if capture_resp.status_code != 200:
+        print(f"Capture refused ({capture_resp.status_code}): {result['detail']}")
+        return
     if not result['success']:
         print(f"Capture failed: {result['error']}")
         return
@@ -721,8 +753,10 @@ The three capture-side pages — system configuration at `/dashboard/config`, ca
 3. `POST /projects/{id}/initialize` — Init filesystem (operator+)
 4. `GET /collections/?project_id={id}` — List top-level collections (reviewer+)
 5. `GET /collections/{id}/hierarchy` — Full collection tree (reviewer+)
-6. `POST /collections/` — Create collection (operator+)
+6. `POST /collections/` — Create collection (operator+; `filename_stem` required)
 7. `GET /projects/{id}/records` — List project records (reviewer+)
+8. `POST /imports/digitisation-list` — Import a digitisation list (operator+; a list whose project does not exist, admin only)
+9. `GET /imports/digitisation-list/{list_id}/report` — Latest stored import report (reviewer+)
 
 ---
 
