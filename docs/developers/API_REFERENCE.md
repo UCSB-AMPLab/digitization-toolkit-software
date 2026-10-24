@@ -292,7 +292,7 @@ Images are stored under the active projects root, `/var/lib/dtk/projects/` by de
 ```
 <projects root>/
 ├── project_1/
-│   ├── collection_a/            ← every capture lands under its volume
+│   ├── collection_a/            ← captures are stored under their volume
 │   │   └── images/
 │   │       └── main/
 │   │           ├── 20260109_143652_123_c0.jpg
