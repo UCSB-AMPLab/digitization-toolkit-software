@@ -42,11 +42,14 @@
 #      REPLACING the current database contents. The irreversible step, and the
 #      last one that can fail — by which point the code is already right, so a
 #      failure here is retryable from the same backup.
+#   4b. Puts back the frontend image recorded for the restored version, when
+#      update.sh's record names it unambiguously and it is still on the unit.
 #   5. Restarts the service and reports what happened, component by component:
-#      the database and the code are restored; the pixi environment and the
-#      frontend image are NOT rebuilt (that needs the registries), so the
-#      summary says whether each still corresponds to the restored version,
-#      using the pre-update-state-* record update.sh writes (NEH-218).
+#      the database and the code are restored; the pixi environment is NOT
+#      rebuilt (that needs the registries), so the summary says whether it and
+#      the frontend image correspond to the restored version, using the
+#      pre-update-state-* record update.sh writes (NEH-218). A successful
+#      rollback also removes update.sh's unresolved-deployment record.
 #
 # Usage:
 #   sudo ./scripts/rollback-update.sh                       # newest dump
@@ -915,23 +918,14 @@ $COMPOSE down --remove-orphans
 echo ""
 
 # ---------------------------------------------------------------------------
-# 5. Restart the service.
-# ---------------------------------------------------------------------------
-echo "→ Starting the appliance..."
-systemctl start dtk
-sleep 5
-SERVICE_OK=0
-if systemctl is-active --quiet dtk; then
-    SERVICE_OK=1
-fi
-
-# ---------------------------------------------------------------------------
-# What does NOT correspond to the restored version?
-#    Steps 3-4 restore the git checkout and the database only. The pixi
-#    environment and the frontend image were rebuilt by update.sh for the NEW
-#    code and are not rebuilt here (that needs the registries, and rollback is
-#    when a remote unit may be offline). Read what update.sh recorded and say,
-#    per component, whether it still matches — or that we cannot tell.
+# 4b. Put back the frontend image recorded for the restored version.
+#     update.sh records, in the state file pre-update-ref names, the image that
+#     was serving when the previous version was deployed
+#     (previously-deployed-frontend-image), and keeps it under a
+#     pre-update-<timestamp> tag so the rebuild cannot let it be pruned. The
+#     record is used only when it is unambiguous (STATE_RECORD, below) and the
+#     image is still on this unit; otherwise the image is left as it is and
+#     the summary says it does not correspond.
 # ---------------------------------------------------------------------------
 file_digest() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -1009,6 +1003,39 @@ else
     fi
 fi
 
+if [ -n "$STATE_RECORD" ]; then
+    REC_IMG_PRE="$(state_field previously-deployed-frontend-image "$STATE_RECORD")"
+    FRONTEND_NAME="$($COMPOSE config --images frontend 2>/dev/null | head -n 1 || true)"
+    if [ -n "$REC_IMG_PRE" ] && [ -n "$FRONTEND_NAME" ] \
+            && docker image inspect "$REC_IMG_PRE" >/dev/null 2>&1; then
+        if docker tag "$REC_IMG_PRE" "$FRONTEND_NAME" >/dev/null 2>&1; then
+            echo "→ Frontend image put back: $FRONTEND_NAME is $REC_IMG_PRE, the image"
+            echo "  recorded when $TARGET_SHA was deployed."
+            echo ""
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Restart the service.
+# ---------------------------------------------------------------------------
+echo "→ Starting the appliance..."
+systemctl start dtk
+sleep 5
+SERVICE_OK=0
+if systemctl is-active --quiet dtk; then
+    SERVICE_OK=1
+fi
+
+# ---------------------------------------------------------------------------
+# What does NOT correspond to the restored version?
+#    Steps 3-4 restore the git checkout and the database; 4b retags the
+#    frontend image when the record allows. The pixi environment was rebuilt
+#    by update.sh for the NEW code and is not rebuilt here (that needs the
+#    registries, and rollback is when a remote unit may be offline). Read what
+#    update.sh recorded and say, per component, whether it still matches — or
+#    that we cannot tell.
+# ---------------------------------------------------------------------------
 # Pixi environment. The lock digest says what the update installed against,
 # not what is installed now: start.sh runs "pixi run start", which can
 # reinstall for the restored lock before the summary prints.
@@ -1084,6 +1111,19 @@ else
 fi
 report_component "Pixi env:" "$PIXI_STATUS" "$PIXI_DETAIL" "$PIXI_FIX"
 report_component "Frontend:" "$IMG_STATUS" "$IMG_DETAIL" "$IMG_FIX"
+# An update that failed after starting its new version leaves a record that
+# makes update.sh refuse to run (update.sh, UNRESOLVED_FILE). The database and
+# the code are now both back on the previous version, so it is resolved.
+UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
+if [ -e "$UNRESOLVED_FILE" ] && [ "$CODE_ROLLED_BACK" -eq 1 ]; then
+    if rm -f "$UNRESOLVED_FILE"; then
+        echo "  Record:    $UNRESOLVED_FILE removed; update.sh will run again"
+    else
+        echo "  Record:    ⚠ could not remove $UNRESOLVED_FILE; update.sh still refuses"
+    fi
+elif [ -e "$UNRESOLVED_FILE" ]; then
+    echo "  Record:    $UNRESOLVED_FILE kept: the code was not rolled back"
+fi
 if [ "$SERVICE_OK" -eq 1 ]; then
     echo "  Service:   running ✓"
     echo ""

@@ -196,6 +196,7 @@ if [ "$1" = compose ]; then
                     cat "$CASE_DIR/db_rows" 2>/dev/null
                     seq 1 300 ;;
                 psql)
+                    case "$*" in *alembic_version*) echo "rev-B"; exit 0 ;; esac
                     if [ -t 0 ]; then :; else
                         input="$(cat)"
                         if [ -n "$input" ]; then
@@ -317,6 +318,19 @@ db_is()   { eq "$(cat "$CASE_DIR/db_state")" "$1" "database is $1"; }
 started() { eq "$(tr '\n' ' ' < "$CASE_DIR/sys/started")" "$1" "versions started: $1"; }
 active()  { if [ -f "$CASE_DIR/sys/active" ]; then ok "dtk is active"; else fail "dtk is not active"; fi; }
 inactive(){ if [ -f "$CASE_DIR/sys/active" ]; then fail "dtk is active"; else ok "dtk is not active"; fi; }
+# run_again <script> [args...]: run another script in the current case's
+# unit, with the same fakes; replaces OUT and RC.
+run_again() {
+    local script="$1"; shift
+    : > "$CASE_DIR/log"
+    OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 \
+        bash "$script" "$@" 2>&1 </dev/null)"
+    RC=$?
+    echo "$OUT" >> "$CASE_DIR/out"
+}
+MARKER_REL="backups/unresolved-deployment"
+marker_has() { if grep -qxF -- "$1" "$DTK_TEST_STATE/$MARKER_REL" 2>/dev/null; then ok "marker records: $1"; else fail "marker does not record: $1"; fi; }
+no_marker() { if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then fail "an unresolved-deployment marker exists"; else ok "no unresolved-deployment marker"; fi; }
 dump_name() { ls "$DTK_TEST_STATE/backups"/pre-update-*.sql.gz 2>/dev/null | head -n 1; }
 
 echo "update.sh restore paths"
@@ -334,6 +348,7 @@ has "Update complete!"
 has "Service running and the backend answers /health"
 hasnt "UPDATE FAILED"
 hasnt "Restored to the previous version"
+no_marker
 eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
 eq "$(sed -n 's/^image: //p' "$DTK_TEST_STATE/backups/last-deployed-frontend")" "$NEW_IMG" "last-deployed-frontend names the new image"
 eq "$(cat "$CASE_DIR/docker/tag_dtk-frontend_pre-update-"* 2>/dev/null)" "$OLD_IMG" "the old image is kept under a pre-update tag"
@@ -419,6 +434,7 @@ active
 logged "curl -fsS --max-time 5 http://127.0.0.1:8000/health"
 has "database: restored from this run's backup $(dump_name)"
 has "back online on the previous version"
+no_marker
 
 # ── The new version starts but never answers /health ────────────────────────
 # Once started it may have taken writes: nothing is restored, the unit stops.
@@ -438,13 +454,54 @@ started_failure_checks() {
     has "--yes $(dump_name)"
     has "DISCARDS"
     has "writes the new version"
-    has "docker tag dtk-frontend:pre-update-"
     hasnt "back online"
     eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA still names A"
+    marker_has "failed-commit: $SHA_B"
+    marker_has "restore-target: $SHA_A"
+    marker_has "migrated-revision: rev-B"
+    marker_has "dump: $(dump_name)"
+    eq "$(stat -c %a "$DTK_TEST_STATE/$MARKER_REL" 2>/dev/null || stat -f %Lp "$DTK_TEST_STATE/$MARKER_REL")" 600 "marker is mode 600"
+    has "update.sh refuses to run"
 }
 FAKE_HEALTHY_VERSIONS="A" run_case "health fails after start" --yes
 started_failure_checks
 has "did not become healthy"
+
+CASE="then update.sh again"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "An earlier update was left unresolved"
+has "failed-commit: $SHA_B"
+has "sudo rm $DTK_TEST_STATE/$MARKER_REL"
+has "rollback-update.sh --project-root="
+head_is "$SHA_B" "B (untouched)"
+unlogged "git"
+unlogged "docker"
+unlogged "systemctl"
+db_is migrated
+
+CASE="then a rollback that fails"
+FAKE_RESTORE_FAIL=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the marker is kept"; else fail "the marker was removed by a failed rollback"; fi
+
+CASE="then the rollback"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+head_is "$SHA_A" A
+db_is restored
+tag_is "$OLD_IMG" "the image recorded for A"
+has "Frontend image put back"
+has "removed; update.sh will run again"
+no_marker
+active
+started "A B A "
+
+CASE="then update.sh runs again"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+no_marker
 
 DTK_UPDATE_FAIL_AT=started run_case "fails right after start" --yes
 started_failure_checks

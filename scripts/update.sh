@@ -139,6 +139,14 @@ COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/doc
 BACKUP_DIR="/var/lib/dtk/backups"
 SHA_FILE="$BACKUP_DIR/pre-update-SHA"
 REF_FILE="$BACKUP_DIR/pre-update-ref"
+# Written when an update fails after the new version was started: the code is
+# the new version's and the database is migrated for it, while
+# last-deployed-SHA still names the previous version. Until it is resolved
+# (rollback-update.sh removes it after a successful rollback), this script
+# refuses to run: a retry would take the previous version as its restore
+# target and restore or start it over a database migrated for the new one.
+# rollback-update.sh reads the same path; keep the two in sync.
+UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
 # Frontend image that was serving when LAST_DEPLOYED_SHA_FILE's commit was
 # successfully deployed ("sha:" and "image:" lines; written only on success).
 LAST_DEPLOYED_FRONTEND_FILE="$BACKUP_DIR/last-deployed-frontend"
@@ -223,6 +231,28 @@ write_dump() {
 
 cd "$PROJECT_ROOT"
 
+# An earlier update was left unresolved (see UNRESOLVED_FILE). Refuse before
+# anything is fetched, built, stopped or written.
+if [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; then
+    echo "✗ An earlier update was left unresolved, so this update will not run."
+    echo ""
+    echo "  That update started the new version and then failed. The unit was"
+    echo "  left stopped, on the new code, with the database migrated for it. It"
+    echo "  recorded, in $UNRESOLVED_FILE:"
+    sed 's/^/      /' "$UNRESOLVED_FILE" 2>/dev/null || echo "      (the record could not be read)"
+    echo ""
+    echo "  Two ways forward:"
+    echo "  1. Return to the previous version, code and database:"
+    echo "       $(sed -n 's/^rollback-command: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    echo "     It discards everything written since that backup. It removes this"
+    echo "     record when it succeeds."
+    echo "  2. Stay on the failed version and fix it forward: once its code is"
+    echo "     checked out and the database is at its migrated revision (above),"
+    echo "     remove the record by hand and run this script again:"
+    echo "       sudo rm $UNRESOLVED_FILE"
+    exit 1
+fi
+
 echo "=========================================="
 echo " Digitization Toolkit — Update"
 echo "=========================================="
@@ -264,6 +294,7 @@ RESTORE_DUMP=""
 RESTORE_DUMP_VERIFIED=0
 NEW_STARTED_AT=""
 NEW_SERVED=0
+MIGRATED_REVISION=""
 # Filled in by step 0a.
 RESTORE_SHA=""
 RESTORE_SHA_SOURCE=""
@@ -584,6 +615,25 @@ wait_backend_stopped() {
 # database is never restored automatically from here, and the code is not
 # moved back either, because the old code cannot run over the migrated
 # database. The new version is stopped, fully, and the unit left stopped.
+# Record the unresolved state (see UNRESOLVED_FILE): root's alone, 0600 from
+# the start, written to a temporary name and renamed.
+write_unresolved_marker() {
+    if ( umask 077
+         {
+             echo "failed-commit: $CURRENT_SHA"
+             echo "restore-target: ${PREV_DEPLOYED_SHA:-$RESTORE_SHA}"
+             echo "migrated-revision: ${MIGRATED_REVISION:-(unknown)}"
+             echo "dump: $RESTORE_DUMP"
+             echo "rollback-command: $ROLLBACK_CMD"
+             echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
+         } > "$UNRESOLVED_FILE.tmp" ) 2>/dev/null \
+         && mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true
+    return 1
+}
+
 report_started_failure() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -617,9 +667,12 @@ report_started_failure() {
     echo "    taken with the backend stopped before the migration, and DISCARDS"
     echo "    everything written since, which may include writes the new version"
     echo "    accepted before it failed."
-    if [ -n "$SAVED_FRONTEND_TAG" ] && [ -n "$FRONTEND_IMAGE" ]; then
-        echo "  rollback-update.sh does not put the frontend image back. After it, run:"
-        echo "      docker tag $SAVED_FRONTEND_TAG $FRONTEND_IMAGE && sudo systemctl restart dtk"
+    if write_unresolved_marker; then
+        echo "  Until this is resolved, update.sh refuses to run; the record is"
+        echo "  $UNRESOLVED_FILE, and the rollback removes it when it succeeds."
+    else
+        echo "  ⚠ Could not write $UNRESOLVED_FILE. Do NOT run update.sh again"
+        echo "    before the rollback: it would treat the previous version as current."
     fi
     echo ""
 }
@@ -1658,6 +1711,8 @@ MIGRATION_STARTED=1
 run_as_user "$PIXI_BIN" run db-upgrade
 cd "$PROJECT_ROOT"
 echo ""
+# The revision the database is now at, for the record a later failure writes.
+MIGRATED_REVISION="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -Atc 'SELECT version_num FROM alembic_version' 2>/dev/null | tr '\n' ' ' | sed 's/ *$//' || true)"
 fail_point migrate
 
 echo "→ Stopping database..."
