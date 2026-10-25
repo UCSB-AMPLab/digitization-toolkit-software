@@ -100,6 +100,11 @@ if [ -n "${FAKE_CHOWN_FAIL:-}" ]; then
         case "$a" in *"$FAKE_CHOWN_FAIL"*) exit 1 ;; esac
     done
 fi
+# FAKE_CHOWN_LOG=<file>: record each call's arguments, so a case can see which
+# owner a file was given.
+if [ -n "${FAKE_CHOWN_LOG:-}" ]; then
+    printf '%s\n' "$*" >> "$FAKE_CHOWN_LOG"
+fi
 exit 0
 EOF
 cat > "$WORK/fake-rclone.py" <<'EOF'
@@ -184,6 +189,20 @@ for d in /usr/bin /bin /usr/sbin /sbin; do
         [ "$n" = flock ] && continue
         [ -e "$NOLOCKBIN/$n" ] || ln -s "$f" "$NOLOCKBIN/$n" 2>/dev/null
     done
+done
+# ARGVBIN: wrappers that record their whole argument list in FAKE_ARGV_LOG and
+# then run the real tool, for the cases that check a secret never reaches a
+# command line, where any user could read it in the process table.
+ARGVBIN="$WORK/argvbin"
+mkdir -p "$ARGVBIN"
+for n in grep sed tr tail cat mktemp mv chmod mkdir wc sync; do
+    real=""
+    for d in /usr/bin /bin; do
+        if [ -x "$d/$n" ]; then real="$d/$n"; break; fi
+    done
+    [ -n "$real" ] || continue
+    printf '#!/bin/sh\nprintf "%%s\\n" "%s $*" >> "${FAKE_ARGV_LOG:-/dev/null}"\nexec %s "$@"\n' "$n" "$real" > "$ARGVBIN/$n"
+    chmod +x "$ARGVBIN/$n"
 done
 DEFAULT_PATH="$FAKEBIN:$FLOCKBIN:/usr/bin:/bin:/usr/sbin:/sbin"
 RUN_PATH="$DEFAULT_PATH"
@@ -1073,6 +1092,323 @@ case_ "the same run without --advisory adds it"
 run DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
 expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
+
+# ── The Fisqua link: FISQUA_TOKEN and --fisqua-env ──────────────────────────
+# Contract 1.2 (section 9): a unit token is 64 lowercase hex characters. These
+# are fixed patterns of that shape, not tokens anyone issued.
+FQ_TOKEN="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+FQ_TOKEN2="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+# The token, nowhere in the output, and on no argument list the wrappers saw.
+expect_token_kept_out() {   # expect_token_kept_out <token>
+    expect_not_out "$1"
+    if [ -f "$WORK/argv.log" ] && grep -qF -e "$1" "$WORK/argv.log"; then
+        bad "the token reached a command line"
+    else
+        ok
+    fi
+    if [ -f "$ROOT/rclone.log" ] && grep -qF -e "$1" "$ROOT/rclone.log"; then
+        bad "the token reached rclone's argv"
+    else
+        ok
+    fi
+}
+# run, with the argv-recording wrappers ahead of the system's tools.
+run_argv() {
+    rm -f "$WORK/argv.log"
+    RUN_PATH="$FAKEBIN:$FLOCKBIN:$ARGVBIN:/usr/bin:/bin:/usr/sbin:/sbin"
+    run FAKE_ARGV_LOG="$WORK/argv.log" "$@"
+    RUN_PATH="$DEFAULT_PATH"
+}
+uid_of() { python3 -I -c 'import os, sys; print(os.stat(sys.argv[1]).st_uid)' "$1"; }
+
+case_ "fisqua: a 64-hex token with --tenant and --fisqua-env is written, and never printed"
+new_unit
+KF="$(key_file fq.key "FISQUA_TOKEN=$FQ_TOKEN")"
+chmod 0600 "$KF"
+run_argv FAKE_CHOWN_LOG="$WORK/chown.log" DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env production
+expect_status 0
+expect_line "$(env_file)" "DTK_FISQUA_TOKEN=$FQ_TOKEN"
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=ahr"
+expect_line "$(env_file)" "DTK_FISQUA_ENV=production"
+expect_out "DTK_FISQUA_TOKEN written (not printed)"
+expect_token_kept_out "$FQ_TOKEN"
+if [ "$(mode_of "$(env_file)")" = "0o600" ]; then ok; else bad "offsite.env mode $(mode_of "$(env_file)")"; fi
+if grep -q ":.* .*offsite\.env\." "$WORK/chown.log" 2>/dev/null; then ok; else bad "offsite.env was not given its owner"; fi
+rm -f "$WORK/chown.log"
+
+case_ "fisqua: the same rerun without the key file or a flag carries it forward"
+cp "$(env_file)" "$WORK/saved.env"
+OWNER_BEFORE="$(uid_of "$(env_file)")"
+run -- --advisory
+expect_status 0
+expect_same "$(env_file)" "$WORK/saved.env"
+expect_not_out "$FQ_TOKEN"
+if [ "$(mode_of "$(env_file)")" = "0o600" ]; then ok; else bad "offsite.env mode $(mode_of "$(env_file)") after the rerun"; fi
+if [ "$(uid_of "$(env_file)")" = "$OWNER_BEFORE" ]; then ok; else bad "offsite.env owner changed on the rerun"; fi
+case_ "fisqua: and a plain rerun keeps it too"
+run --
+expect_status 0
+expect_same "$(env_file)" "$WORK/saved.env"
+expect_not_out "$FQ_TOKEN"
+
+case_ "fisqua: the full key file, under bash -x, prints no token"
+new_unit
+KF="$(key_file fqall.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY" "FISQUA_TOKEN=$FQ_TOKEN")"
+RUN_SHELL="/bin/bash -x"
+run_argv DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env staging
+RUN_SHELL="/bin/bash"
+expect_status 0
+expect_no_secrets
+expect_token_kept_out "$FQ_TOKEN"
+expect_line "$(env_file)" "DTK_FISQUA_TOKEN=$FQ_TOKEN"
+expect_line "$(env_file)" "DTK_FISQUA_ENV=staging"
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$BUCKET"
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
+if grep -qF "$FQ_TOKEN" "$(conf_file)"; then bad "the token reached the rclone config"; else ok; fi
+
+case_ "fisqua: SHELLOPTS=xtrace prints no token"
+new_unit
+run SHELLOPTS=xtrace DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env staging
+expect_status 0
+expect_not_out "$FQ_TOKEN"
+
+# 63 and 65 characters, upper case, one non-hex letter, mixed case, then
+# shapes outside hex altogether.
+FQ_63="${FQ_TOKEN:0:63}"
+FQ_65="${FQ_TOKEN}0"
+FQ_UPPER="$(printf '%s' "$FQ_TOKEN" | LC_ALL=C tr 'abcdef' 'ABCDEF')"
+FQ_NONHEX="${FQ_TOKEN:0:63}g"
+FQ_MIXED="${FQ_TOKEN:0:60}ABCD"
+for t in "$FQ_63" "$FQ_65" "$FQ_UPPER" "$FQ_NONHEX" "$FQ_MIXED" \
+         "${FQ_TOKEN:0:32} ${FQ_TOKEN:33}" "\"$FQ_TOKEN\"" "$FQ_TOKEN=" "short" "$FAKE_SECRET"; do
+    case_ "fisqua: invalid token refused unprinted: ${#t} chars, ${t:58:6}"
+    new_unit
+    KF="$(key_file fqbad.key "FISQUA_TOKEN=$t")"
+    run_argv DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env production
+    expect_status 1
+    expect_out "refusing the Fisqua token"
+    expect_out "The value is not printed"
+    expect_token_kept_out "$t"
+    expect_out "exactly 64 lowercase hexadecimal characters"
+    expect_absent "$(env_file)"
+done
+
+case_ "fisqua: an invalid token over a recorded one leaves offsite.env unchanged"
+new_unit
+KF="$(key_file fq.key "FISQUA_TOKEN=$FQ_TOKEN")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env production
+expect_status 0
+cp "$(env_file)" "$WORK/saved.env"
+KF="$(key_file fqbad.key "FISQUA_TOKEN=bad token value 0123456789")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_not_out "bad token value"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "fisqua: an invalid token under --advisory is not read at all"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --advisory
+expect_status 0
+expect_not_out "bad token value"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+case_ "fisqua: token refused without a tenant"
+new_unit
+KF="$(key_file fq.key "FISQUA_TOKEN=$FQ_TOKEN")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --fisqua-env production
+expect_status 1
+expect_out "no tenant prefix"
+expect_out "https://<tenant>.fisqua.org"
+expect_not_out "$FQ_TOKEN"
+expect_absent "$(env_file)"
+case_ "fisqua: token without a tenant, under an existing offsite.env"
+legacy_unit
+cp "$(env_file)" "$WORK/saved.env"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --fisqua-env production
+expect_status 1
+expect_out "no tenant prefix"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "fisqua: token with a recorded tenant needs no --tenant"
+run -- --tenant sbmal
+expect_status 0
+run DTK_OFFSITE_KEY_FILE="$KF" -- --fisqua-env production
+expect_status 0
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=sbmal"
+expect_line "$(env_file)" "DTK_FISQUA_TOKEN=$FQ_TOKEN"
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$BUCKET"
+expect_not_out "$FQ_TOKEN"
+
+case_ "fisqua: a recorded token without a tenant is refused, not printed"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_FISQUA_TOKEN=%s\n' "$ROOT/usr/local/bin/rclone" "$FQ_TOKEN" > "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+run --
+expect_status 1
+expect_out "no tenant prefix"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+for t in tooShort "$FQ_UPPER" "$FQ_63"; do
+    case_ "fisqua: a recorded token outside the rule is refused, not printed: ${#t} chars"
+    new_unit
+    printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_TENANT=ahr\nDTK_FISQUA_ENV=production\nDTK_FISQUA_TOKEN=%s\n' "$ROOT/usr/local/bin/rclone" "$t" > "$(env_file)"
+    cp "$(env_file)" "$WORK/saved.env"
+    run --
+    expect_status 1
+    expect_out "refusing the Fisqua token recorded in"
+    expect_not_out "$t"
+    expect_same "$(env_file)" "$WORK/saved.env"
+done
+
+case_ "fisqua: token refused without a Fisqua environment"
+new_unit
+KF="$(key_file fq.key "FISQUA_TOKEN=$FQ_TOKEN")"
+run_argv DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+expect_status 1
+expect_out "no Fisqua environment"
+expect_out "https://<tenant>.staging.fisqua.org"
+expect_token_kept_out "$FQ_TOKEN"
+expect_absent "$(env_file)"
+case_ "fisqua: token without an environment over an existing offsite.env"
+run -- --tenant ahr
+expect_status 0
+cp "$(env_file)" "$WORK/saved.env"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "no Fisqua environment"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "fisqua: token with a recorded environment needs no --fisqua-env"
+run -- --fisqua-env staging
+expect_status 0
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 0
+expect_line "$(env_file)" "DTK_FISQUA_ENV=staging"
+expect_line "$(env_file)" "DTK_FISQUA_TOKEN=$FQ_TOKEN"
+expect_not_out "$FQ_TOKEN"
+case_ "fisqua: a recorded token without an environment is refused, not printed"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_TENANT=ahr\nDTK_FISQUA_TOKEN=%s\n' "$ROOT/usr/local/bin/rclone" "$FQ_TOKEN" > "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+run --
+expect_status 1
+expect_out "no Fisqua environment"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "fisqua: a recorded token without an environment, under --advisory"
+run -- --advisory
+expect_status 0
+expect_out "no Fisqua environment"
+expect_out "--advisory: not failing the caller"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+
+case_ "fisqua: a malformed token line is withheld from the malformed message"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_FISQUA_TOKEN="%s"\n' "$ROOT/usr/local/bin/rclone" "$FQ_TOKEN" > "$(env_file)"
+cp "$(env_file)" "$WORK/saved.env"
+run --
+expect_status 0
+expect_out "is not in the format this script writes"
+expect_out "not printed"
+expect_not_out "$FQ_TOKEN"
+expect_same "$(env_file)" "$WORK/saved.env"
+case_ "fisqua: a second token line is withheld as well"
+new_unit
+printf 'DTK_RCLONE_BIN=%s\nDTK_FISQUA_TOKEN=%s\nDTK_FISQUA_TOKEN=%s\n' "$ROOT/usr/local/bin/rclone" "$FQ_TOKEN" "$FQ_TOKEN2" > "$(env_file)"
+run --
+expect_out "a second declaration of DTK_FISQUA_TOKEN"
+expect_not_out "$FQ_TOKEN"
+expect_not_out "$FQ_TOKEN2"
+
+case_ "fisqua: a changed token is applied with a note naming neither"
+new_unit
+KF="$(key_file fq.key "FISQUA_TOKEN=$FQ_TOKEN")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env production
+KF2="$(key_file fq2.key "FISQUA_TOKEN=$FQ_TOKEN2")"
+run_argv DTK_OFFSITE_KEY_FILE="$KF2" --
+expect_status 0
+expect_out "FISQUA_TOKEN replaces the recorded Fisqua"
+expect_token_kept_out "$FQ_TOKEN"
+expect_token_kept_out "$FQ_TOKEN2"
+expect_line "$(env_file)" "DTK_FISQUA_TOKEN=$FQ_TOKEN2"
+
+case_ "fisqua: the token in the key file is not taken under --advisory"
+new_unit
+run DTK_OFFSITE_KEY_FILE="$KF" -- --advisory --tenant ahr
+expect_status 0
+expect_out "the Fisqua token is not written under --advisory"
+expect_not_out "$FQ_TOKEN"
+expect_no_key "$(env_file)" DTK_FISQUA_TOKEN
+case_ "fisqua: under --advisory a recorded token is kept over the key file's"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr --fisqua-env production
+cp "$(env_file)" "$WORK/saved.env"
+run DTK_OFFSITE_KEY_FILE="$KF2" -- --advisory
+expect_status 0
+expect_same "$(env_file)" "$WORK/saved.env"
+expect_not_out "$FQ_TOKEN"
+expect_not_out "$FQ_TOKEN2"
+
+case_ "fisqua: the token is read from the key file only, never the environment"
+new_unit
+run DTK_FISQUA_TOKEN="$FQ_TOKEN" FISQUA_TOKEN="$FQ_TOKEN" -- --tenant ahr --fisqua-env production
+expect_status 0
+expect_no_key "$(env_file)" DTK_FISQUA_TOKEN
+expect_not_out "$FQ_TOKEN"
+
+for e in production staging; do
+    case_ "fisqua: --fisqua-env $e is written"
+    new_unit
+    run -- --fisqua-env "$e"
+    expect_status 0
+    expect_line "$(env_file)" "DTK_FISQUA_ENV=$e"
+    expect_out "DTK_FISQUA_ENV=$e"
+done
+for e in prod Production STAGING "staging " dev ""; do
+    case_ "fisqua: --fisqua-env '$e' is refused"
+    new_unit
+    run -- --fisqua-env "$e"
+    expect_status 1
+    expect_out "--fisqua-env"
+    expect_absent "$(env_file)"
+done
+case_ "fisqua: --fisqua-env with no value"
+new_unit
+run -- --fisqua-env
+expect_status 1
+expect_out "--fisqua-env needs production or staging"
+
+case_ "fisqua: --fisqua-env carried forward, and changed with a note"
+new_unit
+run -- --tenant ahr --fisqua-env staging
+cp "$(env_file)" "$WORK/saved.env"
+run -- --advisory
+expect_same "$(env_file)" "$WORK/saved.env"
+run -- --fisqua-env production
+expect_status 0
+expect_out "--fisqua-env production replaces the recorded staging"
+expect_line "$(env_file)" "DTK_FISQUA_ENV=production"
+expect_line "$(env_file)" "DTK_OFFSITE_TENANT=ahr"
+
+case_ "fisqua: options not recorded are said"
+legacy_unit
+echo "DTK_OFFSITE_BWLIMIT=1M" >> "$(env_file)"
+KF="$(key_file fq.key "FISQUA_TOKEN=$FQ_TOKEN")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --fisqua-env staging
+expect_status 0
+expect_out "was NOT recorded"
+expect_not_out "$FQ_TOKEN"
+
+case_ "fisqua: the instructions show the optional FISQUA_TOKEN line"
+new_unit
+run --
+expect_status 0
+expect_out "FISQUA_TOKEN=..."
+expect_out "--fisqua-env production"
+case_ "fisqua: the usage text names --fisqua-env"
+run -- --no-such-flag
+expect_status 1
+expect_out "[--fisqua-env production|staging]"
 
 # ── Nothing read was ever passed to rclone on its command line ──────────────
 case_ "no key on any rclone argument list"
