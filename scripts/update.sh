@@ -312,7 +312,7 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
     echo ""
     if [ "$UNRESOLVED_KIND" = restore-refused ]; then
         echo "  That update failed after its migration, and the database restore was"
-        echo "  refused because a backend was running: nothing was dropped, and the"
+        echo "  refused ($(record_field refused-because)): nothing was dropped, and the"
         echo "  database is as the migration left it, while the code is back on"
         echo "  code-commit below. The unit was left stopped. It recorded, in"
         echo "  $UNRESOLVED_FILE:"
@@ -436,7 +436,7 @@ MIGRATION_STARTED=0
 # new version has served since step 8 started it.
 RESTORE_DUMP=""
 RESTORE_DUMP_VERIFIED=0
-RESTORE_DB_BACKEND_RUNNING=0
+RESTORE_DB_NOT_DROPPED_WHY=""
 NEW_STARTED_AT=""
 NEW_SERVED=0
 MIGRATED_REVISION=""
@@ -715,13 +715,15 @@ restore_database() {
     # now is refused, with nothing dropped.
     if ! backend_fully_stopped; then
         echo "  ✗ A backend is running; the database was NOT dropped."
-        RESTORE_DB_BACKEND_RUNNING=1
+        RESTORE_DB_NOT_DROPPED_WHY="a backend was running"
         return 1
     fi
     # The record goes down before the irreversible step, so that a run killed
     # in the middle of it (a signal, a power cut) still leaves one.
     write_unresolved_marker restore-failed || {
-        echo "  ✗ Could not write $UNRESOLVED_FILE; the database was NOT dropped."
+        echo "  ✗ Could not write $UNRESOLVED_FILE with its start flag and drop-in;"
+        echo "    the database was NOT dropped."
+        RESTORE_DB_NOT_DROPPED_WHY="the start guard (flag or drop-in) could not be put in place"
         return 1
     }
     $COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
@@ -832,24 +834,33 @@ clear_unresolved_marker() {
 # write_unresolved_marker [started-failed|restore-failed|migrated-not-restored]
 # The record, the flag and the drop-in, in that order of importance: the
 # record is what update.sh refuses on, the flag what keeps dtk from starting.
+# Returns non-zero unless all three are in place, so a caller about to
+# migrate or DROP refuses to without the start guard. The record is written
+# even when the flag or the drop-in fails: it is what update.sh refuses on.
 write_unresolved_marker() {
-    local kind="${1:-started-failed}" head
+    local kind="${1:-started-failed}" head guard_ok=1
     head="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
     if ! ( mkdir -p "$UNRESOLVED_FLAG_DIR" && chmod 0700 "$UNRESOLVED_FLAG_DIR" \
             && ( umask 077; : > "$UNRESOLVED_FLAG" ) ) 2>/dev/null; then
         echo "  ⚠ Could not create $UNRESOLVED_FLAG: dtk is NOT kept from starting."
+        guard_ok=0
     fi
-    ensure_unresolved_dropin 2>/dev/null \
-        || echo "  ⚠ Could not install $UNRESOLVED_DROPIN: dtk is NOT kept from starting."
+    if ! ensure_unresolved_dropin 2>/dev/null; then
+        echo "  ⚠ Could not install $UNRESOLVED_DROPIN: dtk is NOT kept from starting."
+        guard_ok=0
+    fi
     if ( umask 077
          {
              echo "kind: $kind"
              echo "code-commit: $head"
              if [ "$kind" = restore-failed ] || [ "$kind" = restore-refused ]; then
                  echo "dump-to-restore: $RESTORE_DUMP"
+                 [ -z "$RESTORE_DB_NOT_DROPPED_WHY" ] || echo "refused-because: $RESTORE_DB_NOT_DROPPED_WHY"
              else
                  echo "failed-commit: $CURRENT_SHA"
-                 echo "restore-target: ${PREV_DEPLOYED_SHA:-$RESTORE_SHA}"
+                 # The commit a failure restores to and pre-update-SHA names,
+                 # so the rollback accepts the record.
+                 echo "restore-target: $RESTORE_SHA"
                  echo "migrated-revision: ${MIGRATED_REVISION:-(unknown)}"
              fi
              echo "dump: $RESTORE_DUMP"
@@ -857,7 +868,8 @@ write_unresolved_marker() {
              echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
          } > "$UNRESOLVED_FILE.tmp" ) 2>/dev/null \
          && mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE" 2>/dev/null; then
-        return 0
+        [ "$guard_ok" -eq 1 ]
+        return
     fi
     rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true
     return 1
@@ -1004,8 +1016,8 @@ restore_after_stop() {
         else
             db_ok=0
             $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
-            if [ "$RESTORE_DB_BACKEND_RUNNING" -eq 1 ]; then
-                note_not_restored "database: NOT restored, because a backend was running; nothing was dropped, and the database is as the migration left it"
+            if [ -n "$RESTORE_DB_NOT_DROPPED_WHY" ]; then
+                note_not_restored "database: NOT restored, because $RESTORE_DB_NOT_DROPPED_WHY; nothing was dropped, and the database is as the migration left it"
             else
                 note_not_restored "database: the restore from $RESTORE_DUMP FAILED; the database may be partly migrated or partly restored"
             fi
@@ -1020,7 +1032,7 @@ restore_after_stop() {
         echo "  ✗ The appliance has NOT been started: the database is not in a known"
         echo "    state. The backup is intact. To restore code and database by hand:"
         echo "      $ROLLBACK_CMD"
-        if write_unresolved_marker "$( [ "$RESTORE_DB_BACKEND_RUNNING" -eq 1 ] && echo restore-refused || echo restore-failed )"; then
+        if write_unresolved_marker "$( [ -n "$RESTORE_DB_NOT_DROPPED_WHY" ] && echo restore-refused || echo restore-failed )"; then
             echo "  Until that succeeds, update.sh refuses to run; the record is"
             echo "  $UNRESOLVED_FILE, and the rollback removes it."
         else
@@ -2191,10 +2203,11 @@ fi
 # first, for a run killed during the migration: until this update either
 # succeeds or restores the database, code and database may not agree.
 if ! write_unresolved_marker migrated-not-restored; then
-    # Nothing has been migrated: the flag that went down with it would only
-    # keep the previous version from starting again.
-    rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
-    echo "✗ Could not write $UNRESOLVED_FILE; not migrating without it."
+    # Nothing has been migrated: whatever of the record and the flag went
+    # down would only keep the previous version from starting again.
+    clear_unresolved_marker
+    echo "✗ Could not write $UNRESOLVED_FILE with its start flag and drop-in;"
+    echo "  not migrating without them."
     exit 1
 fi
 MIGRATION_STARTED=1

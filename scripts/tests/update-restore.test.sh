@@ -177,6 +177,11 @@ case "$1" in
             [ -z "${FAKE_KILL_ON_MIGRATE:-}" ] || { kill-update KILL "$PPID"; sleep 1; }
             echo migrated > "$CASE_DIR/db_state"
             [ -z "${FAKE_HUP_ON_MIGRATE:-}" ] || kill-update HUP "$PPID"
+            if [ -n "${FAKE_BLOCK_GUARD_ON_MIGRATE:-}" ]; then
+                # A file where the drop-in's directory goes: from here the
+                # start guard cannot be installed.
+                rm -rf "$DTK_TEST_STATE/systemd/dtk.service.d"; : > "$DTK_TEST_STATE/systemd/dtk.service.d"
+            fi
             if [ -n "${FAKE_LOCK_SUBMODULE_ON_MIGRATE:-}" ]; then
                 touch "$PROJECT_ROOT/.git/modules/backend/index.lock"
             fi
@@ -1123,7 +1128,7 @@ export DTK_TEST_STATE="$CASE_DIR/state"
 mkdir -p "$DTK_TEST_STATE/backups/unresolved-deployment.tmp"   # blocks the record's write
 run_case "record cannot be written before the migration" --yes
 eq "$RC" 1 "exit status"
-has "not migrating without it"
+has "not migrating without them"
 unlogged "pixi run db-upgrade"
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the start flag remains"; else ok "the start flag is removed"; fi
 started "A A "
@@ -1193,6 +1198,60 @@ active
 CASE="--no-start alone"
 run_again "$PROJECT_ROOT/scripts/update.sh" --no-start
 eq "$RC" 2 "exit status"
+
+# ── The start guard cannot be put in place: no migration, no DROP ──────────
+for blocker in etc-dtk systemd/dtk.service.d; do
+    name="guard blocked by $blocker"
+    CASE_DIR="$WORK/cases/$(echo "$name" | tr ' /' '__')"; mkdir -p "$CASE_DIR/state/$(dirname "$blocker")"
+    : > "$CASE_DIR/state/$blocker"      # a file where a directory must go
+    FAKE_MIGRATE_FAIL=1 run_case "$name" --yes
+    eq "$RC" 1 "exit status"
+    has "not migrating without them"
+    unlogged "pixi run db-upgrade"
+    unlogged "psql DROP"
+    db_is schema-A
+    no_marker
+    head_is "$SHA_A" A
+    started "A A "
+    active
+done
+
+# The drop-in's directory blocked only once the migration has run.
+CASE_DIR="$WORK/cases/guard-at-drop"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
+PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT; cp -R "$TEMPLATE" "$PROJECT_ROOT"
+export DTK_TEST_STATE="$CASE_DIR/state"; mkdir -p "$DTK_TEST_STATE/backups"
+echo "$SHA_A" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"; echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+echo A > "$CASE_DIR/sys/started"; echo schema-A > "$CASE_DIR/db_state"
+CASE="guard fails at the restore's DROP"
+FAKE_MIGRATE_FAIL=1 FAKE_BLOCK_GUARD_ON_MIGRATE=1 run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+unlogged "psql DROP"
+db_is migrated
+marker_has "kind: restore-refused"
+marker_has "refused-because: the start guard (flag or drop-in) could not be put in place"
+has "nothing was dropped"
+inactive
+
+# ── The restore target when last-deployed-SHA does not resolve ──────────────
+FAKE_HEALTHY_VERSIONS="A" run_case "deploy record that is not a commit" --yes   # builds the case
+rm -rf "$CASE_DIR"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"
+cp -R "$TEMPLATE" "$PROJECT_ROOT"; mkdir -p "$DTK_TEST_STATE/backups"
+echo "0000000000000000000000000000000000000000" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"; echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+echo A > "$CASE_DIR/sys/started"; echo schema-A > "$CASE_DIR/db_state"
+CASE="deploy record that is not a commit: started-failed"
+FAKE_HEALTHY_VERSIONS="A" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+marker_has "restore-target: $SHA_A"
+eq "$(cat "$DTK_TEST_STATE/backups/pre-update-SHA")" "$SHA_A" "pre-update-SHA agrees with the record"
+CASE="deploy record that is not a commit: the rollback accepts the record"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+head_is "$SHA_A" A
+no_marker
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
