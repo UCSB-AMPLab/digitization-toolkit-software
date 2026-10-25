@@ -31,7 +31,7 @@
 # For a network-connected Pi (fetch the latest tested code this repo pins):
 #   sudo ./scripts/update.sh
 # The script pulls and syncs submodules itself, and sets aside any local
-# modifications first (NEH-270) — the operator no longer has to run git.
+# modifications first (NEH-270); the operator does not run git.
 #
 # For an offline update from a USB drive, copy the new repo content into place
 # first, then run with --no-pull so the script does not try to reach the
@@ -146,12 +146,11 @@ DATABASE_NAME="${DATABASE_NAME:-digitization_toolkit}"
 
 # Resolve real user. The fallback is the CHECKOUT'S OWNER, not whoami: with no
 # SUDO_USER -- a systemd unit, NEH-186's admin-triggered path -- whoami is root,
-# and then PIXI_BIN below becomes /root/.pixi/bin/pixi, which does not exist on
-# a unit where pixi was installed for the appliance user. Confirmed on the bench
-# unit 2026-10-20: the frontend image rebuilt and the deploy then stopped at
-# `pixi install` with "env: '/root/.pixi/bin/pixi': No such file or directory".
-# Routing git through the checkout's owner (REPO_USER below) fixed the git half
-# of this; the pixi and migration calls still went through DTK_USER.
+# and then PIXI_BIN below would be /root/.pixi/bin/pixi, which does not exist on
+# a unit where pixi was installed for the appliance user: the deploy would stop
+# at `pixi install` with "env: '/root/.pixi/bin/pixi': No such file or
+# directory". The pixi and migration calls run as DTK_USER; git runs as the
+# checkout's owner (REPO_USER below).
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
@@ -165,11 +164,11 @@ run_as_user() {
 }
 
 # Who git must run as: the repository's actual owner, asked of the filesystem
-# rather than inferred. DTK_USER comes from SUDO_USER and falls back to
-# whoami, so in a service context with no SUDO_USER it resolves to root — and
-# `sudo -u root git` then hits exactly the dubious-ownership failure that
-# routing git through a helper was supposed to avoid (NEH-271), because root's
-# global config carries no safe.directory. The owner's HOME also matters: the
+# rather than inferred. In a service context with no SUDO_USER, git run as
+# root hits the dubious-ownership failure (NEH-271), because root's global
+# config carries no safe.directory. DTK_USER can still be root when `stat`
+# fails and the fallback is whoami, so git does not use it. The owner's HOME
+# also matters: the
 # insteadOf rewrite that lets .gitmodules' SSH URLs resolve (NEH-217) lives in
 # that user's global config, not root's.
 REPO_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || true)"
@@ -212,9 +211,9 @@ STATE_DIR="/var/lib/dtk"
 ROLLBACK_SCRIPT_COPY="$STATE_DIR/rollback-update.sh"
 
 # The dumps hold every account's password hash (users.hashed_password), so
-# the directory and the dumps in it are root's alone. Until October 2026 the
-# dumps were written under root's default umask, 0644 in a 0755 directory,
-# readable by any local user; found on the bench unit. Nothing that runs as
+# the directory and the dumps in it are root's alone. Under root's default
+# umask a dump would be 0644 in a 0755 directory, readable by any local
+# user. Nothing that runs as
 # another user reads this directory: update.sh and rollback-update.sh both run
 # as root, setup.sh writes last-deployed-SHA as root, and the backend writes
 # its own catalogue dumps to /var/lib/dtk/tmp (backend
@@ -253,8 +252,9 @@ secure_backup_dir() {
 }
 
 # tighten_existing_dumps: set every dump already in the directory to 0600.
-# Dumps from earlier updates were written 0644. Symlinks are skipped (find
-# does not follow them), so nothing outside the directory is changed.
+# Dumps written before the directory was made private can be 0644. Symlinks
+# are skipped (find does not follow them), so nothing outside the directory
+# is changed.
 tighten_existing_dumps() {
     local open count=0 f
     open="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'pre-update-*.sql.gz' ! -perm 0600 2>/dev/null)"
@@ -286,12 +286,17 @@ write_dump() {
 cd "$PROJECT_ROOT"
 
 # An earlier update was left unresolved (see UNRESOLVED_FILE). Refuse before
-# anything is fetched, built, stopped or written. The record has two kinds:
+# anything is fetched, built, stopped or written. The record's kinds:
 #   started-failed  the new version was started and the update then failed;
-#                   the database is migrated for it (the default for records
-#                   written before the field existed)
+#                   the database is migrated for it (the default for a record
+#                   with no kind field)
 #   restore-failed  the automatic database restore failed after the database
 #                   had been dropped; only the rollback can repair it
+#   restore-refused the automatic restore was refused before anything was
+#                   dropped; the database is as the migration left it
+#   migrated-not-restored
+#                   a migration began and the code was not moved back (the
+#                   restore failed, or the run was cut off)
 record_field() {
     sed -n "s/^$1: //p" "$UNRESOLVED_FILE" 2>/dev/null | head -n 1
 }
@@ -551,12 +556,6 @@ wait_for_health() {
     done
 }
 
-# Tracked files modified anywhere in the checkout? 0 clean, 1 modified,
-# anything else a read that failed (treated as modified). Superproject files
-# with submodules ignored, then each submodule's own files: a submodule that is
-# merely on a different commit is what an interrupted update leaves, and the
-# restore moves it; a modified file inside it is someone's work, and the
-# restore will not discard it. The same refusal rollback-update.sh makes.
 # gitlinks_match_head <repo-dir> [checked-out]: 0 when every submodule's
 # entry in the index equals the gitlink in HEAD's tree and, with
 # "checked-out", the commit checked out in the submodule equals it too
@@ -603,6 +602,12 @@ flagged_index_entries() {
     return 0
 }
 
+# Tracked files modified anywhere in the checkout? 0 clean, 1 modified,
+# anything else a read that failed (treated as modified). Superproject files
+# with submodules ignored, then each submodule's own files: a submodule that is
+# merely on a different commit is what an interrupted update leaves, and the
+# restore moves it; a modified file inside it is someone's work, and the
+# restore will not discard it. The same refusal rollback-update.sh makes.
 tracked_files_modified() {
     local rc=0 subs sub
     # Working tree against HEAD, then the index against HEAD: `diff HEAD`
@@ -859,15 +864,6 @@ wait_backend_stopped() {
     return 1
 }
 
-# The new version was started in step 8 and the update then failed. From its
-# start it could take writes, and nothing on the unit can prove it did not: a
-# handler commits before it responds, uvicorn logs the request only on the
-# response, and stop.sh kills the backend 2s after asking it to stop. So the
-# database is never restored automatically from here, and the code is not
-# moved back either, because the old code cannot run over the migrated
-# database. The new version is stopped, fully, and the unit left stopped.
-# Record the unresolved state (see UNRESOLVED_FILE): root's alone, 0600 from
-# the start, written to a temporary name and renamed.
 # The drop-in that keeps dtk from starting while the flag exists. Written
 # idempotently, root's, with a daemon-reload only when it changed.
 ensure_unresolved_dropin() {
@@ -890,7 +886,9 @@ clear_unresolved_marker() {
     rm -f "$UNRESOLVED_FILE" "$UNRESOLVED_FLAG" 2>/dev/null || true
 }
 
-# write_unresolved_marker [started-failed|restore-failed|migrated-not-restored]
+# write_unresolved_marker [started-failed|restore-failed|restore-refused|migrated-not-restored]
+# Record the unresolved state (see UNRESOLVED_FILE): root's alone, 0600 from
+# the start, written to a temporary name and renamed.
 # The record, the flag and the drop-in, in that order of importance: the
 # record is what update.sh refuses on, the flag what keeps dtk from starting.
 # Returns non-zero unless all three are in place, so a caller about to
@@ -948,6 +946,14 @@ warn_if_restored_update_ignores_record() {
     echo ""
 }
 
+# The new version was started in step 8 and the update then failed. From its
+# start it could take writes, and nothing on the unit can prove it did not: a
+# handler commits before it responds, uvicorn logs the request only on the
+# response, and stop.sh kills the backend 2s after asking it to stop. So the
+# database is never restored automatically from here, and the code is not
+# moved back either, because the old code cannot run over the migrated
+# database. The caller stops the new version, fully, and leaves the unit
+# stopped; this reports that state and writes the record.
 report_started_failure() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -1019,8 +1025,8 @@ restore_after_stop() {
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo ""
     [ "$MIGRATION_STARTED" -eq 1 ] && keep_rollback_copy
-    # Make sure nothing is up before anything moves under it (the unit is
-    # stopped already; this is belt and braces for the containers).
+    # Make sure nothing is up before anything moves under it. The unit is
+    # stopped already; this also takes down any container still running.
     # --remove-orphans: containers from services dropped between releases must
     # go too, or they keep an endpoint on the project network and wedge the
     # restart (NEH-214).
@@ -1489,9 +1495,9 @@ fi
 RUN_TS="$(date +%Y%m%d-%H%M%S)"
 PRE_HEAD="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
 
-# A file that cannot be read is not a file that is not there, and step 2's
-# messages used to say the latter for both. PREV_RECORD_STATE carries which it
-# was so the diagnosis there can be true.
+# A file that cannot be read is not a file that is not there.
+# PREV_RECORD_STATE carries which it was, so that the messages here and in
+# step 2 can say which.
 PREV_DEPLOYED_SHA=""
 if [ ! -e "$LAST_DEPLOYED_SHA_FILE" ]; then
     PREV_RECORD_STATE=absent
@@ -1673,14 +1679,13 @@ echo ""
 # ---------------------------------------------------------------------------
 # 0b. Fetch the new code (NEH-270).
 #
-#     This was the operator's job until now. The header documented
-#       git pull && git submodule update --init --recursive && sudo ./scripts/update.sh
-#     and on a unit that has been fixed by hand in the field that first
-#     command aborts — "Your local changes to the following files would be
-#     overwritten by merge" — then tells the operator to "commit or stash",
-#     which is not an instruction an archive can act on. Doing it here means
-#     the dirty-tree case is handled once, in the open, and the same way
-#     whether a person or NEH-186's admin-triggered update started this.
+#     The script pulls, not the operator. On a unit that has been fixed by
+#     hand in the field, a plain `git pull` aborts — "Your local changes to
+#     the following files would be overwritten by merge" — then tells the
+#     operator to "commit or stash", which is not an instruction an archive
+#     can act on. Pulling here handles the dirty-tree case once, in the open,
+#     and the same way whether a person or NEH-186's admin-triggered update
+#     started this.
 #
 #     Local modifications are COPIED ASIDE, never discarded unseen: every
 #     modified tracked file, in the superproject and in each submodule, is
@@ -1697,8 +1702,8 @@ echo ""
 if [ "$DO_PULL" -eq 1 ]; then
     echo "→ Fetching the new code..."
 
-    # A detached HEAD has no branch to pull into. rollback-update.sh before
-    # NEH-273 left exactly that behind, so a rolled-back unit arrives here.
+    # A detached HEAD has no branch to pull into. A rollback-update.sh older
+    # than NEH-273 leaves a rolled-back unit detached.
     PULL_BRANCH="$(run_as_repo_owner git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
     if [ -z "$PULL_BRANCH" ]; then
         echo "✗ This repository is not on a branch, so there is nothing to pull into."
@@ -1844,11 +1849,11 @@ if [ "$DO_PULL" -eq 1 ]; then
         # is running. Only tracked files are touched: untracked files are left
         # alone, because on an appliance an unknown file may be the only copy
         # of something and this script will not delete one.
-        # Set BEFORE the first reset, not after the last. With it after, a
-        # superproject reset that succeeded followed by a submodule reset that
-        # failed (a stale index.lock will do it) left the flag at zero, and
-        # the trap then printed "nothing changed" having already discarded
-        # modifications — the exact thing NEH-215 exists to prevent.
+        # Set BEFORE the first reset, not after the last. Otherwise a
+        # superproject reset that succeeds followed by a submodule reset that
+        # fails (a stale index.lock will do it) leaves the flag at zero, and
+        # the trap prints "nothing changed" after modifications were
+        # discarded, which NEH-215 exists to prevent.
         TREE_TOUCHED=1
         run_as_repo_owner git -C "$PROJECT_ROOT" reset --hard HEAD >/dev/null
         run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git reset --hard HEAD' >/dev/null
@@ -1892,9 +1897,10 @@ echo "→ Version being installed: $CURRENT_SHA"
 # is rollback-update.sh, which uses it solely to say in its summary which
 # components (pixi environment, frontend image) still correspond to the
 # restored version (NEH-218); it never changes what rollback does. Its
-# inputs — the dump and pre-update-SHA — are still written together in
-# step 5, so the NEWEST dump and the recorded SHA correspond; older retained
-# dumps do not (rollback-update.sh warns when an older dump is selected).
+# inputs, pre-update-SHA (step 5) and the dump that is kept (step 7), are
+# written by the same run, after this snapshot, so the NEWEST dump and the
+# recorded SHA correspond; older retained dumps do not (rollback-update.sh
+# warns when an older dump is selected).
 # Recording pre-update-SHA this early instead would let an abort-during-build
 # pair a fresh SHA with a stale dump.
 #
@@ -1911,8 +1917,8 @@ echo "→ Version being installed: $CURRENT_SHA"
 #
 # Several records can share one previously-deployed value (an update that
 # aborts before step 5 writes a record but advances nothing), so a record is
-# identified by its own file name, which step 5 stores in pre-update-ref
-# together with the dump name.
+# identified by its own file name, which steps 5 and 7 store in
+# pre-update-ref together with the dump name.
 previous_frontend_image() {
     local want
     want="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null)" || return 1
@@ -1969,11 +1975,11 @@ echo ""
 #    Every git call below runs as the repo owner. Root-run git fails
 #    dubious-ownership on a user-cloned repo unless SUDO_UID happens to name
 #    the owner, which holds for an interactive `sudo ./scripts/update.sh` and
-#    not in a service context. With stderr discarded that failure was
-#    invisible and the script reported "no previous-deploy record found" —
-#    false, with the record present and correct — so the offline
-#    determination was never reached (NEH-271). The same reasoning already
-#    governs CURRENT_SHA above and rollback-update.sh's checkout.
+#    not in a service context. With stderr discarded that failure is
+#    invisible, and the script would report "no previous-deploy record
+#    found" with the record present and correct, and never reach the offline
+#    determination (NEH-271). The same reasoning governs CURRENT_SHA above
+#    and rollback-update.sh's checkout.
 # ---------------------------------------------------------------------------
 NEEDS_INTERNET=0
 # PREV_DEPLOYED_SHA and PREV_RECORD_STATE were read in step 0a, before the
@@ -2028,15 +2034,14 @@ if [ "$PREV_OBJ_STATE" = present ]; then
     fi
 else
     # Three different situations reach this branch, and only the first is a
-    # missing record. Saying "not found" for all three told an operator the
-    # record was missing when it was present and correct, in the one situation
-    # she is most likely to be anxious about: an ordinary redeploy of the
-    # commit already checked out.
+    # missing record: no usable record, a recorded commit that is missing or
+    # cannot be checked, and an ordinary redeploy of the commit already
+    # checked out. Each gets its own message, so that an operator is never
+    # told the record is missing when it is present and correct.
     #
     # The conservative NEEDS_INTERNET=1 stays in all three. For a redeploy of
-    # the same commit nothing can have changed, so it is arguably stricter
-    # than it needs to be; changing what the script DOES is a separate
-    # decision from correcting what it SAYS, and this is the latter.
+    # the same commit nothing can have changed, so it is stricter than it
+    # needs to be.
     NEEDS_INTERNET=1
     case "$PREV_RECORD_STATE:$PREV_OBJ_STATE" in
         absent:*)
@@ -2151,7 +2156,8 @@ fail_point pixi
 #     Idempotent. It uses the network in two cases only: to fetch the pinned
 #     build when the rclone present is missing or below the floor, and to
 #     check a newly written credential against its bucket. A unit that
-#     already has a good rclone takes neither path here — step 2 finds the
+#     already has a good rclone takes neither path here — provision-rclone.sh's
+#     step 2 finds the
 #     existing credential and never probes — so on a provisioned unit this
 #     is a no-op costing one version check.
 #
@@ -2174,7 +2180,7 @@ fail_point pixi
 #    backend stopped, and replaces this one once it is verified.
 # ---------------------------------------------------------------------------
 echo "→ Making sure the database is up so we can back it up..."
-# Probe container state WITHOUT mutating anything. The old unconditional
+# Probe container state WITHOUT mutating anything. An unconditional
 # `up -d db` here could recreate a running db container — and try to recreate
 # the project network under the live stack — whenever the new code changed
 # the compose config or image: that is what took Rionegro down on 2026-08-03.
@@ -2230,10 +2236,10 @@ BACKUP_VERIFIED=1
 echo "  ✓ Backup written (${DUMP_BYTES} bytes)."
 
 # Record the commit to roll back to, next to the dump, for rollback-update.sh.
-# IMPORTANT: this script runs AFTER the operator has already pulled / checked
-# out the new code (see header), so HEAD ($CURRENT_SHA) is the NEW version.
-# The rollback target is the commit that was RUNNING before this update — the
-# one the last successful update recorded in last-deployed-SHA — never HEAD.
+# IMPORTANT: step 0b has already pulled the new code (or --no-pull found it
+# in place), so HEAD ($CURRENT_SHA) is the NEW version. The rollback target
+# is the commit that was RUNNING before this update — RESTORE_SHA, from
+# last-deployed-SHA or the pre-pull HEAD (step 0a) — never the new HEAD.
 if [ -n "$RESTORE_SHA" ]; then
     # The same commit a failure here restores to (0a), so that the rollback
     # the failure output names returns the code to it too.

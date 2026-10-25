@@ -10,9 +10,11 @@
 #
 #   rclone   at <prefix>/usr/local/bin/rclone, where the script looks first, so
 #            nothing is downloaded. `version` reports the pin; `config dump`
-#            parses the INI file into the JSON rclone emits; `lsf` succeeds.
-#   curl     always fails, so the unit reads as offline and no listing probe
-#            or download is attempted. Nothing here touches the network.
+#            parses the INI file into the JSON rclone emits; `lsf` succeeds
+#            unless a case sets FAKE_LSF_FAIL or FAKE_LSF_PREFIX_ONLY.
+#   curl     fails unless a case sets FAKE_ONLINE or FAKE_HTTP_STATUS, so by
+#            default the unit reads as offline and no listing probe or
+#            download is attempted. Nothing here touches the network.
 #   timeout  runs the command unbounded (macOS has no timeout(1)).
 #   chown    does nothing, so the cases run as an ordinary user.
 #
@@ -268,7 +270,8 @@ expect_absent() {
 expect_same() {   # expect_same <file> <saved copy>
     if cmp -s "$1" "$2"; then ok; else bad "$(basename "$1") changed"; diff "$2" "$1" | sed 's/^/    | /'; fi
 }
-# Neither application key may appear in any output.
+# Neither application key nor the age-secret-shaped value may appear in any
+# output.
 expect_no_secrets() {
     expect_not_out "$UP_KEY"
     expect_not_out "$RD_KEY"
@@ -686,9 +689,7 @@ expect_status 0
 expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
 expect_line "$(conf_file)" "[b2read]"
 
-# ── Review round 1 (Codex and adversarial review) ───────────────────────────
-
-# B1: an age-secret-shaped value is never printed and never written, wherever
+# An age-secret-shaped value is never printed and never written, wherever
 # it comes from.
 secret_case() {   # secret_case <label> <expected status> -- <run args...>
     local label="$1" want="$2"
@@ -733,7 +734,7 @@ for field in KEY_ID BUCKET READ_KEY_ID; do
     expect_absent "$(conf_file)"
 done
 
-# B2: a run interrupted after the config was written, with read keys in the
+# A run interrupted after the config was written, with read keys in the
 # key file, resumes on the next run.
 case_ "interrupted run with read keys: the first run fails at offsite.env"
 new_unit
@@ -751,7 +752,7 @@ expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$BUCKET"
 expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
 expect_same "$(conf_file)" "$WORK/saved.conf"
 
-# M1: the file an append would rename over must be a path of the safe class.
+# The file an append would rename over must be a path of the safe class.
 case_ "symlinked config whose target has a quote in its name"
 legacy_unit
 EVIL="$ROOT/x';touch pwned;'.conf"
@@ -764,7 +765,7 @@ expect_out "refusing the resolved rclone config path"
 if [ -L "$(conf_file)" ]; then ok; else bad "the case did not set up its symlink"; fi
 if grep -q '^\[b2read\]' "$EVIL"; then bad "appended through an unsafe target"; else ok; fi
 
-# M2: a recorded read remote that cannot belong to a freshly written upload
+# A recorded read remote that cannot belong to a freshly written upload
 # remote is dropped, and said.
 case_ "fresh write: recorded read remote on another bucket is dropped"
 new_unit
@@ -784,7 +785,7 @@ expect_status 0
 expect_out "dropped"
 expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
 
-# M3: a recorded read remote must not name the upload remote, nor another bucket.
+# A recorded read remote must not name the upload remote, nor another bucket.
 case_ "recorded read remote naming the upload remote is refused"
 legacy_unit
 echo "DTK_OFFSITE_READ_REMOTE=b2unit:$BUCKET" >> "$(env_file)"
@@ -802,7 +803,7 @@ expect_status 1
 expect_out "not the upload remote's bucket"
 expect_same "$(env_file)" "$WORK/saved.env"
 
-# M4, revised: listings cannot tell the two keys' roles apart (both keys
+# Listings cannot tell the two keys' roles apart (both keys
 # list), so nothing infers a swap from them. With a tenant, both probes list
 # the tenant prefix, which is all the backend ever lists and all a
 # prefix-scoped key may list; without one the upload probe lists the bucket.
@@ -854,7 +855,7 @@ for how in refused dns; do
     if grep -q "^lsf " "$ROOT/rclone.log" 2>/dev/null; then bad "a listing was attempted"; else ok; fi
 done
 
-# M5: the read key comes from the key file only.
+# The read key comes from the key file only.
 case_ "read key in the environment is ignored"
 new_unit
 KF="$(key_file up.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET")"
@@ -863,7 +864,7 @@ expect_status 0
 if grep -q '^\[b2read\]' "$(conf_file)"; then bad "a read section was written from the environment"; else ok; fi
 expect_no_key "$(env_file)" DTK_OFFSITE_READ_REMOTE
 
-# M6: the append replaces a file, so it needs the lock.
+# The append replaces a file, so it needs the lock.
 case_ "append without flock is refused"
 legacy_unit
 cp "$(conf_file)" "$WORK/saved.conf"
@@ -884,7 +885,7 @@ RUN_PATH="$DEFAULT_PATH"
 expect_status 0
 expect_line "$(conf_file)" "[b2read]"
 
-# M7: refusals say what was left, not that nothing changed.
+# Refusals say what was left, not that nothing changed.
 case_ "read refusal says what was left"
 legacy_unit
 KF="$(key_file rdsame.key "READ_KEY_ID=$UP_ID" "READ_APP_KEY=$RD_KEY")"
@@ -901,7 +902,7 @@ expect_status 1
 expect_out "No credential was written and $(env_file) was not changed"
 expect_not_out "nothing was changed"
 
-# M8: xtrace in the caller never reaches the keys.
+# Xtrace in the caller never reaches the keys.
 case_ "bash -x prints no key"
 new_unit
 KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
@@ -916,7 +917,7 @@ run SHELLOPTS=xtrace DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
 expect_no_secrets
 
-# M9: the old-bytes check, the symlink branch and the mode after the rename.
+# The old-bytes check, the symlink branch and the mode after the rename.
 case_ "append: the old file changing between copy and rename stops it"
 legacy_unit
 KF="$(key_file rd.key "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
@@ -948,9 +949,7 @@ run DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
 if [ "$(mode_of "$(conf_file)")" = "0o600" ]; then ok; else bad "mode $(mode_of "$(conf_file)") after mv"; fi
 
-# ── Review round 2 ──────────────────────────────────────────────────────────
-
-# N1: on the kept path, a complete [b2read] at a config path this run has not
+# On the kept path, a complete [b2read] at a config path this run has not
 # established is not recorded.
 case_ "kept path: complete [b2read] at an unestablished path is not recorded"
 new_unit
@@ -977,7 +976,7 @@ run DTK_OFFSITE_KEY_FILE="$KF" -- --config-path "$(conf_file)"
 expect_status 0
 expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
 
-# N2: a recorded read remote naming the upload remote is refused before the
+# A recorded read remote naming the upload remote is refused before the
 # fresh write publishes anything.
 case_ "fresh write: recorded read remote naming the upload remote is refused first"
 new_unit
@@ -995,7 +994,7 @@ run DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
 expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$BUCKET"
 
-# N3: with no upload remote recorded, a recorded read remote is dropped.
+# With no upload remote recorded, a recorded read remote is dropped.
 case_ "no upload remote: a recorded read remote is dropped"
 new_unit
 printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_READ_REMOTE=b2read:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
@@ -1012,7 +1011,7 @@ expect_status 1
 expect_out "names the upload remote"
 expect_same "$(env_file)" "$WORK/saved.env"
 
-# N4: a value that merely contains the words is not a key.
+# A value that merely contains the words is not a key.
 case_ "tenant containing age-secret-key but not a key is accepted"
 new_unit
 run -- --tenant age-secret-key-archive
@@ -1042,7 +1041,7 @@ expect_status 1
 expect_not_out "$MIXED_SECRET"
 expect_absent "$(env_file)"
 
-# R3-1: a truncated private key is still a key for refusing; a value that
+# A truncated private key is still a key for refusing; a value that
 # only resembles the words is not.
 case_ "truncated lowercase age secret as tenant is refused unprinted"
 new_unit
@@ -1063,7 +1062,7 @@ run -- --tenant age-secret-key-test
 expect_status 0
 expect_line "$(env_file)" "DTK_OFFSITE_TENANT=age-secret-key-test"
 
-# N5: the whole-file refusal names a line.
+# The whole-file refusal names a line.
 case_ "whole-file refusal says a line"
 new_unit
 printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_TENANT=%s\n' "$ROOT/usr/local/bin/rclone" "$FAKE_SECRET_LOWER" > "$(env_file)"
@@ -1072,7 +1071,7 @@ expect_status 1
 expect_out "holds a line shaped like an age"
 expect_no_secrets
 
-# M5 residual: under --advisory (update.sh), the read key is not taken from
+# Under --advisory (update.sh), the read key is not taken from
 # a key file, since DTK_OFFSITE_KEY_FILE can come from .env there.
 case_ "advisory run ignores the read key in DTK_OFFSITE_KEY_FILE"
 legacy_unit

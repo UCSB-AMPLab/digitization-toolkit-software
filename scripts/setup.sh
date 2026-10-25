@@ -35,8 +35,8 @@ DTK_USER_HOME=$(eval echo "~$DTK_USER")
 PIXI_BIN="$DTK_USER_HOME/.pixi/bin/pixi"
 
 # Pinned pixi for provisioning (NEH-170). The committed pixi.lock is
-# lock-file format v7 (re-locked with pixi 0.73 on 2026-07-24 — see
-# backend/DEVELOPMENT.md); older pixi cannot read it at all, and an unpinned
+# lock-file format v7, written by pixi 0.73 (see backend/DEVELOPMENT.md);
+# older pixi cannot read it at all, and an unpinned
 # `curl | bash` gives every unit whatever is latest that day. Bump this pin
 # and the lock format together, deliberately. v0.73.0 is what the bench and
 # Rionegro units run. Keep in lockstep with README.md / README-SETUP.md.
@@ -89,7 +89,8 @@ echo ""
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "→ No .env found — creating it from .env.example..."
     # 0600 from the start: dtk-secrets later writes the real SECRET_KEY and
-    # DB password into this file preserving whatever mode it has.
+    # DB password into this file. It asserts mode 600 on every boot, but leaves
+    # the mode as it is when it cannot establish a non-root owner.
     install -m 600 -o "$DTK_USER" -g "$DTK_USER" \
         "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
     echo "  Review it (HOST_IP and CORS_ORIGINS in particular)."
@@ -104,9 +105,10 @@ fi
 # .gitmodules registers the submodules over SSH (developers push over SSH),
 # but appliances have no GitHub key — and the repos are public, so HTTPS
 # fetches work fine. A config-level rewrite survives any branch/tag checkout
-# that restores .gitmodules; hand-editing that file does not (the Rionegro
-# unit was found running exactly such an edit, one checkout away from a
-# mid-update "Permission denied (publickey)"). The rewrite lives in
+# that restores .gitmodules; hand-editing that file does not: the next
+# checkout restores the SSH URLs and the update fails mid-way with
+# "Permission denied (publickey)" (the Rionegro unit was found running such an
+# edit). The rewrite lives in
 # DTK_USER's global git config because the documented update workflow runs
 # git pull / submodule update as that user.
 echo "→ Configuring HTTPS fallback for GitHub submodule URLs..."
@@ -189,7 +191,6 @@ fi
 # 6. Installing packages and binaries for cameras
 # ---------------------------------------------------------------------------
 
-# gPhoto2
 if sudo apt install -y gphoto2; then
     echo "gPhoto2 package installed"
     echo ""

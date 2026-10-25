@@ -268,7 +268,7 @@ done
 echo "  /etc/chromium{,-browser}/policies/managed/dtk-no-password-manager.json  ✓"
 echo "  /etc/chromium{,-browser}/policies/managed/dtk-no-translate.json  ✓"
 
-# ── 3. Remove old kiosk.service if present (replaced by .bash_profile) ──────
+# ── 3. Disable kiosk.service if present; the kiosk runs from .bash_profile ──
 if systemctl is-enabled kiosk.service &>/dev/null; then
     echo "→ Disabling legacy kiosk.service..."
     sudo systemctl disable kiosk.service

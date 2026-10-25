@@ -26,14 +26,13 @@ set +x
 # It reports WHAT THIS RUN DID. It does not report whether offsite backup
 # works.
 #
-# That narrowing (2026-10-16) is why this file is shorter than it was.
 # Predicting whether backup works means computing the effective state of the
 # configuration: what python-dotenv will read out of .env and offsite.env
 # together, what rclone will read out of its own config, and what the backend
 # will therefore do. From in here that means reimplementing two parsers this
 # script does not own, in bash, and keeping them in step with both upstreams.
-# Five review rounds put blockers in exactly those lines, and each individual
-# fix was correct — the arithmetic was the problem, not the fixes.
+# That reimplementation is where the errors collect, so this script does not
+# attempt it.
 #
 # So: this script says which rclone it accepted, whether it wrote a credential
 # section and for which remote, whether the listing probe succeeded, and what
@@ -59,12 +58,12 @@ set +x
 #      credential, and it never replaces an existing one.
 #
 #      It does NOT read or write the project .env, in either direction, for
-#      any purpose — not for settings, and no longer even for a read-only
-#      report. That file has another writer (generate-secrets.sh rotates the
-#      database password through it) and is not written in a grammar this
-#      script can track: every attempt to read it produced a wrong statement
-#      about the unit, from a read failure that became empty data to an empty
-#      quoted value that came back as two literal quote characters.
+#      any purpose — not for settings, and not for a read-only report. That
+#      file has another writer (generate-secrets.sh rotates the database
+#      password through it) and is not written in a grammar this script can
+#      track: a read of it from here can produce a wrong statement about the
+#      unit, from a read failure that becomes empty data to an empty quoted
+#      value that comes back as two literal quote characters.
 #      .env.example's own offsite section records the division: this script
 #      writes its eight keys to offsite.env, the backend reads that file in
 #      addition to .env, and offsite.env wins on a conflict.
@@ -187,9 +186,8 @@ ADVISORY=0
 # Relocates every path this script writes under one directory. It is an
 # ARGUMENT and not an environment variable on purpose: update.sh exports every
 # .env key before calling this script, so an environment-variable override
-# could be steered by a line in .env, which is exactly how the install
-# destination once came to be the bare word `rclone`. argv cannot be reached
-# that way. Used by the dry runs, and usable by hand against a staging tree.
+# could be steered by a line in .env. argv cannot be reached that way. Used
+# by the dry runs, and usable by hand against a staging tree.
 PREFIX=""
 # The rclone config file this run is to inspect, named explicitly by whoever
 # invokes the script. An ARGUMENT for the same reason --prefix is: update.sh
@@ -197,7 +195,7 @@ PREFIX=""
 # variable could be steered by a line in .env — and this value decides which
 # file gets inspected and, on a fresh unit, written.
 #
-# It exists because inferring the file was wrong. See the note on
+# It exists because the file cannot be inferred. See the note on
 # CONFIG_PATH_ESTABLISHED: a complete [b2unit] section at the default path is
 # not evidence that it is the credential behind a remote recorded with no path
 # beside it.
@@ -350,15 +348,14 @@ RCLONE_MIN_VERSION="1.70.0"
 #   RCLONE_INSTALL_PATH   where a pinned build gets INSTALLED
 #   RCLONE_USE_BIN        which executable the backend is told to RUN
 #
-# They were one variable, read from DTK_RCLONE_BIN, and that was wrong in both
-# directions. DTK_RCLONE_BIN is a .env key that update.sh exports before
-# calling this script, and .env.example ships it as the bare word `rclone`, so
-# it arrived here as an install DESTINATION and the install targeted the
-# current working directory. In the other direction, a unit with no
-# /usr/local/bin/rclone but a new-enough /usr/bin/rclone had the install
-# correctly skipped and then got DTK_RCLONE_BIN=/usr/local/bin/rclone written
-# into .env — a path with no file at it, so the backend would shell out to
-# nothing.
+# One variable read from DTK_RCLONE_BIN would be wrong in both directions.
+# DTK_RCLONE_BIN is a .env key that update.sh exports before calling this
+# script, and .env.example ships it as the bare word `rclone`, so read as an
+# install DESTINATION it would target the current working directory. In the
+# other direction, a unit with no /usr/local/bin/rclone but a new-enough
+# /usr/bin/rclone correctly skips the install, and recording
+# /usr/local/bin/rclone for it would name a path with no file at it, so the
+# backend would shell out to nothing.
 #
 # /usr/local/bin precedes /usr/bin on the default PATH and on dtk.service's
 # explicit PATH, so a pinned build installed there shadows an apt one rather
@@ -378,22 +375,21 @@ RCLONE_CONFIG_PATH="$RCLONE_CONFIG_DEFAULT"
 # left OUT of offsite.env rather than written, so a path this run never
 # established is not overridden — see write_offsite_env.
 #
-# THERE USED TO BE A FOURTH, AND IT WAS A REAL MISBEHAVIOUR. A run that found a
-# complete section for the remote it was about to record, at whatever path it
-# happened to be inspecting, treated that as establishing the path. The
-# evidence for it is the section NAME, which is not evidence at all:
+# A complete section for the remote about to be recorded, found at whatever
+# path the run happens to be inspecting, does NOT establish the path. The
+# evidence would be the section NAME, which is not evidence at all:
 #
 #   .env selects a working /opt/archive/live.conf; offsite.env records
 #   DTK_OFFSITE_REMOTE=b2unit:archive and omits DTK_RCLONE_CONFIG; the default
 #   /var/lib/dtk/rclone.conf holds a complete [b2unit] for a different
 #   institution's bucket, left behind by an earlier provisioning attempt.
 #
-# The run inspected the default path, found a complete [b2unit], concluded
-# that this was the credential behind the recorded remote, and wrote
-# DTK_RCLONE_CONFIG=/var/lib/dtk/rclone.conf — promoting the stale credential
-# over the working one, and reporting success.
+# A run that treated the section name as evidence would inspect the default
+# path, find a complete [b2unit], conclude that this was the credential behind
+# the recorded remote, and write DTK_RCLONE_CONFIG=/var/lib/dtk/rclone.conf —
+# promoting the stale credential over the working one, and reporting success.
 #
-# So a routine update now PRESERVES an omitted path: it rewrites offsite.env
+# So a routine update PRESERVES an omitted path: it rewrites offsite.env
 # without DTK_RCLONE_CONFIG, and whatever .env sets stays in force. The
 # bucket-only recovery, which does need the path recorded beside the selector
 # it writes, REQUIRES the path to be named with --config-path rather than
@@ -511,8 +507,7 @@ grep_status() {   # grep_status <grep args...> -> prints grep's exit status
 # config_remote_state.
 #
 # With neither timeout(1) nor gtimeout(1) on the box there is no bound to be
-# had, and the previous version ran the command anyway with a warning. §2 now
-# refuses before any bounded call instead, so this function is never reached
+# had. §2 refuses before any bounded call, so this function is never reached
 # unbounded; it returns 125 rather than running the command, as a backstop for
 # a future caller added above that gate. 125 is timeout(1)'s own "the bound
 # could not be applied" status, and it is not 1, so config_remote_state reads
@@ -539,9 +534,9 @@ bounded() {   # bounded <seconds> <command> [args...]
 
 # ── Validation of every value this script writes anywhere ───────────────────
 #
-# DO NOT REMOVE THESE AS NOW-DECORATIVE. This script no longer writes .env, so
-# nothing it produces is sourced by root in update.sh or rollback-update.sh.
-# What remains is still real:
+# THESE ARE NOT DECORATIVE. This script does not write .env, so nothing it
+# produces is sourced by root in update.sh or rollback-update.sh, but its
+# values still reach parsers:
 #
 #   • /var/lib/dtk/offsite.env is parsed by python-dotenv in the backend.
 #   • The rclone config is an INI file, where a newline or a '[' in a value
@@ -556,11 +551,10 @@ bounded() {   # bounded <seconds> <command> [args...]
 # on the way in is the fix.
 
 # B2 bucket names, per Backblaze's native API: 6 to 63 characters of letters,
-# digits, hyphens and periods. Uppercase and periods are both permitted there,
-# which an earlier version of this line refused — it had been written from S3
-# convention rather than from B2's rules, so `myBucket`, `bucket.name` and any
-# name over 50 characters were rejected at provisioning, in an archive, with a
-# message asserting a rule B2 does not have.
+# digits, hyphens and periods. Uppercase and periods are both permitted there.
+# A check written from S3 convention rather than from B2's rules would reject
+# `myBucket`, `bucket.name` and any name over 50 characters at provisioning,
+# in an archive, with a message asserting a rule B2 does not have.
 #
 # What this check is FOR, since the class looks lax: catching an operator's
 # typo or a character pasted invisibly out of the Backblaze console, and
@@ -574,14 +568,14 @@ bounded() {   # bounded <seconds> <command> [args...]
 # stricter than the native one and accepts lowercase only, so a bucket that
 # will ever be served over the S3 endpoint should be named in lowercase.
 valid_bucket()   { ! holds_age_secret_key "$1" && [[ "$1" =~ ^[A-Za-z0-9.-]{6,63}$ ]]; }
-# Beside the pattern, for the same reason B2_TOKEN_CLASS is: these were in two
-# places, and only the pattern fails loudly when the two drift apart.
+# Beside the pattern, for the same reason B2_TOKEN_CLASS is: only the pattern
+# fails loudly when the two drift apart.
 B2_BUCKET_RULE="6-63 characters of letters, digits, hyphens and periods"
 # B2 key ids and application keys: opaque secrets whose alphabet Backblaze
 # does not specify, so the class is as wide as it can be while still excluding
 # every character that could change the meaning of a file these values are
-# written into. It was narrower — letters and digits only — and that would
-# have refused a credential Backblaze's own documentation shows as an example
+# written into. A narrower class — letters and digits only — would refuse a
+# credential Backblaze's own documentation shows as an example
 # (N2Zug0evLcHDlh_L0Z0AJhiGGdY, which has an underscore in it), at
 # provisioning, in an archive.
 #
@@ -590,17 +584,16 @@ B2_BUCKET_RULE="6-63 characters of letters, digits, hyphens and periods"
 # parses it rather than executing it, but a newline, a '[' or a '#' would let
 # a key add a second remote, redirect one, or truncate the file.
 #
-# It also stays rather than being dropped as unknowable because Backblaze warn
-# that copying a highlighted key out of their console can carry hidden
-# formatting characters, and that the symptom is an invalid-key error. Those
+# The class is checked at all, although the alphabet is unspecified, because
+# Backblaze warn that copying a highlighted key out of their console can
+# carry hidden formatting characters, and that the symptom is an invalid-key error. Those
 # characters do not match this class, so they are caught here with a message
 # naming what happened — instead of becoming a backup that fails every thirty
 # minutes looking like a credentials problem, which is the exact failure
 # NEH-227 already lost a day to.
 valid_b2_token() { ! holds_age_secret_key "$1" && [[ "$1" =~ ^[A-Za-z0-9_+/=-]+$ ]]; }
-# Kept beside the pattern on purpose. These were 400 lines apart, and a
-# mutation test caught the consequence: with the pattern reverted and the
-# wording left alone, the script enforced one class while naming another. Only
+# Kept beside the pattern on purpose: with the pattern changed and the wording
+# left alone, the script would enforce one class while naming another. Only
 # one of those two edits fails loudly, so they live together.
 B2_TOKEN_CLASS="letters, digits, and _ + / = - only"
 # An absolute path with no character that could change the meaning of a file
@@ -781,20 +774,20 @@ reject_value() {   # reject_value <what it is> <the value> <the rule>
 #
 # One writer, one grammar, rebuilt whole on every run rather than edited in
 # place. .env.example's offsite section records the division of labour: this
-# script writes DTK_OFFSITE_REMOTE, DTK_RCLONE_BIN and DTK_RCLONE_CONFIG here,
-# and since 0.1.0 DTK_OFFSITE_READ_REMOTE, DTK_OFFSITE_TENANT and
-# DTK_OFFSITE_DUMP_RECIPIENT; the backend reads this file IN ADDITION to the
-# project .env, and this file WINS on a conflict.
+# script writes DTK_OFFSITE_REMOTE, DTK_RCLONE_BIN, DTK_RCLONE_CONFIG,
+# DTK_OFFSITE_READ_REMOTE, DTK_OFFSITE_TENANT, DTK_OFFSITE_DUMP_RECIPIENT,
+# DTK_FISQUA_TOKEN and DTK_FISQUA_ENV here; the backend reads this file IN
+# ADDITION to the project .env, and this file WINS on a conflict.
 #
 # Because this script is the only writer, the whole file is checkable against
 # the grammar the writer emits — and it is checked WHOLE, before any value is
-# taken out of it. That is the point. Reading key by key meant deciding, per
-# key, whether a line was close enough, and python-dotenv kept disagreeing
-# with those decisions: a quoted key name, a later bare declaration, and
-# assignment-shaped text inside another variable's multiline quoted value all
-# read one way here and another way in the backend. The two disagreed about
-# what the unit was configured to do, and this reader was the one deciding
-# whether to write.
+# taken out of it. Reading key by key means deciding, per key, whether a line
+# is close enough, and python-dotenv disagrees with such decisions: a quoted
+# key name, a later bare declaration, and assignment-shaped text inside
+# another variable's multiline quoted value all read one way in such a reader
+# and another way in the backend. The two would then disagree about what the
+# unit is configured to do, and this reader is the one deciding whether to
+# write.
 #
 # So every line must be either a '#' comment or exactly KEY=value, with KEY
 # one of the eight this script writes, no key twice, and the value inside
@@ -803,8 +796,8 @@ reject_value() {   # reject_value <what it is> <the value> <the rule>
 # read at all, nothing is changed, and the operator is told which line did it.
 # A file this script did not write is not a file this script can interpret.
 #
-# TWO EXACT NOTES ON BLANK LINES, because this comment used to say "no blank
-# lines" and that overstated what the reader enforces. The content is read
+# EXACT NOTES ON BLANK LINES, since "no blank lines" would overstate what the
+# reader enforces. The content is read
 # through a command substitution, which strips every trailing newline, so
 # trailing blank lines at the END of the file are not visible here at all and
 # are accepted; an empty file reads as one empty line and is MALFORMED; a
@@ -962,8 +955,8 @@ offsite_malformed() {
 
 # Write offsite.env whole, atomically: a temp file in the same directory, all
 # settings, verified, then renamed over the target. No line editing, no filter
-# over existing content, no key reconciliation — all of which existed only
-# because this was editing a file it did not own.
+# over existing content, no key reconciliation: this script owns the file, so
+# it has nothing to preserve from it.
 #
 # 0600 and the service user: the remote name is not a secret, but this file
 # sits in the same directory as the credential and the secrets-provenance
@@ -977,19 +970,17 @@ offsite_malformed() {
 # backend's env_file tuple, so a key present here wins over the same key in
 # .env — and present-but-empty wins with nothing.
 #
-#   <remote>: this file used to carry DTK_OFFSITE_REMOTE unconditionally,
-#   including empty, so the first run of this version on a unit an earlier
-#   version had configured through .env wrote an empty value over a working
-#   remote. The backend reads absent and empty alike, so omitting it is both
-#   equivalent and safe.
+#   <remote>: DTK_OFFSITE_REMOTE written empty would override a working
+#   remote that .env configures. The backend reads absent and empty alike, so
+#   omitting it is both equivalent and safe.
 #
-#   <config-path>: the same hazard, live for longer. A working unit whose
-#   .env said DTK_RCLONE_CONFIG=/opt/archive/rclone.conf, with its remote
-#   preserved from offsite.env, had that path overridden with
-#   /var/lib/dtk/rclone.conf — a file that need not exist. Working backup
-#   became failing backup, and the run reported success. So the path is
-#   recorded only when THIS RUN established it: it wrote a credential there,
-#   or it read that same path out of offsite.env.
+#   <config-path>: the same hazard. On a working unit whose .env says
+#   DTK_RCLONE_CONFIG=/opt/archive/rclone.conf, with its remote preserved from
+#   offsite.env, writing /var/lib/dtk/rclone.conf here — a file that need not
+#   exist — would turn working backup into failing backup while the run
+#   reported success. So the path is recorded only when THIS RUN established
+#   it: it wrote a credential there, it read that same path out of
+#   offsite.env, or --config-path named it.
 #
 #   <read-remote>, <tenant>, <recipient>, <fisqua-token>, <fisqua-env>: the
 #   same rule, for the same reason. Each is written when this run was given it
@@ -1191,14 +1182,14 @@ key_file_value() {
 # what happened there is that the 30-second bound expired, and a clock running
 # out is not rclone's answer about the file.
 #
-# ASK RCLONE, AND ASK IT FOR STRUCTURE. This was an awk pass over the text of
-# `config show`, and before that an awk pass imitating goconfig, and both
-# disagreed with the real parser. `config dump` emits JSON keyed by remote
+# ASK RCLONE, AND ASK IT FOR STRUCTURE. An awk pass over the text of `config
+# show`, or one imitating goconfig, disagrees with the real parser. `config
+# dump` emits JSON keyed by remote
 # name with exact field names, so there is no shape to imitate: the field is
 # looked up by name or it is not there.
 #
-# Verified against native rclone 1.70.2 on 2026-10-16, including on round 5's
-# own decoy fixture, which is what killed the text pass:
+# Verified against native rclone 1.70.2 on 2026-10-16, including on this
+# decoy config, which a text pass misreads:
 #
 #     [b2unit]
 #     type = b2
@@ -1211,8 +1202,8 @@ key_file_value() {
 #   `config dump` reports  "key": ""  and puts  "key = decoy": "harmless"  in
 #   a field of its own. The credential is empty, and the dump says so.
 #
-# The other disagreements the text pass had to imitate, all of which the dump
-# simply reports: last assignment wins, so "key = k" then "key =" leaves the
+# The other behaviours a text pass would have to imitate, all of which the
+# dump reports: last assignment wins, so "key = k" then "key =" leaves the
 # key EMPTY; "[ b2unit ]" with spaces inside the brackets is a valid section;
 # "type: b2" is a valid assignment, colon and equals both separating; a
 # trailing "# comment" after a value is PART OF THE VALUE; one unparseable
@@ -1269,21 +1260,21 @@ config_remote_state() {   # <rclone> <file> <remote>
     fi
     # `if cmd; then` and not `set +e`: an ERR trap fires on a failing command
     # whether or not errexit is on, and only a condition context suppresses
-    # it. With `set +e` here, a config rclone cannot load tripped the trap
-    # inside this command substitution and the caller got the generic
+    # it. With `set +e` here, a config rclone cannot load would trip the trap
+    # inside this command substitution and the caller would get the generic
     # "stopped unexpectedly" abort instead of the diagnosis below.
     #
     # --ask-password=false because this runs unattended, from setup.sh and
     # from update.sh: rclone otherwise prompts for the password of an
-    # encrypted config, and the prompt went to a suppressed stderr, so the run
-    # hung. That flag is not a bound on the invocation — see bounded.
+    # encrypted config, the prompt goes to a suppressed stderr, and the run
+    # hangs. That flag is not a bound on the invocation — see bounded.
     if dump="$(bounded "$RCLONE_READ_TIMEOUT" "$rc_bin" --config "$f" \
                    --ask-password=false config dump 2>/dev/null)"; then
         st=0
     else
         st=$?
     fi
-    # TWO DIFFERENT ANSWERS, and they used to be one.
+    # TWO DIFFERENT ANSWERS.
     #
     # Status 1 is rclone having been asked and having refused the file: `config
     # dump` exits 1 on a config it cannot load, which is what `unreadable`
@@ -1293,9 +1284,9 @@ config_remote_state() {   # <rclone> <file> <remote>
     # nothing about the file. timeout(1) exits 124 when the deadline expires,
     # 125 when the bound itself could not be applied, 126 when the command is
     # not executable and 127 when it is not found, and the -k follow-up KILL
-    # lands as 137. A deadline expiring on a config whose password command
-    # never returns was reported as "rclone cannot load it" — a verdict on the
-    # file, from a clock running out.
+    # lands as 137. Reporting a deadline that expired on a config whose
+    # password command never returns as "rclone cannot load it" would be a
+    # verdict on the file, from a clock running out.
     #
     # Exit 1 for a config it refuses is what rclone 1.70.2 was verified to do
     # on an unparseable line. If some other refusal of its own returns a
@@ -1318,7 +1309,7 @@ config_remote_state() {   # <rclone> <file> <remote>
     fi
     # The check itself failing is not a field being missing. Saying
     # `incomplete` here would be a claim about the credential made on no
-    # evidence, which is how a usable one came to be reported unusable.
+    # evidence, and could report a usable one as unusable.
     if [ "$st" -ne 0 ]; then
         echo "undetermined"; return 0
     fi
@@ -1441,11 +1432,11 @@ probe_listing_once() {
     # remote_path() in backend app/core/catalogue_backup.py and
     # image_upload.py both address <remote>/<tenant>/...), and a key scoped to
     # that prefix, as an upload key may be, is refused a listing of the bucket
-    # root while every listing the backend makes succeeds. The probe's purpose
-    # is unchanged — a wrong key id, application key or bucket still fails it
-    # — and it now asks the same question the read probe asks, of the same
-    # place. With no tenant, the backend uploads nothing (configured_tenant),
-    # and the probe lists the bucket as it always has.
+    # root while every listing the backend makes succeeds. A wrong key id,
+    # application key or bucket still fails the probe, and it asks the same
+    # question the read probe asks, of the same place. With no tenant, the
+    # backend uploads nothing (configured_tenant), and the probe lists the
+    # bucket.
     #
     # Nothing is inferred from the two probes together. Both keys may list,
     # so a failed upload listing beside a successful read listing does not
@@ -1870,7 +1861,7 @@ probe_read_listing_once() {
 # So with any of those set, neither the classification of the config file nor a
 # successful listing says anything about the credential or the bucket. This
 # does NOT model rclone's precedence rules — which variable wins over which
-# file is exactly the arithmetic this script stopped doing. It detects that an
+# file is exactly the arithmetic this script does not do. It detects that an
 # override is present and stops claiming.
 #
 # Names only, never values: RCLONE_B2_KEY holds a key.
@@ -1949,8 +1940,8 @@ run_report() {
 # advisory mode it says plainly that it is not failing the caller, so a reader
 # of an update log can tell "this was tolerated" from "nothing went wrong".
 #
-# It says nothing about the state of offsite backup. It used to say backup
-# "stays unprovisioned on this unit", which is a claim about the unit — and
+# It says nothing about the state of offsite backup, such as that backup
+# "stays unprovisioned on this unit": that is a claim about the unit, and
 # several of the paths that reach here have inspected no configuration at all
 # (a lock that could not be taken, an architecture with no pinned build).
 provision_failed() {
@@ -2029,11 +2020,11 @@ offsite_write_or_fail() {   # <remote-or-empty>
     fi
 }
 
-# What the inspected config file is, in the same words everywhere. Three
-# branches used to describe the same five states in three wordings, which is
-# how the three copies came to disagree with each other and with the state
-# they were describing. Sets RUN_CRED to match. `undetermined` is not here: it
-# never reaches a branch that prints a diagnosis.
+# What the inspected config file is, in the same words everywhere: one
+# description shared by every branch, so that separate copies cannot disagree
+# with each other or with the state they describe. Sets RUN_CRED to match.
+# `undetermined` is not here: it never reaches a branch that prints a
+# diagnosis.
 describe_config_state() {   # describe_config_state <indent>
     local i="$1"
     case "$CONFIG_STATE" in
@@ -2079,8 +2070,8 @@ describe_config_state() {   # describe_config_state <indent>
 #
 # It reports the failing command rather than $LINENO: inside an ERR trap
 # $LINENO gives the line of the enclosing compound statement, not of the
-# command that failed, so it pointed at the `fi` of the install block for a
-# failure in the middle of it. $BASH_COMMAND is the command text,
+# command that failed, so it would point at the `fi` of the install block for
+# a failure in the middle of it. $BASH_COMMAND is the command text,
 # pre-expansion, and no command in this script carries the application key:
 # the key only ever reaches a heredoc and a variable, never an argument list.
 # Keep it that way if you add one.
@@ -2092,10 +2083,11 @@ on_unexpected_error() {
     #
     # `set -E` carries this trap into command substitutions, and a subshell's
     # exit status becomes the substitution's status while its STDOUT becomes
-    # the substitution's VALUE. So an advisory `exit 0` here made the subshell
-    # succeed and handed the caller this diagnostic text as data: when the
-    # handler fired inside $(mktemp -d), TMPDIR_RCLONE was assigned an error
-    # message and the script carried on with that string as a directory path.
+    # the substitution's VALUE. So an advisory `exit 0` here would make the
+    # subshell succeed and hand the caller this diagnostic text as data: if the
+    # handler fired inside $(mktemp -d), TMPDIR_RCLONE would be assigned an
+    # error message and the script would carry on with that string as a
+    # directory path.
     # A failure that becomes a value is worse than one that stops the run,
     # because everything after it is reasoning about an error message.
     #
@@ -2130,7 +2122,7 @@ if holds_age_secret_key "$PREFIX" || holds_age_secret_key "$CONFIG_PATH_ARG"; th
     exit 1
 fi
 
-# No .env guard is needed any more, and its absence is the point: the install
+# No .env guard is needed: the install
 # destination and the settings file are derived from constants and from
 # --prefix, which is an argument. There is no environment variable for .env to
 # set that could move either of them.
@@ -2219,13 +2211,13 @@ if command -v flock >/dev/null 2>&1; then
         echo "  root and mounted read-write."
         provision_failed
     fi
-    # TWO DIFFERENT THINGS, and they used to print the same message.
+    # TWO DIFFERENT THINGS, with different messages.
     #
     # flock(1) exits with the conflict status — 1, unless --conflict-exit-code
     # says otherwise — when the lock is held by someone else or the -w wait
     # ran out. Any OTHER nonzero status is flock failing to operate at all: a
-    # bad file descriptor, an unsupported filesystem, an OS error. Both were
-    # read as contention, so a status 71 returned instantly produced "another
+    # bad file descriptor, an unsupported filesystem, an OS error. Reading both
+    # as contention would turn a status 71 returned instantly into "another
     # run still holds the lock after 120 seconds" — an owner that might not
     # exist, and 120 seconds that did not elapse.
     #
@@ -2389,8 +2381,8 @@ if [ "$NEED_INSTALL" -eq 1 ]; then
     fi
 
     # Stage beside the final path, ASSERT the staged file, and only then
-    # promote it. Asserting after the rename — which is what this did — left
-    # an unusable binary at the final path whenever the assertion failed,
+    # promote it. Asserting after the rename would leave an unusable binary
+    # at the final path whenever the assertion failed,
     # which is the one state the assertion exists to prevent. An absent rclone
     # is a clear failure; a present, unusable one is a day of debugging.
     mkdir -p "$(dirname "$RCLONE_INSTALL_PATH")"
@@ -2468,9 +2460,8 @@ echo "→ Configuring the offsite remote..."
 # script is called synchronously from update.sh at its step 4c, before the
 # pre-migration backup, so a stall here is an update that never finishes.
 #
-# The previous version warned and carried on unbounded. Refusing instead costs
-# nothing in the field: Raspberry Pi OS ships coreutils, so timeout(1) is
-# present on every unit this runs on, and a box without it is not a box to
+# Refusing costs nothing in the field: Raspberry Pi OS ships coreutils, so
+# timeout(1) is present on every unit this runs on, and a box without it is not a box to
 # start an unbounded rclone on.
 if [ -z "$TIMEOUT_BIN" ]; then
     echo "✗ rclone: neither timeout(1) nor gtimeout(1) was found on PATH, so"
@@ -2782,8 +2773,8 @@ fi
 # ── 2.2b The read key ───────────────────────────────────────────────────────
 # From the key file ONLY (READ_KEY_ID, READ_APP_KEY), never from the
 # environment, and never under --advisory. The write key still accepts
-# DTK_B2_KEY_ID and DTK_B2_APP_KEY, as it always has; the read key is new and
-# does not take on that exposure. update.sh exports every .env key before
+# DTK_B2_KEY_ID and DTK_B2_APP_KEY; the read key does not take on that
+# exposure. update.sh exports every .env key before
 # calling this script, so anything it could read from the environment could
 # be planted by a line in .env — and that includes DTK_OFFSITE_KEY_FILE
 # itself: a DTK_OFFSITE_KEY_FILE= line in .env would feed whatever file it
@@ -2929,9 +2920,9 @@ read_key_unused() {   # read_key_unused <why>
 }
 
 # A recorded read remote that names the upload remote is refused HERE, before
-# 2b can publish a credential: refused after the fresh write, it left a config
-# in place that the next run would preserve and the operator would have to
-# move aside by hand. With a read key supplied the recorded value is replaced,
+# 2b can publish a credential: refused after the fresh write, it would leave a
+# config in place that the next run would preserve and the operator would have
+# to move aside by hand. With a read key supplied the recorded value is replaced,
 # so there is nothing to refuse. reconcile_recorded_read_remote keeps the same
 # check as a backstop.
 if [ "$HAVE_READ_KEY" -eq 0 ] && [ -n "$READ_REMOTE_FINAL" ]; then
@@ -2951,10 +2942,10 @@ if [ "$HAVE_READ_KEY" -eq 0 ] && [ -n "$READ_REMOTE_FINAL" ]; then
 fi
 
 # ── 2.3 Which remote is recorded, and what is in the config file ────────────
-# The inspection used to be hardcoded to the remote this script writes, so a
-# recorded remote of "missing:archive" alongside a complete [b2unit] section
-# was reported as working — it inspected the remote it expected instead of the
-# one recorded. The name is now taken from the recorded settings.
+# The name inspected is taken from the recorded settings, not fixed to the
+# remote this script writes: inspecting [b2unit] when the recorded remote is
+# "missing:archive" would report a working remote that is not the one
+# recorded.
 #
 # A spec is "<remote>:<bucket>". Anything else is not something to interpret.
 SELECTED_NAME=""
@@ -2985,10 +2976,8 @@ CONFIG_STATE="$(config_remote_state "$RCLONE_USE_BIN" "$RCLONE_CONFIG_PATH" "$CH
 # ── 2.4 The classification could not be run ─────────────────────────────────
 # FIRST, before any branch that prints a diagnosis. `undetermined` means this
 # script does not know what is in that file, and every branch below reasons
-# from knowing. The HALF-CONFIGURED message used to print its headline — "and
-# offsite backup is NOT working" — before reaching the arm that said no claim
-# was being made, so a working credential plus a failed check got a false
-# failure diagnosis, and then exited 0.
+# from knowing: reaching one of them, a working credential plus a failed check
+# would get a false failure diagnosis.
 #
 # A failed check is not an answer. It stops the run through provision_failed,
 # so setup.sh fails and update.sh carries on, and nothing is written either
@@ -3042,8 +3031,8 @@ if [ "$HAVE_KEY" -eq 0 ] && [ -n "$SELECTED_NAME" ] && [ "$CONFIG_STATE" = "comp
     # a complete section named $CHECK_NAME at the path it was inspecting, and
     # a section name is not evidence that this is the file the recorded remote
     # is served from — see the note on CONFIG_PATH_ESTABLISHED for the
-    # counterexample this rule promoted the wrong file in. If offsite.env
-    # recorded a path, or --config-path named one, it is already established
+    # counterexample in which treating it as evidence promotes the wrong
+    # file. If offsite.env recorded a path, or --config-path named one, it is already established
     # and gets written back; if neither did, the key stays out and whatever
     # .env sets stays in force.
     #
@@ -3102,18 +3091,19 @@ if [ "$HAVE_KEY" -eq 1 ]; then
     # `missing` rather than "no section of ours" because the write below
     # produces the config file WHOLE: on a file that exists and holds another
     # remote, writing it would delete that remote along with everything else
-    # in it. And `unreadable` must not authorise an overwrite either, which is
-    # the half of this that a parser disagreement once got wrong from the
-    # other side: a config rclone reads perfectly was reported absent, and
-    # absence reached this path.
+    # in it. And `unreadable` must not authorise an overwrite either; nor may
+    # any parser's verdict of absence, since a parser that disagrees with
+    # rclone can report a config rclone reads perfectly as absent, and
+    # absence reaches this path.
     #
     # ONE EXCEPTION, and it is not a replacement: the credential is the one
     # this script wrote on an earlier run that then failed before it could
     # record anything. That run wrote the section, read it back, and then
-    # could not write offsite.env (a full card, say). Re-running with the same
-    # key file found a complete section, preserved it, and exited 0 with the
-    # settings never published; a later run with no key cannot recover it
-    # either, because 2a needs a recorded remote and none was recorded.
+    # could not write offsite.env (a full card, say). Without this exception,
+    # re-running with the same key file would find a complete section,
+    # preserve it, and never publish the settings; a later run with no key
+    # cannot recover it either, because 2a needs a recorded remote and none
+    # was recorded.
     #
     # So when the section is complete and its key id and type are the ones
     # supplied, the file is left exactly as it is and the run goes on to
@@ -3129,10 +3119,10 @@ if [ "$HAVE_KEY" -eq 1 ]; then
     # recorded remote, or a comparison that could not be made takes the
     # preservation path below unchanged.
     #
-    # CONFIG_PATH_ESTABLISHED is NOT set by finding a match — that is the
-    # fourth establishing condition the note on that variable removed, and a
-    # matching id at an inspected path is no better evidence than a matching
-    # section name. If the path was not established some other way,
+    # CONFIG_PATH_ESTABLISHED is NOT set by finding a match: the note on that
+    # variable explains why a section found at an inspected path does not
+    # establish it, and a matching id there is no better evidence than a
+    # matching section name. If the path was not established some other way,
     # DTK_RCLONE_CONFIG stays out of offsite.env.
     RESUME_INTERRUPTED=0
     if [ "$CONFIG_STATE" = "complete" ] \
@@ -3176,11 +3166,10 @@ if [ "$HAVE_KEY" -eq 1 ]; then
         # operator supplied a credential for this unit and the unit is holding
         # a different one: either the key material is wrong or the file is,
         # and a fresh unit must not be handed over with that unresolved. The
-        # branch said exit 0 while it also caught the benign case — a run
-        # interrupted between writing the credential and publishing the
-        # settings, where the installed credential IS the one supplied. That
-        # case now resumes above and never reaches here, so what is left is
-        # only a credential this script cannot account for.
+        # benign case — a run interrupted between writing the credential and
+        # publishing the settings, where the installed credential IS the one
+        # supplied — resumes above and never reaches here, so what reaches
+        # here is only a credential this script cannot account for.
         #
         # update.sh calls this script --advisory, where provision_failed
         # prints its note and returns 0: an update to a working appliance is
@@ -3224,10 +3213,10 @@ RCLONE_CONF
     # `ln` and not `mv`: the publish must be atomic AND non-replacing.
     #
     # `mv` over the final path replaces whatever is there without being
-    # asked, which made the whole "only `missing` authorises a write" rule
-    # depend on the classification above still being true by the time the
+    # asked, which would make the whole "only `missing` authorises a write"
+    # rule depend on the classification above still being true by the time the
     # write happens. Between those two points another invocation can publish
-    # a credential of its own, and the `mv` would have deleted it — the run
+    # a credential of its own, and a `mv` would delete it — the run
     # lock makes that window small rather than absent, and a unit whose
     # flock(1) is missing has no lock at all. `ln` fails with EEXIST instead,
     # which is the answer this path wants: a credential that arrived while we
@@ -3319,11 +3308,11 @@ fi
 #   sudo DTK_OFFSITE_BUCKET=<bucket> provision-rclone.sh \
 #       --config-path <the file that holds the credential>
 #
-# It had nowhere to land. A bucket makes B2_BUCKET non-empty with no key id
-# and no application key beside it, so the partial-key branch below caught it
-# and reported "INCOMPLETE key material — missing: KEY_ID APP_KEY" — correct
-# for an operator half way through typing a new credential, and wrong for this
-# one, where the credential is already there and only the selector is missing.
+# A bucket alone makes B2_BUCKET non-empty with no key id and no application
+# key beside it, so the partial-key branch below would catch it and report
+# "INCOMPLETE key material — missing: KEY_ID APP_KEY" — correct for an
+# operator half way through typing a new credential, and wrong for this one,
+# where the credential is already there and only the selector is missing.
 #
 # So it runs BEFORE the partial-key branch, and it is narrow: ONLY the bucket
 # supplied, nothing recorded, rclone reading the credential as complete, and
@@ -3331,15 +3320,15 @@ fi
 # key alongside the bucket is an operator part way through a NEW credential.
 # Nothing here creates or replaces a credential.
 #
-# The last of those four conditions is the one added when the third
-# config-path rule was dropped. This branch writes DTK_OFFSITE_REMOTE, and a
+# The last of those four conditions exists because this branch writes
+# DTK_OFFSITE_REMOTE, and a
 # selector recorded without the path its credential is in names a remote the
 # backend may not find — so the path has to be recorded beside it. What it may
 # NOT do is infer the path from the fact that a complete section of the right
-# NAME happens to be at the path it was inspecting: that is how a stale
-# credential at the default path came to be promoted over a working one named
-# in .env. The path is therefore required to come from offsite.env or from
-# --config-path, and the refusal below says so.
+# NAME happens to be at the path it was inspecting: that would promote a stale
+# credential at the default path over a working one named in .env. The path
+# is therefore required to come from offsite.env or from --config-path, and
+# the refusal below says so.
 if [ -n "$B2_BUCKET" ] && [ -z "$B2_KEY_ID" ] && [ -z "$B2_APP_KEY" ] \
         && [ "$CONFIG_STATE" = "complete" ] && [ "$CONFIG_PATH_ESTABLISHED" -eq 0 ]; then
     echo "  ⚠ a bucket was supplied with no key material, which is the"
@@ -3407,12 +3396,11 @@ fi
 # DTK_OFFSITE_REMOTE, and it declares DTK_RCLONE_CONFIG only when this run
 # established that path.
 #
-# DTK_OFFSITE_REMOTE used to be declared empty here, on the reasoning that an
-# explicit empty value states "disabled" more clearly than an absent key. It
-# states it to the wrong audience: offsite.env is later than .env in the
-# backend's env_file tuple, so an empty declaration here overrides .env with
-# nothing. On the first run of this version on a unit an earlier version had
-# configured through .env, that turned a working backup off.
+# An explicit empty DTK_OFFSITE_REMOTE might seem to state "disabled" more
+# clearly than an absent key, but it states it to the wrong audience:
+# offsite.env is later than .env in the backend's env_file tuple, so an empty
+# declaration here overrides .env with nothing, and on a unit configured
+# through .env it would turn a working backup off.
 #
 # Nothing below claims to have disabled anything, and nothing below says what
 # the backend will do: this script does not read .env and cannot speak for
