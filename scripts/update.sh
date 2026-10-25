@@ -316,6 +316,11 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         echo "  database is as the migration left it, while the code is back on"
         echo "  code-commit below. The unit was left stopped. It recorded, in"
         echo "  $UNRESOLVED_FILE:"
+    elif [ "$UNRESOLVED_KIND" = restore-failed ] && [ "$(record_field recorded-by)" = rollback-update.sh ]; then
+        echo "  A rollback dropped the database and did not finish loading its backup"
+        echo "  (it failed or was cut off): the database may be empty or partly"
+        echo "  restored. The unit was left stopped. It recorded, in"
+        echo "  $UNRESOLVED_FILE:"
     elif [ "$UNRESOLVED_KIND" = restore-failed ]; then
         echo "  That update failed, and restoring the database from its backup then"
         echo "  failed too: the database may be empty or partly restored. The unit"

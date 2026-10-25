@@ -1049,6 +1049,7 @@ CASE="rollback killed after its DROP: update.sh refuses"
 run_again "$PROJECT_ROOT/scripts/update.sh" --yes
 eq "$RC" 1 "exit status"
 has "An earlier update was left unresolved"
+has "A rollback dropped the database and did not finish loading its backup"
 CASE="rollback killed after its DROP: a second rollback completes"
 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
 eq "$RC" 0 "exit status"
