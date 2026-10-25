@@ -166,6 +166,11 @@ case "$1" in
             echo "pixi: cannot reach the registry" >&2; exit 1
         fi
         echo "$lock" > "$CASE_DIR/pixi_env"
+        if [ -n "${FAKE_STAGE_BACKEND_PIN_ON_INSTALL:-}" ] && [ ! -f "$CASE_DIR/staged" ]; then
+            git -C "$PROJECT_ROOT/backend" checkout -q "$FAKE_STAGE_BACKEND_PIN_ON_INSTALL" >/dev/null 2>&1
+            git -C "$PROJECT_ROOT" update-index --cacheinfo "160000,$FAKE_STAGE_BACKEND_PIN_ON_INSTALL,backend"
+            touch "$CASE_DIR/staged"
+        fi
         if [ -n "${FAKE_DIRTY_ON_PIXI_INSTALL:-}" ] && [ ! -f "$CASE_DIR/dirtied" ]; then
             echo "hand edit" >> "$PROJECT_ROOT/README"; touch "$CASE_DIR/dirtied"
         fi ;;
@@ -237,7 +242,7 @@ if [ "$1" = compose ]; then
             [ "$1" = "-T" ] && shift
             shift   # service
             case "$1" in
-                pg_isready) exit 0 ;;
+                pg_isready) [ -z "${FAKE_DB_UNREACHABLE:-}" ] || exit 2; exit 0 ;;
                 pg_dump)
                     n=$(( $(cat "$CASE_DIR/dumps" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CASE_DIR/dumps"
                     if [ -n "${FAKE_DUMP_FAIL_AT:-}" ] && [ "$n" = "$FAKE_DUMP_FAIL_AT" ]; then
@@ -245,9 +250,48 @@ if [ "$1" = compose ]; then
                     fi
                     echo "-- dump $n of the database at schema A"
                     cat "$CASE_DIR/db_rows" 2>/dev/null
+                    # The tables the stem guard reads, in pg_dump's order. Rows
+                    # may name @STATE@ for the case's state directory.
+                    rows() { [ -z "$1" ] || printf '%b\n' "$1" | sed "s#@STATE@#$DTK_TEST_STATE#g"; }
+                    printf 'COPY public.collections (id, name, description, filename_stem, created_at) FROM stdin;\n'
+                    rows "${FAKE_DUMP_COLLECTIONS:-}"
+                    printf '\\.\n'
+                    if [ -z "${FAKE_DUMP_NO_IMAGES:-}" ]; then
+                        if [ -n "${FAKE_DUMP_OLD_IMAGES_SCHEMA:-}" ]; then
+                            printf 'COPY public.record_images (id, record_id, filename, file_path, format) FROM stdin;\n'
+                        else
+                            printf 'COPY public.record_images (id, record_id, filename, file_path, format, is_current, master_freed_at, master_freed_bytes) FROM stdin;\n'
+                        fi
+                        rows "${FAKE_DUMP_RECORD_IMAGES:-}"
+                        printf '\\.\n'
+                    fi
+                    printf 'COPY public.records (id, title, collection_id, capture_mode) FROM stdin;\n'
+                    rows "${FAKE_DUMP_RECORDS:-}"
+                    printf '\\.\n'
                     seq 1 300 ;;
                 psql)
                     case "$*" in *alembic_version*) echo "${FAKE_DB_REV:-rev-B}"; exit 0 ;; esac
+                    case "$*" in
+                        *"FROM pg_database WHERE datname"*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -n "${FAKE_DB_ABSENT:-}" ] || echo 1
+                            exit 0 ;;
+                        *"information_schema.columns"*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -n "${FAKE_NO_STEM_COLUMN:-}" ] || echo 1
+                            exit 0 ;;
+                        *to_regclass*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -z "${FAKE_DB_ABSENT:-}" ] || { echo "psql: database does not exist" >&2; exit 2; }
+                            [ -n "${FAKE_NO_COLLECTIONS_TABLE:-}" ] || echo "collections"
+                            exit 0 ;;
+                        *"filename_stem IS NOT NULL"*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -z "${FAKE_NO_STEM_COLUMN:-}" ] || { echo "psql: column \"filename_stem\" does not exist" >&2; exit 1; }
+                            [ -z "${FAKE_DB_ABSENT:-}" ] || { echo "psql: database does not exist" >&2; exit 2; }
+                            [ -z "${FAKE_STEMMED:-}" ] || printf '%b\n' "$FAKE_STEMMED"
+                            exit 0 ;;
+                    esac
                     case "$*" in *"DROP DATABASE"*)
                         echo "psql DROP" >> "$CASE_DIR/log"
                         [ -z "${FAKE_KILL_ON_DROP:-}" ] || { kill-update KILL "$PPID"; sleep 1; } ;;
@@ -848,7 +892,11 @@ mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
 PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT
 cp -R "$TEMPLATE" "$PROJECT_ROOT"
 g -C "$PROJECT_ROOT" fetch origin
-g -C "$PROJECT_ROOT" merge --ff-only origin/dev
+# B's tree as a child of A_OLD, so that A_OLD is an ancestor of what is
+# checked out, as --no-pull requires.
+g -C "$PROJECT_ROOT" checkout -q -B dev "$SHA_A_OLD"
+g -C "$PROJECT_ROOT" checkout "$SHA_B" -- .
+g -C "$PROJECT_ROOT" commit -qm "B on top of A_OLD"
 g -C "$PROJECT_ROOT" submodule update --init --recursive
 export DTK_TEST_STATE="$CASE_DIR/state"
 mkdir -p "$DTK_TEST_STATE/backups"
@@ -978,6 +1026,7 @@ for rec in "" "unknown"; do
     eq "$RC" 1 "exit status"
     head_is "$SHA_B" "B (as put in place)"
     has "There is no record of which version this unit is running"
+    hasnt "The update failed; restoring"
     has "sudo tee $DTK_TEST_STATE/backups/last-deployed-SHA"
     unlogged "build frontend"
     unlogged "systemctl stop"
@@ -1268,7 +1317,7 @@ no_marker
 # Restore target A is already checked out (--no-pull, a redeploy), but the
 # backend gitlink is staged to B's pin with the submodule on it: the restore
 # must not certify "still on A with submodules on its pins".
-FAKE_STAGE_BACKEND_PIN="$BACKEND_B" DTK_UPDATE_FAIL_AT=build run_case "staged gitlink at the restore" --no-pull --yes
+FAKE_STAGE_BACKEND_PIN_ON_INSTALL="$BACKEND_B" DTK_UPDATE_FAIL_AT=pixi run_case "staged gitlink at the restore" --no-pull --yes
 eq "$RC" 1 "exit status"
 hasnt "code: still on $SHA_A with submodules on its pins"
 has "code: the checkout has modified tracked files"
@@ -1337,6 +1386,382 @@ unlogged "psql DROP"
 db_is schema-A
 active
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag was created"; else ok "no start flag"; fi
+
+# ── --no-pull checks the checkout before anything changes ──────────────────
+# nothing_changed: the refusal came before 0a's tag, the build, the stop, any
+# record, and the unit still runs A on schema A.
+nothing_changed() {
+    hasnt "The update failed; restoring"
+    unlogged "docker tag"
+    unlogged "build frontend"
+    unlogged "systemctl stop"
+    unlogged "pixi install"
+    db_is "${DB_BEFORE:-schema-A}"
+    no_marker
+    active
+}
+FAKE_STAGE_BACKEND_PIN="$BACKEND_B" run_case "--no-pull with a staged gitlink" --no-pull --yes
+eq "$RC" 1 "exit status"
+has "✗ --no-pull: a submodule is not on the commit HEAD records"
+has "diff --cached HEAD --submodule"
+nothing_changed
+
+run_case "--no-pull with a submodule checked out off its pin" --no-pull --yes   # builds the case
+g -C "$PROJECT_ROOT/backend" checkout -q "$BACKEND_B"
+DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+CASE="--no-pull with a submodule checked out off its pin: run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+eq "$RC" 1 "exit status"
+has "✗ --no-pull: a submodule is not on the commit HEAD records"
+nothing_changed
+
+for where in superproject submodule staged; do
+    run_case "--no-pull with a modified tracked file ($where)" --no-pull --yes   # builds the case
+    case "$where" in
+        superproject) echo "hand edit" >> "$PROJECT_ROOT/README" ;;
+        submodule)    echo "hand edit" >> "$PROJECT_ROOT/backend/pixi.lock" ;;
+        staged)       echo "hand edit" >> "$PROJECT_ROOT/README"; g -C "$PROJECT_ROOT" add README
+                      git -C "$PROJECT_ROOT" show HEAD:README > "$PROJECT_ROOT/README" ;;
+    esac
+    DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+    CASE="--no-pull with a modified tracked file ($where): run"
+    run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+    eq "$RC" 1 "exit status"
+    has "✗ --no-pull: the checkout has modified tracked files"
+    has "submodule foreach --recursive git status --short"
+    nothing_changed
+done
+
+# Index flags that hide a tracked file's edits from git: each kind, in the
+# superproject and in a submodule, with the file edited behind the flag.
+for flag in assume-unchanged skip-worktree; do
+    for where in superproject submodule; do
+        run_case "--no-pull with $flag ($where)" --no-pull --yes   # builds the case
+        case "$where" in
+            superproject) repo="$PROJECT_ROOT"; file=README; shown=README ;;
+            submodule)    repo="$PROJECT_ROOT/backend"; file=pixi.lock; shown=backend/pixi.lock ;;
+        esac
+        g -C "$repo" update-index "--$flag" "$file"
+        echo "edit behind the flag" >> "$repo/$file"
+        DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+        CASE="--no-pull with $flag ($where): run"
+        run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+        eq "$RC" 1 "exit status"
+        has "✗ --no-pull: tracked files are marked assume-unchanged or skip-worktree"
+        case "$flag" in
+            assume-unchanged) has "      h $shown" ;;
+            skip-worktree)    has "      S $shown" ;;
+        esac
+        has "update-index --no-assume-unchanged --no-skip-worktree <file>"
+        nothing_changed
+    done
+done
+
+run_case "--no-pull downgrade" --no-pull --yes   # builds the case: unit at A
+echo "$SHA_B" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+CASE="--no-pull downgrade: run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+eq "$RC" 1 "exit status"
+has "✗ --no-pull: the code checked out ($SHA_A) does not descend from the version"
+has "this unit last deployed ($SHA_B)"
+has "rollback-update.sh"
+nothing_changed
+
+DB_BEFORE=""
+run_case "--no-pull redeploy of the same commit" --no-pull --yes
+eq "$RC" 0 "exit status"
+has "Update complete!"
+hasnt "✗ --no-pull"
+
+setup_no_pull_case "no-pull-forward" "$SHA_A"
+CASE="--no-pull forward from the deployed commit"
+run_no_pull
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+hasnt "✗ --no-pull"
+
+# The pull path is unchanged: a local modification is set aside, not refused.
+run_case "pull path with a modified tracked file" --yes   # builds the case
+echo "hand edit" >> "$PROJECT_ROOT/README"
+CASE="pull path with a modified tracked file: run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 0 "exit status"
+has "locally modified files"
+hasnt "✗ --no-pull"
+
+# ── rollback-update.sh: volumes the restored dump would cut off from files ─
+STEMS_FILE_REL="backups/rollback-stems-at-risk"
+# stem_case <name>: a successful update (its dump is the one the rollback
+# restores), with volume 7 "Libro 7" stemmed libro-7 in the current database
+# and its directory under the projects root. FAKE_DUMP_* in the caller's
+# environment shape the dump.
+stem_case() {
+    run_case "$1" --yes
+    mkdir -p "$DTK_TEST_STATE/projects/libro-7/captures"
+    DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+}
+STEMMED_7='7\tLibro 7\tlibro-7'
+stems_untouched() {
+    unlogged "systemctl stop"
+    unlogged "psql DROP"
+    db_is "$DB_BEFORE"
+    no_marker
+    if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag exists"; else ok "no start flag"; fi
+    active
+}
+list_has() { if grep -qxF -e "$(printf '%b' "$1")" "$DTK_TEST_STATE/$STEMS_FILE_REL" 2>/dev/null; then ok "the list file has: $1"; else fail "the list file lacks: $1"; fi; }
+# Volume 7 in the dump with its stem, one record, and images as given.
+DUMP_7='7\tLibro 7\t\\N\tlibro-7\t2026-10-01 00:00:00'
+RECORDS_7='70\tFolio 1\t7\tsingle'
+OLD_PATH='@STATE@/projects/rionegro/libro-7/images/main/libro-7-img_0001.jpg'
+NEW_PATH='@STATE@/projects/libro-7/captures/libro-7-img_0001.jpg'
+
+# The first 0.1.0 install at an archive: the volume had its stem already,
+# the backup was taken before the layout pass moved its files into
+# <stem>/captures/ and rewrote the paths. Same stem, paths gone.
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "backup from before the layout move, same stem"
+mkdir -p "$DTK_TEST_STATE/projects/libro-7/captures"; : > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+CASE="backup from before the layout move, same stem: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "✗ Restoring this backup may cut volumes off from their files:"
+has "id 7  \"Libro 7\"  stem libro-7: 1 of 1 images not on disk, e.g. $DTK_TEST_STATE/projects/rionegro/libro-7/images/main/libro-7-img_0001.jpg"
+has "--accept-lost-stems"
+hasnt "some of them may be safe"
+stems_untouched
+eq "$(stat -c %a "$DTK_TEST_STATE/$STEMS_FILE_REL" 2>/dev/null || stat -f %Lp "$DTK_TEST_STATE/$STEMS_FILE_REL")" 600 "the list file is mode 600"
+list_has "id\tname\tfilename_stem\timages_missing\timages_total\texample"
+list_has "7\tLibro 7\tlibro-7\t1\t1\t$DTK_TEST_STATE/projects/rionegro/libro-7/images/main/libro-7-img_0001.jpg"
+if grep -qx "# accepted: no" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says not accepted"; else fail "the list file does not say not accepted"; fi
+if grep -qx "# dump: $(dump_name)" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file names the dump"; else fail "the list file does not name the dump"; fi
+if grep -qx "# dump-check: per image" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says per image"; else fail "the list file does not say per image"; fi
+
+CASE="backup from before the layout move, same stem: accepted"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
+eq "$RC" 0 "exit status"
+has "--accept-lost-stems: rolling back anyway"
+db_is restored
+if grep -qx "# accepted: yes (--accept-lost-stems)" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says accepted"; else fail "the list file does not say accepted"; fi
+active
+
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "accepted, killed after the DROP"
+CASE="accepted, killed after the DROP: the rollback"
+FAKE_STEMMED="$STEMMED_7" FAKE_KILL_ON_DROP=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
+marker_has "kind: restore-failed"
+marker_has "lost-stems-accepted: $DTK_TEST_STATE/$STEMS_FILE_REL"
+
+# Every image the backup records is where it says: nothing at risk.
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "backup whose paths all exist"
+: > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+CASE="backup whose paths all exist: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "may cut volumes off"
+db_is restored
+
+# Mixed: volume 7 intact, volume 8 not; a freed master missing on disk is
+# stored offsite and does not count; an image with no volume is reported.
+FAKE_DUMP_COLLECTIONS="$DUMP_7\n8\tLibro 8\t\\N\tlibro-8\t2026-10-01 00:00:00" \
+FAKE_DUMP_RECORDS="$RECORDS_7\n80\tFolio 1\t8\tsingle\n81\tFolio 2\t8\tsingle\n90\tLoose\t\\N\tsingle" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\ta.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N\n701\t70\tb.jpg\t@STATE@/projects/libro-7/captures/freed.jpg\tjpg\tt\t2026-10-02 00:00:00\t12345\n800\t80\tc.jpg\t@STATE@/projects/libro-8/captures/c.jpg\tjpg\tt\t\\N\t\\N\n801\t81\td.jpg\t@STATE@/projects/old/libro-8/d.jpg\tjpg\tt\t\\N\t\\N\n802\t81\te.jpg\t@STATE@/projects/old/libro-8/e.jpg\tjpg\tf\t\\N\t\\N\n900\t90\tf.jpg\t@STATE@/projects/loose/f.jpg\tjpg\tt\t\\N\t\\N" \
+    stem_case "mixed volumes"
+: > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+mkdir -p "$DTK_TEST_STATE/projects/libro-8/captures"; : > "$DTK_TEST_STATE/projects/libro-8/captures/c.jpg"
+CASE="mixed volumes: the rollback"
+FAKE_STEMMED="$STEMMED_7\n8\tLibro 8\tlibro-8" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "id 8  \"Libro 8\"  stem libro-8: 2 of 3 images not on disk, e.g. $DTK_TEST_STATE/projects/old/libro-8/d.jpg"
+has "no volume: 1 of 1 images not on disk, e.g. $DTK_TEST_STATE/projects/loose/f.jpg"
+hasnt "id 7  \"Libro 7\""
+list_has "8\tLibro 8\tlibro-8\t2\t3\t$DTK_TEST_STATE/projects/old/libro-8/d.jpg"
+list_has "-\t(no volume)\t-\t1\t1\t$DTK_TEST_STATE/projects/loose/f.jpg"
+stems_untouched
+
+# A dump from an older schema, without master_freed_at: its paths are still
+# checked.
+FAKE_DUMP_OLD_IMAGES_SCHEMA=1 FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg" \
+    stem_case "older image schema in the dump"
+CASE="older image schema in the dump: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "stem libro-7: 1 of 1 images not on disk"
+stems_untouched
+
+# The second signal: a volume with a stem directory that the backup lacks.
+stem_case "volume the backup does not have"
+CASE="volume the backup does not have: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "id 7  \"Libro 7\"  stem libro-7: not in the backup; its files are in $DTK_TEST_STATE/projects/libro-7"
+list_has "7\tLibro 7\tlibro-7\tnot-in-backup\t-\t$DTK_TEST_STATE/projects/libro-7"
+stems_untouched
+
+stem_case "volume the backup does not have, directory absent"
+rm -rf "$DTK_TEST_STATE/projects/libro-7"
+CASE="volume the backup does not have, directory absent: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "may cut volumes off"
+db_is restored
+
+stem_case "volume the backup does not have, under the storage override"
+rm -rf "$DTK_TEST_STATE/projects/libro-7"
+mkdir -p "$CASE_DIR/drive/libro-7"
+printf '{\n  "projects_root": "%s"\n}\n' "$CASE_DIR/drive" > "$DTK_TEST_STATE/storage-override.json"
+CASE="volume the backup does not have, under the storage override: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "its files are in $CASE_DIR/drive/libro-7"
+stems_untouched
+
+# The fallback: the dump's images cannot be read.
+FAKE_DUMP_NO_IMAGES=1 FAKE_DUMP_COLLECTIONS="$DUMP_7" stem_case "dump without readable images"
+CASE="dump without readable images: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "some of them may be safe"
+has "id 7  \"Libro 7\"  stem libro-7: its files are in $DTK_TEST_STATE/projects/libro-7"
+if grep -qx "# dump-check: not possible; every volume with a stem directory is listed" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says the dump could not be checked"; else fail "the list file does not say so"; fi
+list_has "7\tLibro 7\tlibro-7\tunknown\t-\t$DTK_TEST_STATE/projects/libro-7"
+stems_untouched
+
+# P2: a current database from before the stem migration, no filename_stem.
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "current database without filename_stem, paths present"
+: > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+CASE="current database without filename_stem, paths present: the rollback"
+FAKE_NO_STEM_COLUMN=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "Could not check the current database"
+has "The current database predates file name stems"
+db_is restored
+
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "current database without filename_stem, paths missing"
+CASE="current database without filename_stem, paths missing: the rollback"
+FAKE_NO_STEM_COLUMN=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+hasnt "Could not check the current database"
+has "stem libro-7: 1 of 1 images not on disk"
+stems_untouched
+CASE="current database without filename_stem, paths missing: accepted"
+FAKE_NO_STEM_COLUMN=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+
+stem_case "database unreachable"
+CASE="database unreachable: the rollback"
+FAKE_DB_UNREACHABLE=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "✗ Could not check the current database for volumes with a stem directory"
+has "A check that cannot answer is not a clean result"
+stems_untouched
+
+stem_case "no collections table in the current database"
+CASE="no collections table in the current database: the rollback"
+FAKE_STEMMED="$STEMMED_7" FAKE_NO_COLLECTIONS_TABLE=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+has "no volumes table, so no volume can lose its files"
+db_is restored
+
+stem_case "db container not running"
+rm -f "$CASE_DIR/docker/db_running" "$CASE_DIR/sys/active"
+CASE="db container not running: refused"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+logged "up -d --no-recreate db"
+if [ -f "$CASE_DIR/docker/db_running" ]; then fail "the db container was left running"; else ok "the db container is stopped again"; fi
+CASE="db container not running: nothing at risk"
+run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+logged "up -d --no-recreate db"
+
+# ── The stem guard and a database an interrupted restore removed ────────────
+stem_case "database removed by an interrupted restore"
+CASE="database removed by an interrupted restore: the rollback killed at its DROP"
+FAKE_KILL_ON_DROP=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+marker_has "kind: restore-failed"
+CASE="database removed by an interrupted restore: the retry"
+FAKE_STEMMED="$STEMMED_7" FAKE_DB_ABSENT=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+has "does not exist: an interrupted restore removed it."
+has "It holds no volume, so none can lose its files."
+hasnt "Could not check the current database"
+db_is restored
+no_marker
+active
+
+# ── The db container the guard started is stopped on every abort ──────────
+# run_tty <reply|EOF> <command...>: run the command on a pseudo-terminal, as
+# an operator at the unit would, and answer its confirmation prompt with
+# <reply>, or close the input (EOF) so that the read fails. OUT and RC as
+# run_again.
+run_tty() {
+    local answer="$1"; shift
+    : > "$CASE_DIR/log"
+    OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 python3 -I -c '
+import os, pty, sys, select, time
+answer = sys.argv[1]; argv = sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+out = b""; sent = False; deadline = time.time() + 120
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+    if not sent and b"Proceed with rollback?" in out:
+        os.write(fd, b"\x04" if answer == "EOF" else (answer + "\n").encode())
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf-8", "replace"))
+sys.exit(os.waitstatus_to_exitcode(status))
+' "$answer" bash "$@" 2>&1)"
+    RC=$?
+    echo "$OUT" >> "$CASE_DIR/out"
+}
+guard_db_stopped() {
+    logged "up -d --no-recreate db"
+    if [ -f "$CASE_DIR/docker/db_running" ]; then fail "the db container the guard started is still running"; else ok "the db container the guard started is stopped"; fi
+}
+for abort in no-terminal declined read-fails; do
+    stem_case "guard-started db, rollback aborted: $abort"
+    rm -f "$CASE_DIR/docker/db_running" "$CASE_DIR/sys/active"
+    CASE="guard-started db, rollback aborted: $abort"
+    case "$abort" in
+        no-terminal) run_again "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)"
+                     has "No terminal to confirm on" ;;
+        declined)    run_tty n "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)"
+                     has "Aborted by operator" ;;
+        read-fails)  run_tty EOF "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)" ;;
+    esac
+    eq "$RC" 1 "exit status"
+    guard_db_stopped
+    unlogged "psql DROP"
+done
+stem_case "guard-started db, rollback confirmed"
+rm -f "$CASE_DIR/docker/db_running" "$CASE_DIR/sys/active"
+CASE="guard-started db, rollback confirmed"
+run_tty y "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+active
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below

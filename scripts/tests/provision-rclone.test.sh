@@ -268,7 +268,11 @@ expect_secret_kept_out() {
 mode_of() { python3 -I -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 
 # ── Tenant ──────────────────────────────────────────────────────────────────
-for t in ahr sbmal captua-test a1-b2-c3; do
+# Fisqua's tenant slug rule: 1-63 characters, lowercase letters, digits and
+# single hyphens, starting with a letter; platform, www, api, admin and app
+# are reserved. A reserved word inside a longer slug is not reserved.
+TENANT_63="abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc"
+for t in ahr sbmal captua-test a1-b2-c3 a "$TENANT_63" api-test apps my-app; do
     case_ "tenant valid: $t"
     new_unit
     run -- --tenant "$t"
@@ -277,12 +281,14 @@ for t in ahr sbmal captua-test a1-b2-c3; do
     expect_no_key "$(env_file)" DTK_OFFSITE_REMOTE
 done
 
-for t in AHR Ahr ahr/x /ahr ahr/ -ahr ahr- ahr--x ahr_x "ahr x" " ahr" "ahr;x" "ahr.x"; do
+for t in AHR Ahr ahr/x /ahr ahr/ -ahr ahr- ahr--x ahr_x "ahr x" " ahr" "ahr;x" "ahr.x" \
+         1ahr 9 "${TENANT_63}d" platform www api admin app; do
     case_ "tenant invalid: '$t'"
     new_unit
     run -- --tenant "$t"
     expect_status 1
     expect_out "refusing the tenant prefix given with --tenant"
+    expect_out "starting with a letter"
     expect_out "was NOT recorded"
     expect_absent "$(env_file)"
 done

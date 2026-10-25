@@ -623,16 +623,31 @@ OFFSITE_VALUE_CLASS='^[A-Za-z0-9._:/+-]*$'
 # script refuses them instead, so offsite.env holds the one form the backend
 # uses rather than a form it has to normalise.
 #
-# One value TENANT_PATTERN would accept is refused here explicitly: an age
-# private key in lower case (age-secret-key-1...) is lowercase letters and
-# digits joined by hyphens, and would otherwise become this unit's prefix in
-# offsite.env and in every object key. Every validator in this script refuses
-# an age private key for the same reason (holds_age_secret_key).
+# The tenant is also the unit's slug in Fisqua, <tenant>.fisqua.org, so it is
+# held to Fisqua's slug rule as well, which is stricter than TENANT_PATTERN:
+# 1 to 63 characters (a DNS label; the backend caps it at the same
+# TENANT_MAX_LENGTH, 63), starting with a letter, and none of Fisqua's
+# reserved slugs (platform, www, api, admin, app; a slug that only contains
+# one is not reserved). Not ending with a hyphen, and single hyphens only,
+# follow from the pattern.
+#
+# One more value is refused here explicitly: an age private key in lower case
+# (age-secret-key-1...) is lowercase letters and digits joined by hyphens,
+# and would otherwise become this unit's prefix in offsite.env and in every
+# object key. Every validator in this script refuses an age private key for
+# the same reason (holds_age_secret_key).
+TENANT_MAX_LENGTH=63
+TENANT_RESERVED="platform www api admin app"
 valid_tenant() {
+    local word
     holds_age_secret_key "$1" && return 1
-    [[ "$1" =~ ^[abcdefghijklmnopqrstuvwxyz0123456789]+(-[abcdefghijklmnopqrstuvwxyz0123456789]+)*$ ]]
+    [ "${#1}" -le "$TENANT_MAX_LENGTH" ] || return 1
+    for word in $TENANT_RESERVED; do
+        [ "$1" != "$word" ] || return 1
+    done
+    [[ "$1" =~ ^[abcdefghijklmnopqrstuvwxyz][abcdefghijklmnopqrstuvwxyz0123456789]*(-[abcdefghijklmnopqrstuvwxyz0123456789]+)*$ ]]
 }
-TENANT_RULE="lowercase letters and digits joined by single hyphens, e.g. ahr, sbmal, captua-test"
+TENANT_RULE="1 to 63 lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen; not platform, www, api, admin or app; e.g. ahr, sbmal, captua-test"
 
 # DTK_OFFSITE_DUMP_RECIPIENT, by the rule the backend applies: dump_recipient()
 # in backend app/core/catalogue_backup.py passes the stripped value to
