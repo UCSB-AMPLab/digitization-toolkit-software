@@ -93,6 +93,32 @@ esac
 HEALTH_TIMEOUT="${DTK_UPDATE_HEALTH_TIMEOUT:-300}"
 HEALTH_POLL="${DTK_UPDATE_HEALTH_POLL:-5}"
 
+# One update or rollback at a time. update.sh and rollback-update.sh (and
+# its kept copy under /var/lib/dtk) take the same lock, held until they exit,
+# so two runs cannot interleave a stop, a backup, a migration and a restore.
+# The file is opened without truncating it, so a refused run can read the
+# holder's pid; the holder writes its own once it has the lock.
+DTK_LOCK_FILE="/run/dtk-update.lock"
+take_update_lock() {
+    local holder
+    if ! command -v flock >/dev/null 2>&1; then
+        echo "⚠ flock is not installed: another update or rollback is not ruled out."
+        return 0
+    fi
+    if ! exec 9<>"$DTK_LOCK_FILE"; then
+        echo "✗ Could not open $DTK_LOCK_FILE."
+        exit 1
+    fi
+    if ! flock -n 9; then
+        holder="$(head -n 1 "$DTK_LOCK_FILE" 2>/dev/null | tr -dc '0-9')"
+        echo "✗ Another update or rollback is running (pid ${holder:-unknown}). This one"
+        echo "  will not run alongside it; wait for it to finish, then run this again."
+        exit 1
+    fi
+    printf '%s\n' "$$" > "$DTK_LOCK_FILE" 2>/dev/null || true
+}
+take_update_lock
+
 # Load DB credentials the same way docker compose does: from the project .env.
 # The bare ${VAR:-default} fallbacks below only apply if .env is absent, so the
 # pg_dump and pg_isready calls talk to the DB with the SAME user the container

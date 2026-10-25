@@ -85,6 +85,16 @@ for f in chown sleep; do
     printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/$f"
 done
 printf '#!/bin/sh\necho "LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:*"\n' > "$FAKEBIN/ss"
+# flock -n <fd>, as util-linux has it (macOS has none): a BSD flock on the
+# caller's inherited descriptor, which outlives this process because the
+# caller keeps the descriptor open.
+cat > "$FAKEBIN/flock" <<'EOF'
+#!/usr/bin/perl
+use Fcntl qw(:flock);
+my $fd = $ARGV[-1];
+open(my $fh, "+<&=", $fd) or exit 2;
+exit(flock($fh, LOCK_EX | LOCK_NB) ? 0 : 1);
+EOF
 # GNU install -D <src> <dest> (step 0b's copy of a modified file); BSD install
 # on macOS has no -D.
 printf '#!/bin/sh\n[ "$1" = -D ] && shift\nmkdir -p "$(dirname "$2")" && cp "$1" "$2"\n' > "$FAKEBIN/install"
@@ -147,6 +157,7 @@ echo "pixi $* lock=$lock" >> "$CASE_DIR/log"
 case "$1" in
     --version) echo "pixi 0.0.0" ;;
     install)
+        [ -z "${FAKE_SLOW_INSTALL:-}" ] || perl -e 'select(undef,undef,undef,2)'
         if [ -n "${FAKE_PIXI_FAIL_LOCK:-}" ] && [ "$lock" = "$FAKE_PIXI_FAIL_LOCK" ]; then
             echo "pixi: cannot reach the registry" >&2; exit 1
         fi
@@ -316,7 +327,7 @@ git init -q "$UP/super"
 mkdir -p "$UP/super/scripts"
 # /var/lib/dtk, /etc/dtk and /etc/systemd/system all point into the case's
 # state directory.
-TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g'
+TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g; s#/run/dtk-update.lock#$DTK_TEST_STATE/dtk-update.lock#g'
 sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
 sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
@@ -1002,6 +1013,34 @@ CASE="resolve forward with a staged change: resolve"
 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
 eq "$RC" 1 "exit status"
 has "modified tracked files"
+
+# ── One update or rollback at a time ────────────────────────────────────────
+run_case "two runs at once" --yes   # builds the case; reset to A below
+rm -rf "$CASE_DIR"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"
+cp -R "$TEMPLATE" "$PROJECT_ROOT"
+mkdir -p "$DTK_TEST_STATE/backups"; echo "$SHA_A" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"; echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+echo A > "$CASE_DIR/sys/started"; echo schema-A > "$CASE_DIR/db_state"
+( PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 FAKE_SLOW_INSTALL=1 \
+    bash "$PROJECT_ROOT/scripts/update.sh" --yes > "$CASE_DIR/out1" 2>&1 </dev/null; echo $? > "$CASE_DIR/rc1" ) &
+FIRST=$!
+for i in $(seq 1 50); do [ -s "$DTK_TEST_STATE/dtk-update.lock" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+CASE="two runs at once: the second update.sh"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "Another update or rollback is running (pid"
+unlogged "pixi run db-upgrade"
+CASE="two runs at once: a rollback meanwhile"
+run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$DTK_TEST_STATE/backups/none.sql.gz"
+eq "$RC" 1 "exit status"
+has "Another update or rollback is running"
+wait "$FIRST"
+CASE="two runs at once: the first"
+eq "$(cat "$CASE_DIR/rc1")" 0 "the first run completed"
+CASE="two runs at once: afterwards"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+hasnt "Another update or rollback is running"
 
 # ── The fetch fails: nothing has moved ──────────────────────────────────────
 FAKE_BREAK_ORIGIN=1 run_case "fetch fails" --yes
