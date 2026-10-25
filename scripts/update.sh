@@ -1256,7 +1256,11 @@ on_exit() {
     # Every step below handles its own failures; one failing must not abort
     # the rest of the restore.
     set +e
-    start_trap_log
+    # A refusal before anything changed has nothing to restore, and is not
+    # announced as a restore.
+    if [ "$SERVICE_STOPPED" -eq 1 ] || [ "$RESTORE_ARMED" -eq 1 ] || [ "$STACK_TOUCHED" -eq 1 ]; then
+        start_trap_log
+    fi
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
         restore_after_stop
         end_trap "$rc"

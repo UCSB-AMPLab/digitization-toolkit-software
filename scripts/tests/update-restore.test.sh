@@ -1002,6 +1002,7 @@ for rec in "" "unknown"; do
     eq "$RC" 1 "exit status"
     head_is "$SHA_B" "B (as put in place)"
     has "There is no record of which version this unit is running"
+    hasnt "The update failed; restoring"
     has "sudo tee $DTK_TEST_STATE/backups/last-deployed-SHA"
     unlogged "build frontend"
     unlogged "systemctl stop"
@@ -1366,6 +1367,7 @@ if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start fl
 # nothing_changed: the refusal came before 0a's tag, the build, the stop, any
 # record, and the unit still runs A on schema A.
 nothing_changed() {
+    hasnt "The update failed; restoring"
     unlogged "docker tag"
     unlogged "build frontend"
     unlogged "systemctl stop"
