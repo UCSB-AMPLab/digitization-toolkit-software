@@ -1090,6 +1090,7 @@ run_again "$PROJECT_ROOT/scripts/update.sh" --yes
 eq "$RC" 1 "exit status"
 has "The unit was NOT kept stopped"
 has "may have taken writes"
+hasnt "The unit was left stopped."
 
 CASE_DIR="$WORK/cases/pipe-closes"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
 PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT; cp -R "$TEMPLATE" "$PROJECT_ROOT"

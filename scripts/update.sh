@@ -327,9 +327,12 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         echo "  pin. The database may be migrated or partly migrated. The unit was"
         echo "  left stopped. It recorded, in $UNRESOLVED_FILE:"
     else
-        echo "  That update started the new version and then failed. The unit was"
-        echo "  left stopped, on the new code, with the database migrated for it. It"
-        echo "  recorded, in $UNRESOLVED_FILE:"
+        echo "  That update started the new version and then failed: the code is the"
+        echo "  new version's, and the database is migrated for it."
+        if [ -e "$UNRESOLVED_FLAG" ]; then
+            echo "  The unit was left stopped."
+        fi
+        echo "  It recorded, in $UNRESOLVED_FILE:"
     fi
     sed 's/^/      /' "$UNRESOLVED_FILE" 2>/dev/null || echo "      (the record could not be read)"
     if [ ! -e "$UNRESOLVED_FLAG" ]; then
