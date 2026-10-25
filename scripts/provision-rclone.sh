@@ -1399,6 +1399,19 @@ reachable() {
     curl -fsS --head --max-time 15 "$1" >/dev/null 2>&1
 }
 
+# host_answers <url>: whether the server answers at all. Any HTTP status is an
+# answer, 4xx and 5xx included (api.backblazeb2.com answers a bare HEAD with
+# 405); only a connection that cannot be made (refused, a name that does not
+# resolve, TLS, a timeout) is not, and curl then reports status 000. The
+# listing probes that follow test the credentials themselves. reachable(),
+# which fails on a 4xx, stays for the download, where a 404 means the asset
+# is not there.
+host_answers() {
+    local code
+    code="$(curl -sS --head --max-time 15 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null)" || return 1
+    [ -n "$code" ] && [ "$code" != 000 ]
+}
+
 probe_listing_once() {
     # Called on both paths that record a remote: the one that just wrote a
     # credential, and the resume in 2b that found the supplied key id already
@@ -1441,7 +1454,7 @@ probe_listing_once() {
     if [ -n "$TENANT_FINAL" ]; then
         where="$RCLONE_REMOTE_NAME:$B2_BUCKET/$TENANT_FINAL"
     fi
-    if reachable "https://api.backblazeb2.com"; then
+    if host_answers "https://api.backblazeb2.com"; then
         echo "  Listing $where once..."
         # --ask-password=false for the same reason the classification carries
         # it, and `bounded` for the same reason too: the flags below are
@@ -1465,9 +1478,9 @@ probe_listing_once() {
             RUN_PROBE="a listing of $where did not succeed"
         fi
     else
-        echo "  (api.backblazeb2.com did not answer a HEAD request from here, so"
-        echo "  no listing was attempted)"
-        RUN_PROBE="not attempted: api.backblazeb2.com did not answer a HEAD request"
+        echo "  (api.backblazeb2.com did not answer from here: no connection could be"
+        echo "  made, so no listing was attempted)"
+        RUN_PROBE="not attempted: api.backblazeb2.com did not answer (no connection)"
     fi
 }
 
@@ -1821,7 +1834,7 @@ probe_read_listing_once() {
         RUN_READ_PROBE="not attempted: no tenant prefix to list under"
         return 0
     fi
-    if reachable "https://api.backblazeb2.com"; then
+    if host_answers "https://api.backblazeb2.com"; then
         echo "  Listing $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL once..."
         if bounded "$RCLONE_PROBE_TIMEOUT" \
                 "$RCLONE_USE_BIN" --config "$RCLONE_CONFIG_PATH" \
@@ -1838,7 +1851,7 @@ probe_read_listing_once() {
             RUN_READ_PROBE="a listing of $RCLONE_READ_REMOTE_NAME:$READ_BUCKET/$TENANT_FINAL did not succeed"
         fi
     else
-        RUN_READ_PROBE="not attempted: api.backblazeb2.com did not answer a HEAD request"
+        RUN_READ_PROBE="not attempted: api.backblazeb2.com did not answer (no connection)"
     fi
 }
 

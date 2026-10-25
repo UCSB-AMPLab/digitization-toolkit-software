@@ -784,8 +784,25 @@ print(v)' "$STORAGE_OVERRIDE_FILE" 2>/dev/null)"
             override="$(sed -n 's/.*"projects_root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STORAGE_OVERRIDE_FILE" 2>/dev/null | head -n 1)"
         fi
     fi
-    default="${PROJECTS_ROOT:-${DTK_DATA_DIR:-/var/lib/dtk}/projects}"
-    printf '%s\n%s\n' "$override" "$default" | awk 'NF && !seen[$0]++'
+    if [ -n "${PROJECTS_ROOT:-}" ]; then
+        default="$PROJECTS_ROOT"
+    else
+        default="$(backend_path "${DTK_DATA_DIR:-/var/lib/dtk}")/projects"
+    fi
+    [ -z "$override" ] || override="$(backend_path "$override")"
+    printf '%s\n%s\n' "$override" "$(backend_path "$default")" | awk 'NF && !seen[$0]++'
+}
+
+# backend_path <path>: the path as the backend resolves it. Its settings
+# become Path objects resolved against its working directory, which is
+# <project>/backend (start.sh cds there): an absolute path as it is, a
+# relative one under that directory. Not the project root, where this script
+# runs. check_dump_images resolves image paths the same way.
+backend_path() {
+    case "$1" in
+        /*) printf '%s' "$1" ;;
+        *)  printf '%s' "$PROJECT_ROOT/backend/$1" ;;
+    esac
 }
 
 # read_dump_catalogue <dir>: stream the dump once and write, in <dir>,
