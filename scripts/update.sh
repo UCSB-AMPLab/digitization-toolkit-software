@@ -284,6 +284,16 @@ record_field() {
     sed -n "s/^$1: //p" "$UNRESOLVED_FILE" 2>/dev/null | head -n 1
 }
 UNRESOLVED_KIND=""
+if ! { [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; } && [ -e "$UNRESOLVED_FLAG" ]; then
+    echo "✗ $UNRESOLVED_FLAG exists without its record, so this update will not run."
+    echo "  An earlier update or rollback could not write $UNRESOLVED_FILE, or it"
+    echo "  was removed by hand. While the flag exists systemd does not start dtk."
+    echo "  Find out which version the code is on and whether the database matches"
+    echo "  it (that run's output, systemctl status dtk) before going on. When"
+    echo "  they agree, remove the flag and run this again:"
+    echo "      sudo rm $UNRESOLVED_FLAG"
+    exit 1
+fi
 if [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; then
     UNRESOLVED_KIND="$(record_field kind)"
     [ -n "$UNRESOLVED_KIND" ] || UNRESOLVED_KIND=started-failed
@@ -307,6 +317,11 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         echo "  recorded, in $UNRESOLVED_FILE:"
     fi
     sed 's/^/      /' "$UNRESOLVED_FILE" 2>/dev/null || echo "      (the record could not be read)"
+    if [ ! -e "$UNRESOLVED_FLAG" ]; then
+        echo "  ⚠ The unit was NOT kept stopped: there is no start flag"
+        echo "    ($UNRESOLVED_FLAG), so dtk may have run since, on a reboot or a"
+        echo "    restart, and may have taken writes that a rollback would discard."
+    fi
     rec_mtime="$(stat -c %Y "$UNRESOLVED_FILE" 2>/dev/null || stat -f %m "$UNRESOLVED_FILE" 2>/dev/null || echo "")"
     if [ -n "$rec_mtime" ]; then
         rec_age=$(( $(date +%s) - rec_mtime ))
@@ -992,6 +1007,15 @@ restore_after_stop() {
         return
     fi
 
+    if [ -e "$UNRESOLVED_FLAG" ]; then
+        print_restore_summary
+        echo ""
+        echo "  ✗ The previous version was NOT started: $UNRESOLVED_FLAG exists,"
+        echo "    and while it does systemd does not start dtk. ${UNRESOLVED_KIND:+(record: $UNRESOLVED_KIND)}"
+        echo "    Check $UNRESOLVED_FILE before removing it."
+        echo ""
+        return
+    fi
     echo "→ Starting the previous version..."
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
@@ -1116,18 +1140,47 @@ assert_stack_gone() {
     return 0
 }
 
+# The restore's output goes to a log file first and is copied to the
+# original output when it ends. A closed output (a `| tee` killed by the same
+# hangup) then cannot interrupt it, and a write that failed cannot leave text
+# in bash's output buffer to be flushed into the next file the trap writes,
+# such as the record: both were seen when the output closed mid-restore.
+TRAP_LOG=""
+start_trap_log() {
+    local log
+    log="$BACKUP_DIR/update-failure-$(date +%Y%m%d-%H%M%S).log"
+    exec 3>&1
+    if [ -d "$BACKUP_DIR" ] && ( umask 077; : >> "$log" ) 2>/dev/null && exec >>"$log" 2>&1; then
+        TRAP_LOG="$log"
+        printf '%s\n' "→ The update failed; restoring. The output is kept in $log" >&3 2>/dev/null
+        printf '%s\n' "  and shown here when the restore has finished." >&3 2>/dev/null
+        # The newest few, as with the dumps.
+        # shellcheck disable=SC2012
+        ls -1t "$BACKUP_DIR"/update-failure-*.log 2>/dev/null | tail -n +$((KEEP_DUMPS + 1)) | while read -r old; do
+            rm -f "$old"
+        done
+    fi
+}
+end_trap() {
+    if [ -n "$TRAP_LOG" ]; then
+        cat "$TRAP_LOG" >&3 2>/dev/null
+    fi
+    exit "$1"
+}
+
 on_exit() {
     local rc=$?
-    trap '' HUP INT TERM
+    trap '' HUP INT TERM PIPE
     if [ "$UPDATE_OK" -eq 1 ]; then
         return 0
     fi
     # Every step below handles its own failures; one failing must not abort
     # the rest of the restore.
     set +e
+    start_trap_log
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
         restore_after_stop
-        exit "$rc"
+        end_trap "$rc"
     fi
     if [ "$RESTORE_ARMED" -eq 1 ]; then
         restore_before_stop
@@ -1179,7 +1232,7 @@ on_exit() {
         fi
         echo ""
     fi
-    exit "$rc"
+    end_trap "$rc"
 }
 # ---------------------------------------------------------------------------
 # --resolve-forward: accept the version a started-then-failed update left in
@@ -1247,6 +1300,10 @@ resolve_forward() {
         return 1
     fi
     clear_unresolved_marker
+    if [ -e "$UNRESOLVED_FLAG" ]; then
+        echo "✗ $UNRESOLVED_FLAG could not be removed; dtk cannot start while it exists."
+        return 1
+    fi
     echo "  ✓ Recorded $want as the deployed version; $UNRESOLVED_FILE removed."
     echo "→ Starting the service..."
     systemctl start dtk 2>/dev/null || true
@@ -1283,6 +1340,10 @@ trap on_exit EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+# A closed output (a `| tee` killed by the same hangup) must not kill the run
+# by SIGPIPE: a write then fails instead, set -e ends the run, and on_exit
+# restores, logging to a file.
+trap '' PIPE
 
 if [ -n "$FAIL_AT" ]; then
     echo "⚠ DTK_UPDATE_FAIL_AT=$FAIL_AT is set: this run will fail on purpose (test only)."
@@ -2074,6 +2135,9 @@ fi
 # first, for a run killed during the migration: until this update either
 # succeeds or restores the database, code and database may not agree.
 if ! write_unresolved_marker migrated-not-restored; then
+    # Nothing has been migrated: the flag that went down with it would only
+    # keep the previous version from starting again.
+    rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
     echo "✗ Could not write $UNRESOLVED_FILE; not migrating without it."
     exit 1
 fi
@@ -2094,9 +2158,14 @@ echo ""
 # 8. Restart the service on the new version.
 # ---------------------------------------------------------------------------
 # The migration finished and the database is at the new version's head, with
-# the new code checked out: the two agree, so the start flag goes. The record
-# stays until the new version is healthy, so that update.sh still refuses if
-# this run is cut off from here on.
+# the new code checked out: the two agree, so the start flag goes. Before it
+# does, the record is rewritten to what a run cut off from here on leaves:
+# the new version started (or about to), possibly serving, possibly holding
+# new data. It stays until the new version is healthy.
+if ! write_unresolved_marker started-failed; then
+    echo "✗ Could not rewrite $UNRESOLVED_FILE; not starting the new version."
+    exit 1   # EXIT trap: the migration ran, so it restores code and database
+fi
 rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
 echo "→ Starting service..."
 NEW_STARTED_AT="$(date +%s)"
@@ -2119,6 +2188,8 @@ echo ""
 # provisioning or a previous update) and break the next rollback.
 if [ "$CURRENT_SHA" != "unknown" ]; then
     echo "$CURRENT_SHA" > "$LAST_DEPLOYED_SHA_FILE"
+    # Immediately after: from here the deploy record names what is running.
+    clear_unresolved_marker
     # Record the image that is serving now, against this commit, where the
     # provenance is known. Best-effort: a missing record only makes a later
     # rollback report the image as unknown.
@@ -2135,7 +2206,8 @@ else
     echo "⚠ Could not resolve the installed commit; last-deployed-SHA left unchanged."
 fi
 # The record written before the migration: code and database now agree, on
-# the version recorded as deployed.
+# the version recorded as deployed (cleared above, with the deploy record;
+# again here for a commit that could not be resolved).
 clear_unresolved_marker
 UPDATE_OK=1
 SERVICE_STOPPED=0

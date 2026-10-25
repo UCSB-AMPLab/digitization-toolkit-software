@@ -141,6 +141,10 @@ EOF
 cat > "$FAKEBIN/curl" <<'EOF'
 #!/bin/bash
 echo "curl $*" >> "$CASE_DIR/log"
+# FAKE_KILL_ON_HEALTH: a power cut while update.sh waits for B's /health.
+if [ -n "${FAKE_KILL_ON_HEALTH:-}" ] && grep -qx B "$CASE_DIR/sys/started" 2>/dev/null; then
+    kill -KILL "$PPID"; exit 7
+fi
 S="$CASE_DIR/sys"
 [ -f "$S/active" ] || exit 7
 last="$(tail -n 1 "$S/started" 2>/dev/null)"
@@ -1061,6 +1065,63 @@ eq "$RC" 0 "exit status"
 no_marker
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
 active
+
+# ── 3. After step 8 starts B: the record says so, flag or not ───────────────
+FAKE_KILL_ON_HEALTH=1 run_case "power cut while waiting for health" --yes
+marker_has "kind: started-failed"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag exists"; else ok "no start flag (B was started)"; fi
+CASE="power cut while waiting for health: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "The unit was NOT kept stopped"
+has "may have taken writes"
+
+CASE_DIR="$WORK/cases/pipe-closes"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
+PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT; cp -R "$TEMPLATE" "$PROJECT_ROOT"
+export DTK_TEST_STATE="$CASE_DIR/state"; mkdir -p "$DTK_TEST_STATE/backups"
+echo "$SHA_A" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"; echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+echo A > "$CASE_DIR/sys/started"; echo schema-A > "$CASE_DIR/db_state"
+CASE="output closes after B fails health"
+PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 FAKE_HEALTHY_VERSIONS=A \
+    bash -c 'bash "$PROJECT_ROOT/scripts/update.sh" --yes </dev/null 2>&1; echo $? > "$CASE_DIR/rc"' \
+    | awk '/did not come up/ {exit}'
+for i in $(seq 1 50); do [ -s "$CASE_DIR/rc" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+eq "$(cat "$CASE_DIR/rc")" 1 "exit status (not killed by SIGPIPE)"
+marker_has "kind: started-failed"
+eq "$(grep -cv '^[a-z-]*: ' "$DTK_TEST_STATE/$MARKER_REL")" 0 "the record holds only its fields (no output leaked into it)"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag exists"; else fail "no start flag"; fi
+inactive
+if ls "$DTK_TEST_STATE/backups"/update-failure-*.log >/dev/null 2>&1 \
+   && grep -q "UPDATE FAILED after the new version was started" "$DTK_TEST_STATE/backups"/update-failure-*.log; then
+    ok "the trap's output is in the failure log"
+else
+    fail "no failure log with the trap's output"
+fi
+
+# ── 4. A flag without a record ──────────────────────────────────────────────
+CASE_DIR="$WORK/cases/record_cannot_be_written_before_the_migration"; mkdir -p "$CASE_DIR"
+export DTK_TEST_STATE="$CASE_DIR/state"
+mkdir -p "$DTK_TEST_STATE/backups/unresolved-deployment.tmp"   # blocks the record's write
+run_case "record cannot be written before the migration" --yes
+eq "$RC" 1 "exit status"
+has "not migrating without it"
+unlogged "pixi run db-upgrade"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the start flag remains"; else ok "the start flag is removed"; fi
+started "A A "
+active
+has "back online on the previous version"
+rmdir "$DTK_TEST_STATE/backups/unresolved-deployment.tmp"
+
+run_case "flag without a record" --yes
+mkdir -p "$DTK_TEST_STATE/etc-dtk"; : > "$DTK_TEST_STATE/etc-dtk/unresolved-deployment"
+CASE="flag without a record: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "exists without its record"
+has "sudo rm $DTK_TEST_STATE/etc-dtk/unresolved-deployment"
+unlogged "git"
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
