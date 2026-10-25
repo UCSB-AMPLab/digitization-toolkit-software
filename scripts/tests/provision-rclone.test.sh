@@ -58,10 +58,31 @@ FAKEBIN="$WORK/fakebin"
 mkdir -p "$FAKEBIN"
 cat > "$FAKEBIN/curl" <<'EOF'
 #!/bin/sh
-# Offline, unless a case sets FAKE_ONLINE=1 to reach the listing probes. Even
-# then nothing leaves the machine: curl is only ever asked for a HEAD.
-[ "${FAKE_ONLINE:-}" = 1 ] && exit 0
-exit 7
+# Offline, unless a case sets FAKE_ONLINE=1 (the server answers 200) or
+# FAKE_HTTP_STATUS=<code> (it answers with that status) to reach the listing
+# probes, or FAKE_CURL_FAIL=refused|dns for the two ways of not answering.
+# Nothing leaves the machine: curl is only ever asked for a HEAD. As real
+# curl: -f turns a status of 400 or more into exit 22, -w prints the status
+# (000 when there was no answer), and a refused connection exits 7, a name
+# that does not resolve 6.
+status=""
+[ "${FAKE_ONLINE:-}" = 1 ] && status=200
+[ -n "${FAKE_HTTP_STATUS:-}" ] && status="$FAKE_HTTP_STATUS"
+case "${FAKE_CURL_FAIL:-}" in refused) status="" ; rc=7 ;; dns) status="" ; rc=6 ;; *) rc=7 ;; esac
+fail=0; w=0
+for a in "$@"; do
+    case "$a" in
+        -f|-fsS|-fsSL) fail=1 ;;
+        -w) w=1 ;;
+    esac
+done
+if [ -z "$status" ]; then
+    [ "$w" = 1 ] && printf '000'
+    exit "$rc"
+fi
+[ "$w" = 1 ] && printf '%s' "$status"
+if [ "$fail" = 1 ] && [ "$status" -ge 400 ]; then exit 22; fi
+exit 0
 EOF
 cat > "$FAKEBIN/timeout" <<'EOF'
 #!/bin/sh
@@ -268,7 +289,11 @@ expect_secret_kept_out() {
 mode_of() { python3 -I -c 'import os, sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777))' "$1"; }
 
 # ── Tenant ──────────────────────────────────────────────────────────────────
-for t in ahr sbmal captua-test a1-b2-c3; do
+# Fisqua's tenant slug rule: 1-63 characters, lowercase letters, digits and
+# single hyphens, starting with a letter; platform, www, api, admin and app
+# are reserved. A reserved word inside a longer slug is not reserved.
+TENANT_63="abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc"
+for t in ahr sbmal captua-test a1-b2-c3 a "$TENANT_63" api-test apps my-app; do
     case_ "tenant valid: $t"
     new_unit
     run -- --tenant "$t"
@@ -277,12 +302,14 @@ for t in ahr sbmal captua-test a1-b2-c3; do
     expect_no_key "$(env_file)" DTK_OFFSITE_REMOTE
 done
 
-for t in AHR Ahr ahr/x /ahr ahr/ -ahr ahr- ahr--x ahr_x "ahr x" " ahr" "ahr;x" "ahr.x"; do
+for t in AHR Ahr ahr/x /ahr ahr/ -ahr ahr- ahr--x ahr_x "ahr x" " ahr" "ahr;x" "ahr.x" \
+         1ahr 9 "${TENANT_63}d" platform www api admin app; do
     case_ "tenant invalid: '$t'"
     new_unit
     run -- --tenant "$t"
     expect_status 1
     expect_out "refusing the tenant prefix given with --tenant"
+    expect_out "starting with a letter"
     expect_out "was NOT recorded"
     expect_absent "$(env_file)"
 done
@@ -803,6 +830,29 @@ run FAKE_ONLINE=1 DTK_OFFSITE_KEY_FILE="$KF" --
 expect_status 0
 expect_out "a listing of b2unit:$BUCKET succeeded"
 if grep -q "^lsf .* b2unit:$BUCKET\$" "$ROOT/rclone.log"; then ok; else bad "the upload probe did not list the bucket root"; fi
+
+# Any HTTP status is an answer from api.backblazeb2.com; only a connection
+# that fails (refused, a name that does not resolve, TLS, a timeout) is not.
+for st in 405 403 404 500; do
+    case_ "online probes: api.backblazeb2.com answers $st, so both probes are attempted"
+    new_unit
+    KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+    run FAKE_HTTP_STATUS="$st" DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+    expect_status 0
+    expect_out "a listing of b2unit:$BUCKET/ahr succeeded"
+    expect_out "a listing of b2read:$BUCKET/ahr succeeded"
+    expect_not_out "did not answer"
+done
+for how in refused dns; do
+    case_ "online probes: api.backblazeb2.com unreachable ($how), so neither is attempted"
+    new_unit
+    KF="$(key_file both.key "KEY_ID=$UP_ID" "APP_KEY=$UP_KEY" "BUCKET=$BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+    run FAKE_CURL_FAIL="$how" DTK_OFFSITE_KEY_FILE="$KF" -- --tenant ahr
+    expect_status 0
+    expect_out "api.backblazeb2.com did not answer"
+    expect_not_out "a listing of b2unit:$BUCKET/ahr succeeded"
+    if grep -q "^lsf " "$ROOT/rclone.log" 2>/dev/null; then bad "a listing was attempted"; else ok; fi
+done
 
 # M5: the read key comes from the key file only.
 case_ "read key in the environment is ignored"
