@@ -819,20 +819,35 @@ if ! printf '%s\n' "$RUNNING_DB" | grep -qx db; then
     STEM_DB_STARTED=1
     $COMPOSE up -d --no-recreate db >/dev/null 2>&1 || stem_guard_refuse_unanswered "the db container could not be started"
 fi
+# The server is asked through the maintenance database, postgres: a restore
+# interrupted between its DROP and its CREATE leaves no application database
+# to connect to, and that is the state the retry this script prints exists to
+# repair.
 for i in $(seq 1 30); do
-    if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
+    if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d postgres >/dev/null 2>&1; then
         break
     fi
     [ "$i" -lt 30 ] || stem_guard_refuse_unanswered "the database did not become ready in 60s"
     sleep 2
 done
-if ! HAS_COLLECTIONS="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At \
-        -c "SELECT to_regclass('public.collections')" 2>/dev/null)"; then
+if ! DB_EXISTS="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -At \
+        -c "SELECT 1 FROM pg_database WHERE datname = '$DATABASE_NAME'" 2>/dev/null)"; then
     stem_guard_refuse_unanswered "the query failed"
+fi
+HAS_COLLECTIONS=""
+if [ -n "$DB_EXISTS" ]; then
+    if ! HAS_COLLECTIONS="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At \
+            -c "SELECT to_regclass('public.collections')" 2>/dev/null)"; then
+        stem_guard_refuse_unanswered "the query failed"
+    fi
 fi
 STEMS_AT_RISK=""
 DUMP_CHECKED=1
-if [ -z "$HAS_COLLECTIONS" ]; then
+if [ -z "$DB_EXISTS" ]; then
+    # Dropped and not created again: a restore interrupted after its DROP.
+    echo "  The database $DATABASE_NAME does not exist: an interrupted restore removed it."
+    echo "  It holds no volume, so none can lose its files."
+elif [ -z "$HAS_COLLECTIONS" ]; then
     # Dropped, or never created: a restore that failed part-way leaves this.
     echo "  The current database has no volumes table, so no volume can lose its files."
 else

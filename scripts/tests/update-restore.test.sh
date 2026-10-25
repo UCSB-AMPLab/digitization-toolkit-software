@@ -259,12 +259,18 @@ if [ "$1" = compose ]; then
                 psql)
                     case "$*" in *alembic_version*) echo "${FAKE_DB_REV:-rev-B}"; exit 0 ;; esac
                     case "$*" in
+                        *"FROM pg_database WHERE datname"*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -n "${FAKE_DB_ABSENT:-}" ] || echo 1
+                            exit 0 ;;
                         *to_regclass*)
                             [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -z "${FAKE_DB_ABSENT:-}" ] || { echo "psql: database does not exist" >&2; exit 2; }
                             [ -n "${FAKE_NO_COLLECTIONS_TABLE:-}" ] || echo "collections"
                             exit 0 ;;
                         *"filename_stem IS NOT NULL"*)
                             [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -z "${FAKE_DB_ABSENT:-}" ] || { echo "psql: database does not exist" >&2; exit 2; }
                             [ -z "${FAKE_STEMMED:-}" ] || printf '%b\n' "$FAKE_STEMMED"
                             exit 0 ;;
                     esac
@@ -1560,6 +1566,21 @@ CASE="db container not running: nothing at risk"
 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
 eq "$RC" 0 "exit status"
 logged "up -d --no-recreate db"
+
+# ── The stem guard and a database an interrupted restore removed ────────────
+stem_case "database removed by an interrupted restore"
+CASE="database removed by an interrupted restore: the rollback killed at its DROP"
+FAKE_KILL_ON_DROP=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+marker_has "kind: restore-failed"
+CASE="database removed by an interrupted restore: the retry"
+FAKE_STEMMED="$STEMMED_7" FAKE_DB_ABSENT=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+has "does not exist: an interrupted restore removed it."
+has "It holds no volume, so none can lose its files."
+hasnt "Could not check the current database"
+db_is restored
+no_marker
+active
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
