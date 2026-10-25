@@ -51,6 +51,21 @@ if [ -f "/etc/systemd/system/dtk-secrets.service" ]; then
     rm "/etc/systemd/system/dtk-secrets.service"
 fi
 
+# The unresolved-update start condition and its flag (install-service.sh,
+# update.sh). The record itself, under /var/lib/dtk/backups, is left.
+if [ -e "$SYSTEMD_DIR/dtk.service.d/unresolved.conf" ]; then
+    echo "→ Removing the unresolved-update start condition..."
+    rm -f "$SYSTEMD_DIR/dtk.service.d/unresolved.conf"
+    rmdir "$SYSTEMD_DIR/dtk.service.d" 2>/dev/null || true
+fi
+if [ -d /etc/dtk ]; then
+    if [ -e /etc/dtk/unresolved-deployment ]; then
+        echo "  ⚠ Removing /etc/dtk/unresolved-deployment: an update had been left"
+        echo "    unresolved; its record stays in /var/lib/dtk/backups/unresolved-deployment."
+    fi
+    rm -rf /etc/dtk
+fi
+
 echo "→ Reloading systemd daemon..."
 systemctl daemon-reload
 

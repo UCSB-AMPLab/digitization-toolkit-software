@@ -42,11 +42,14 @@
 #      REPLACING the current database contents. The irreversible step, and the
 #      last one that can fail — by which point the code is already right, so a
 #      failure here is retryable from the same backup.
+#   4b. Puts back the frontend image recorded for the restored version, when
+#      update.sh's record names it unambiguously and it is still on the unit.
 #   5. Restarts the service and reports what happened, component by component:
-#      the database and the code are restored; the pixi environment and the
-#      frontend image are NOT rebuilt (that needs the registries), so the
-#      summary says whether each still corresponds to the restored version,
-#      using the pre-update-state-* record update.sh writes (NEH-218).
+#      the database and the code are restored; the pixi environment is NOT
+#      rebuilt (that needs the registries), so the summary says whether it and
+#      the frontend image correspond to the restored version, using the
+#      pre-update-state-* record update.sh writes (NEH-218). A successful
+#      rollback also removes update.sh's unresolved-deployment record.
 #
 # Usage:
 #   sudo ./scripts/rollback-update.sh                       # newest dump
@@ -74,6 +77,18 @@ REF_FILE="$BACKUP_DIR/pre-update-ref"
 # script has to correct it when it takes the code back, or the unit reports a
 # version it is no longer running (NEH-272).
 LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
+# update.sh's record of an unresolved deployment, and the flag a systemd
+# drop-in turns into a start condition for dtk (update.sh, UNRESOLVED_FILE).
+# A rollback that restores both code and the database the record names
+# removes them; nothing else here does.
+UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
+UNRESOLVED_FLAG="/etc/dtk/unresolved-deployment"
+UNRESOLVED_FLAG_DIR="/etc/dtk"
+UNRESOLVED_DROPIN="/etc/systemd/system/dtk.service.d/unresolved.conf"
+# Set when this run found a record before it began. A record this run writes
+# itself (before its DROP) is cleared when its own load is verified.
+HAD_RECORD=0
+[ -e "$UNRESOLVED_FILE" ] && HAD_RECORD=1
 # Written just before the code moves and removed once the move is verified. On
 # a later run its presence means a move to the commit it names was
 # interrupted, so a tree that is part-way there is the expected state and not
@@ -122,6 +137,32 @@ else
     PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 fi
 
+# One update or rollback at a time. update.sh and rollback-update.sh (and
+# its kept copy under /var/lib/dtk) take the same lock, held until they exit,
+# so two runs cannot interleave a stop, a backup, a migration and a restore.
+# The file is opened without truncating it, so a refused run can read the
+# holder's pid; the holder writes its own once it has the lock.
+DTK_LOCK_FILE="/run/dtk-update.lock"
+take_update_lock() {
+    local holder
+    if ! command -v flock >/dev/null 2>&1; then
+        echo "⚠ flock is not installed: another update or rollback is not ruled out."
+        return 0
+    fi
+    if ! exec 9<>"$DTK_LOCK_FILE"; then
+        echo "✗ Could not open $DTK_LOCK_FILE."
+        exit 1
+    fi
+    if ! flock -n 9; then
+        holder="$(head -n 1 "$DTK_LOCK_FILE" 2>/dev/null | tr -dc '0-9')"
+        echo "✗ Another update or rollback is running (pid ${holder:-unknown}). This one"
+        echo "  will not run alongside it; wait for it to finish, then run this again."
+        exit 1
+    fi
+    printf '%s\n' "$$" > "$DTK_LOCK_FILE" 2>/dev/null || true
+}
+take_update_lock
+
 # Load DB credentials the same way update.sh / docker compose do.
 if [ -f "$PROJECT_ROOT/.env" ]; then
     set -a
@@ -167,6 +208,42 @@ tree_clean() {
     sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
         git -C "$PROJECT_ROOT" diff --quiet --ignore-submodules=untracked 2>/dev/null || rc=$?
     return "$rc"
+}
+
+# Is the backend fully stopped? The unit inactive or failed with no main PID,
+# and no uvicorn left (stop.sh, the unit's ExecStop, finds the backend by
+# "uvicorn app.main:app"). Same check as update.sh.
+backend_fully_stopped() {
+    local state pid
+    state="$(systemctl show dtk -p ActiveState --value 2>/dev/null)"
+    case "$state" in inactive|failed) ;; *) return 1 ;; esac
+    pid="$(systemctl show dtk -p MainPID --value 2>/dev/null)"
+    [ -z "$pid" ] || [ "$pid" = 0 ] || return 1
+    ! pgrep -f '[u]vicorn app[.]main:app' >/dev/null 2>&1
+}
+# The drop-in update.sh installs (UNRESOLVED_DROPIN there): written when
+# missing or different, always followed by a daemon-reload.
+ensure_unresolved_dropin() {
+    local want
+    want="$(printf '%s\n' \
+        "# Written by scripts/update.sh. While $UNRESOLVED_FLAG exists an update" \
+        "# was left unresolved (see $UNRESOLVED_FILE) and dtk must not start." \
+        "[Unit]" \
+        "ConditionPathExists=!$UNRESOLVED_FLAG")"
+    if [ "$(cat "$UNRESOLVED_DROPIN" 2>/dev/null)" != "$want" ]; then
+        mkdir -p "$(dirname "$UNRESOLVED_DROPIN")" \
+            && printf '%s\n' "$want" > "$UNRESOLVED_DROPIN.tmp" \
+            && mv -f "$UNRESOLVED_DROPIN.tmp" "$UNRESOLVED_DROPIN" || return 1
+    fi
+    systemctl daemon-reload
+}
+wait_backend_stopped() {
+    local i
+    for i in $(seq 1 30); do
+        backend_fully_stopped && return 0
+        sleep 2
+    done
+    return 1
 }
 
 cd "$PROJECT_ROOT"
@@ -440,6 +517,12 @@ if [ -n "$TARGET_SHA" ]; then
                 echo "  do. To see them:"
                 echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT status"
                 echo "  Commit them, or copy them aside and discard them, then run this again."
+                if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null | grep -q '^+'; then
+                    echo "  A submodule is not on the commit the superproject pins, which is what"
+                    echo "  an update whose code restore stopped part-way leaves. That is not"
+                    echo "  someone's work: put the submodules on their pins and run this again:"
+                    echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+                fi
                 echo "  (An update that pulled will have saved its own under"
                 echo "   $STATE_DIR/local-mods-<timestamp>/ before resetting; check there"
                 echo "   before discarding anything.)"
@@ -573,6 +656,42 @@ if [ -n "$TARGET_SHA" ]; then
     fi
 fi
 
+# A record of an unresolved deployment is resolved only by restoring the code
+# to the commit it names as the target and the database from the dump it
+# names. Anything else would leave it standing over a unit that then runs,
+# so it is refused here, with nothing changed.
+if [ -e "$UNRESOLVED_FILE" ]; then
+    REC_KIND="$(sed -n 's/^kind: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    if [ "$REC_KIND" = restore-failed ] || [ "$REC_KIND" = restore-refused ]; then
+        REC_TARGET="$(sed -n 's/^code-commit: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+        REC_DUMP="$(sed -n 's/^dump-to-restore: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    else
+        REC_TARGET="$(sed -n 's/^restore-target: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+        REC_DUMP="$(sed -n 's/^dump: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    fi
+    REC_TARGET_FULL="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse --verify --quiet "${REC_TARGET:-none}^{commit}" 2>/dev/null || true)"
+    REC_HEAD_NOW="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+    # With no commit to move to, the code must already be where the record
+    # says: a database-only rollback cut off after its DROP resumes that way.
+    if [ -z "$TARGET_SHA" ] && [ -n "$REC_TARGET_FULL" ] && [ "$REC_HEAD_NOW" = "$REC_TARGET_FULL" ]; then
+        :
+    elif [ -z "$TARGET_SHA" ] || [ -z "$REC_TARGET_FULL" ] || [ "$TARGET_SHA" != "$REC_TARGET_FULL" ]; then
+        echo "✗ $UNRESOLVED_FILE records an unresolved update whose code has to"
+        echo "  return to ${REC_TARGET:-(not recorded)}, but this rollback would return it to"
+        echo "  ${TARGET_SHA:-nothing (no commit is recorded in $SHA_FILE)}."
+        echo "  Restoring the database without the matching code would leave the two"
+        echo "  disagreeing. Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+    if [ -z "$REC_DUMP" ] || ! [ "$DUMP_FILE" -ef "$REC_DUMP" ]; then
+        echo "✗ $UNRESOLVED_FILE names the backup to restore:"
+        echo "      ${REC_DUMP:-(not recorded)}"
+        echo "  and this run would restore $DUMP_FILE. Run this again with that one."
+        echo "  Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+fi
+
 echo "This will:"
 echo "  • RESTORE the database from:"
 echo "      $DUMP_FILE   (${DUMP_BYTES} bytes)"
@@ -599,11 +718,45 @@ if [ "$ASSUME_YES" -ne 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1c. The backup directory, before anything is stopped. The record this
+#     script writes before its DROP lives there, and a unit that was never
+#     updated by a script that creates it may not have one: restoring a dump
+#     from elsewhere (a USB stick) is a supported case. Created and secured as
+#     update.sh's secure_backup_dir does (root:root, 0700, never through a
+#     symbolic link or over a non-directory); if that fails, nothing has been
+#     stopped and nothing is written.
+# ---------------------------------------------------------------------------
+if [ -L "$BACKUP_DIR" ]; then
+    echo "✗ $BACKUP_DIR is a symbolic link. The backups and the record of an"
+    echo "  unresolved restore must be in a directory of their own. Move the link"
+    echo "  aside and run this again."
+    echo "  Aborting with nothing changed — the database is untouched."
+    exit 1
+fi
+if [ -e "$BACKUP_DIR" ] && [ ! -d "$BACKUP_DIR" ]; then
+    echo "✗ $BACKUP_DIR exists and is not a directory. Move it aside and run"
+    echo "  this again."
+    echo "  Aborting with nothing changed — the database is untouched."
+    exit 1
+fi
+if ! { mkdir -p "$BACKUP_DIR" && chown root:root "$BACKUP_DIR" && chmod 0700 "$BACKUP_DIR"; }; then
+    echo "✗ Could not create $BACKUP_DIR as root, mode 0700."
+    echo "  Aborting with nothing changed — the database is untouched."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Stop the appliance.
 # ---------------------------------------------------------------------------
 echo "→ Stopping the appliance..."
 systemctl stop dtk 2>/dev/null || true
 $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+# The database is about to be replaced: nothing may still be writing to it.
+if ! wait_backend_stopped; then
+    echo "✗ The backend did not stop (systemctl status dtk; pgrep -af uvicorn)."
+    echo "  Nothing has been restored; the code and the database are as they were."
+    exit 1
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -663,6 +816,14 @@ stop_before_restore() {
     if code_never_moved; then
         echo "  The code never moved: the unit is still on $PREV_SUPER."
         rm -f "$ROLLBACK_MARKER"
+        if [ -e "$UNRESOLVED_FLAG" ]; then
+            echo "  The appliance is NOT started: $UNRESOLVED_FLAG exists (an update"
+            echo "  was left unresolved, $UNRESOLVED_FILE), and systemd does not start"
+            echo "  dtk while it does."
+            echo ""
+            echo "  Clear what is named above and run this script again."
+            exit 1
+        fi
         echo "→ Starting the appliance..."
         systemctl start dtk || true
         sleep 5
@@ -877,6 +1038,54 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
+if ! backend_fully_stopped; then
+    echo "✗ A backend is running again; the database was NOT dropped."
+    echo "  The dump at $DUMP_FILE is intact. Stop dtk and run this again:"
+    echo "      sudo $RESUME_CMD"
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    exit 1
+fi
+# From here to the verified load the database may be empty or partial, so
+# nothing may cut the run short (a closed SSH session, a closed pipe), and a
+# record goes down first, as update.sh does before its own DROP: a run killed
+# anyway (a power cut) leaves the record, and the flag keeps dtk from
+# starting until a later run completes the restore.
+trap '' HUP INT TERM PIPE
+write_restore_record() {
+    local head had_flag=0
+    head="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    [ -e "$UNRESOLVED_FLAG" ] && had_flag=1
+    mkdir -p "$UNRESOLVED_FLAG_DIR" && chmod 0700 "$UNRESOLVED_FLAG_DIR" \
+        && ( umask 077; : > "$UNRESOLVED_FLAG" ) || return 1
+    # Nothing has been dropped yet: a flag this call created goes again if
+    # the rest cannot be written, or it would block a unit with nothing to
+    # resolve.
+    if ! ensure_unresolved_dropin; then
+        [ "$had_flag" -eq 1 ] || rm -f "$UNRESOLVED_FLAG"
+        return 1
+    fi
+    if ! ( umask 077
+      {
+          echo "kind: restore-failed"
+          echo "code-commit: $head"
+          echo "dump-to-restore: $DUMP_FILE"
+          echo "dump: $DUMP_FILE"
+          echo "rollback-command: sudo $RESUME_CMD"
+          echo "recorded-by: rollback-update.sh"
+          echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
+      } > "$UNRESOLVED_FILE.tmp" ) || ! mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE"; then
+        [ "$had_flag" -eq 1 ] || rm -f "$UNRESOLVED_FLAG"
+        return 1
+    fi
+}
+if ! write_restore_record; then
+    rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true
+    echo "✗ Could not write $UNRESOLVED_FILE and its start flag, so the database"
+    echo "  was NOT dropped: without them a run cut off part-way would leave a"
+    echo "  broken database that nothing refuses to start on."
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    exit 1
+fi
 echo "→ Restoring the database (dropping and recreating '$DATABASE_NAME')..."
 # Terminate other sessions, then drop/recreate via the maintenance 'postgres'
 # database so we are not connected to the DB we are dropping.
@@ -903,6 +1112,8 @@ if ! gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$
     fi
     echo "      sudo $RESUME_CMD"
     echo "  Do NOT start the service until this is resolved. Get technical help."
+    echo "  $UNRESOLVED_FILE records this: update.sh refuses to run and dtk will"
+    echo "  not start until a rollback completes."
     $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
     exit 1
 fi
@@ -915,23 +1126,14 @@ $COMPOSE down --remove-orphans
 echo ""
 
 # ---------------------------------------------------------------------------
-# 5. Restart the service.
-# ---------------------------------------------------------------------------
-echo "→ Starting the appliance..."
-systemctl start dtk
-sleep 5
-SERVICE_OK=0
-if systemctl is-active --quiet dtk; then
-    SERVICE_OK=1
-fi
-
-# ---------------------------------------------------------------------------
-# What does NOT correspond to the restored version?
-#    Steps 3-4 restore the git checkout and the database only. The pixi
-#    environment and the frontend image were rebuilt by update.sh for the NEW
-#    code and are not rebuilt here (that needs the registries, and rollback is
-#    when a remote unit may be offline). Read what update.sh recorded and say,
-#    per component, whether it still matches — or that we cannot tell.
+# 4b. Put back the frontend image recorded for the restored version.
+#     update.sh records, in the state file pre-update-ref names, the image that
+#     was serving when the previous version was deployed
+#     (previously-deployed-frontend-image), and keeps it under a
+#     pre-update-<timestamp> tag so the rebuild cannot let it be pruned. The
+#     record is used only when it is unambiguous (STATE_RECORD, below) and the
+#     image is still on this unit; otherwise the image is left as it is and
+#     the summary says it does not correspond.
 # ---------------------------------------------------------------------------
 file_digest() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -952,6 +1154,29 @@ frontend_image_id() {
     [ -n "$cid" ] || return 1
     docker container inspect --format '{{.Image}}' "$cid" 2>/dev/null
 }
+# The name Compose tags the frontend build with. The frontend service has no
+# image: key, so the name is implicit (<project>-frontend), and not every
+# Compose version reports an implicit name from `config --images`: the bench
+# unit's v5.3.1 does. Asked three ways, in order: `config --images frontend`;
+# the image reference the running frontend container was created from
+# (.Config.Image, which Compose sets to that same name); and <project>-frontend
+# from the project name Compose itself resolved (`config`'s name: line, already
+# normalised from COMPOSE_PROJECT_NAME or the directory). Empty if none answers.
+frontend_image_name() {
+    local name cid project
+    name="$($COMPOSE config --images frontend 2>/dev/null | head -n 1)"
+    if [ -z "$name" ]; then
+        cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)"
+        [ -n "$cid" ] && name="$(docker container inspect --format '{{.Config.Image}}' "$cid" 2>/dev/null)"
+    fi
+    case "$name" in sha256:*) name="" ;; esac
+    if [ -z "$name" ]; then
+        project="$($COMPOSE config 2>/dev/null | sed -n 's/^name: *//p' | head -n 1)"
+        [ -n "$project" ] && name="$project-frontend"
+    fi
+    printf '%s' "$name"
+}
+
 # state_field <key> <file>: value of "key: value", empty if absent/unreadable.
 state_field() {
     sed -n "s/^$1: //p" "$2" 2>/dev/null | head -n 1
@@ -1009,6 +1234,76 @@ else
     fi
 fi
 
+if [ -n "$STATE_RECORD" ]; then
+    REC_IMG_PRE="$(state_field previously-deployed-frontend-image "$STATE_RECORD")"
+    FRONTEND_NAME="$(frontend_image_name || true)"
+    FRONTEND_WHY=""
+    if [ -z "$REC_IMG_PRE" ]; then
+        FRONTEND_WHY="no image was recorded when $TARGET_SHA was deployed"
+    elif [ -z "$FRONTEND_NAME" ]; then
+        FRONTEND_WHY="Compose did not give the frontend image's name"
+    elif ! docker image inspect "$REC_IMG_PRE" >/dev/null 2>&1; then
+        FRONTEND_WHY="the recorded image $REC_IMG_PRE is no longer on this unit"
+    elif ! docker tag "$REC_IMG_PRE" "$FRONTEND_NAME" >/dev/null 2>&1; then
+        FRONTEND_WHY="docker tag $REC_IMG_PRE $FRONTEND_NAME failed"
+    fi
+    if [ -z "$FRONTEND_WHY" ]; then
+        echo "→ Frontend image put back: $FRONTEND_NAME is $REC_IMG_PRE, the image"
+        echo "  recorded when $TARGET_SHA was deployed."
+    else
+        echo "⚠⚠ THE FRONTEND IMAGE WAS NOT PUT BACK: $FRONTEND_WHY."
+        echo "   The restored version will run with the frontend image that is tagged"
+        echo "   now; the summary below says whether that corresponds."
+    fi
+    echo ""
+fi
+
+# Code and database are both back (with a record, on the commit and from the
+# dump it names: checked before anything changed). The record and the flag
+# go before the start, which the flag would otherwise block.
+RECORD_NOTE=""
+if [ "$HAD_RECORD" -eq 0 ]; then
+    # Only the record this run wrote before its DROP: the load is verified,
+    # so the database is whole again.
+    rm -f "$UNRESOLVED_FILE" "$UNRESOLVED_FLAG" 2>/dev/null || true
+elif [ "$CODE_ROLLED_BACK" -eq 1 ] || [ -z "$TARGET_SHA" ]; then
+    if [ -e "$UNRESOLVED_FILE" ]; then
+        if rm -f "$UNRESOLVED_FILE"; then
+            RECORD_NOTE="$UNRESOLVED_FILE removed; update.sh will run again"
+        else
+            RECORD_NOTE="⚠ could not remove $UNRESOLVED_FILE; update.sh still refuses"
+        fi
+    fi
+    rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
+elif [ -e "$UNRESOLVED_FILE" ]; then
+    RECORD_NOTE="$UNRESOLVED_FILE kept: the code was not rolled back"
+fi
+if [ -e "$UNRESOLVED_FILE" ] || [ -e "$UNRESOLVED_FLAG" ]; then
+    echo "✗ An unresolved-deployment record or flag remains, so the appliance is"
+    echo "  NOT started. ${RECORD_NOTE}"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Restart the service.
+# ---------------------------------------------------------------------------
+echo "→ Starting the appliance..."
+systemctl start dtk
+sleep 5
+SERVICE_OK=0
+if systemctl is-active --quiet dtk; then
+    SERVICE_OK=1
+fi
+
+# ---------------------------------------------------------------------------
+# What does NOT correspond to the restored version?
+#    Steps 3-4 restore the git checkout and the database; 4b retags the
+#    frontend image when the record allows. The pixi environment was rebuilt
+#    by update.sh for the NEW code and is not rebuilt here (that needs the
+#    registries, and rollback is when a remote unit may be offline). Read what
+#    update.sh recorded and say, per component, whether it still matches — or
+#    that we cannot tell.
+# ---------------------------------------------------------------------------
 # Pixi environment. The lock digest says what the update installed against,
 # not what is installed now: start.sh runs "pixi run start", which can
 # reinstall for the restored lock before the summary prints.
@@ -1084,6 +1379,9 @@ else
 fi
 report_component "Pixi env:" "$PIXI_STATUS" "$PIXI_DETAIL" "$PIXI_FIX"
 report_component "Frontend:" "$IMG_STATUS" "$IMG_DETAIL" "$IMG_FIX"
+if [ -n "$RECORD_NOTE" ]; then
+    echo "  Record:    $RECORD_NOTE"
+fi
 if [ "$SERVICE_OK" -eq 1 ]; then
     echo "  Service:   running ✓"
     echo ""
