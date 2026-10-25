@@ -19,10 +19,16 @@ The commands assume a unit installed as `scripts/dtk.service` ships: the checkou
 ```bash
 git -C /home/pi/dtk rev-parse HEAD
 git -C /home/pi/dtk submodule status
-cat /var/lib/dtk/backups/last-deployed-SHA
+sudo cat /var/lib/dtk/backups/last-deployed-SHA
 ```
 
-`update.sh` records the commit in `last-deployed-SHA` as the rollback target. When that file is absent or empty, `rollback-update.sh` can restore the database but cannot return the code to the previous version. Keep the output of the first two commands in that case.
+`update.sh` returns to the commit in `last-deployed-SHA` if it fails, and records it as the rollback target. With `--no-pull`, which the 0.1.0 install uses (2.1), it refuses to start, with nothing changed, when that file is absent, empty, or names a commit not in the checkout: the checkout is already the new code and cannot stand in for it. In that case, before 2.1, write the commit the first command printed:
+
+```bash
+echo <commit> | sudo tee /var/lib/dtk/backups/last-deployed-SHA
+```
+
+`/var/lib/dtk/backups/` is root's alone (mode 0700), so reading it needs `sudo`.
 
 ### 1.2 Check free space
 
@@ -34,10 +40,10 @@ df -h / /var/lib/dtk
 
 ### 1.3 The database backup
 
-You do not need to take a backup by hand. Before it stops anything, `update.sh` writes a `pg_dump` of the database to `/var/lib/dtk/backups/pre-update-<YYYYmmdd-HHMMSS>.sql.gz` and refuses to continue if the file is under 100 bytes. The dumps already on the unit:
+You do not need to take a backup by hand. `update.sh` takes two `pg_dump`s to `/var/lib/dtk/backups/pre-update-<YYYYmmdd-HHMMSS>.sql.gz`. The first is a trial while the unit still serves, which checks `pg_dump` and free space before any downtime. The second is taken after the backend has stopped, so nothing saved before the stop is missing from it; once it is verified, the trial is deleted. Each is refused if it is under 100 bytes. The dumps hold every account's password hash, so they are written mode 0600 in a root-only directory. The dumps already on the unit:
 
 ```bash
-ls -lt /var/lib/dtk/backups/
+sudo ls -lt /var/lib/dtk/backups/
 ```
 
 ### 1.4 Stop any interim upload timer
@@ -98,7 +104,7 @@ The first command must print `origin/main`: later runs of `update.sh` fetch from
 
 ### 2.2 Run `update.sh` outside the SSH session
 
-Make sure nobody captures while `update.sh` is running: it stops the service part-way.
+Make sure nobody captures while `update.sh` is running: it stops the service part-way. Only one update or rollback runs at a time: both take the lock `/run/dtk-update.lock`, and a second run is refused with the holder's process id.
 
 ```bash
 sudo systemd-run --unit=dtk-deploy --collect /home/pi/dtk/scripts/update.sh --yes --no-pull
@@ -114,17 +120,18 @@ Never run `update.sh` directly in an SSH session. If the connection is lost, the
 
 In order:
 
-1. Without `--no-pull` only (later updates): fetches the branch's upstream and fast-forwards to it, then syncs the submodules. It refuses a branch that cannot be fast-forwarded. Locally modified tracked files are copied to `/var/lib/dtk/local-mods-<timestamp>/` before they are reset; untracked files are never deleted.
-2. Records the pre-update state in `/var/lib/dtk/backups/pre-update-state-<timestamp>`.
-3. Rebuilds the frontend image and runs `pixi install --locked` for the backend. The containers and the backend keep running until step 6, but the code on disk is already the new code, and from here the pixi environment on disk is the new one.
+1. Records what is running: the last deployed commit, the frontend image (kept under a `pre-update-<timestamp>` tag) and the backend's `pixi.lock`. These are what it puts back if the update fails.
+2. Without `--no-pull` only (later updates): fetches the branch's upstream and fast-forwards to it, then syncs the submodules. It refuses a branch that cannot be fast-forwarded. Locally modified tracked files are copied to `/var/lib/dtk/local-mods-<timestamp>/` before they are reset; untracked files are never deleted.
+3. Rebuilds the frontend image and runs `pixi install --locked` for the backend. The containers and the backend keep running, but the code and the pixi environment on disk are already the new ones.
 4. Runs `provision-chdk-usb.sh` and `provision-rclone.sh --advisory`. The second installs the pinned rclone if needed and keeps what `offsite.env` already records. Under `--advisory` it never writes a read key.
-5. Takes and checks the database dump (1.3), and records the rollback target in `/var/lib/dtk/backups/pre-update-SHA`.
-6. Stops `dtk`, starts the database alone, applies the migrations with `pixi run db-upgrade`, and stops the database.
-7. Starts `dtk` and writes the new commit to `last-deployed-SHA`.
+5. Takes the trial dump while the unit serves (1.3), and records the rollback target in `/var/lib/dtk/backups/pre-update-SHA`.
+6. Stops `dtk` and checks that no backend process is left.
+7. Starts the database alone and takes the dump with the backend stopped.
+8. Writes the unresolved record (7.3) and applies the migrations with `pixi run db-upgrade`, then stops the database.
+9. Starts `dtk` and waits up to 300 seconds for the backend to answer `/health`.
+10. Writes the new commit to `last-deployed-SHA` and removes the unresolved record.
 
-A failure before the service stop leaves the old backend serving.
-
-**A failure after the stop (this behaviour is changing).** At this version the script runs `systemctl start dtk` again, which starts the code on disk: the new code, with the new pixi environment and the new frontend image, against a database that may be partly or fully migrated. It reports the unit as back online. It does not return the checkout, the image or the environment to the previous version. After such a failure, run the rollback (step 7). A coming change to `update.sh` restores the previous checkout, frontend image and pixi environment; this paragraph will be rewritten when it lands.
+What `update.sh` does when one of these steps fails is in step 7.
 
 ### 2.4 Follow it
 
@@ -134,7 +141,7 @@ journalctl -u dtk-deploy -f
 
 The script has finished when `Update complete!` or one of the failure messages appears in the log. With `--collect` the transient unit is removed when it ends; its log stays readable with `journalctl -u dtk-deploy`.
 
-`Update complete!` means only that systemd reported `dtk` active five seconds after the start. Confirm that the backend is serving and read its start:
+`Update complete!` is printed only after the backend has answered `/health` (step 9 above). Read its start as well:
 
 ```bash
 curl -s http://localhost:8000/health
@@ -190,7 +197,7 @@ Repeat `pg_isready` until it reports that the server is accepting connections. T
 sudo systemctl restart dtk
 ```
 
-Do not restart until every stem is right: from this start on, the files of each volume with a stem are in `<stem>/`, and rolling back no longer returns the unit to a usable state (7.3).
+Do not restart until every stem is right: from this start on, the files of each volume with a stem are in `<stem>/`, and rolling back no longer returns the unit to a usable state (8.3).
 
 At every start, before it serves, the backend moves the existing files of each volume with a stem from the name-based layout into `<stem>/captures/`, `<stem>/previews/` and `<stem>/thumbnails/`. It works one volume at a time, through a journal in `/var/lib/dtk/volume-layout.journal`, and completes an interrupted batch at the next start. Once every volume with a stem is in place, it moves nothing.
 
@@ -241,15 +248,23 @@ Lines logged at INFO, such as the one for freed files pointed at their new names
 
 ## 4. Provision the offsite copy, without restarting
 
-### 4.0 Create the upload hold (to be added when the hold lands)
+### 4.0 Create the upload hold
 
-A coming change adds a hold file. While it exists, the backend uploads no image and no catalogue dump and sends nothing to Fisqua; it checks for the file at each run. The commands in step 5 are not affected. Create it before provisioning, or before step 2 on a unit whose `offsite.env` already records a remote and a tenant (2.5), and remove it as the last step (6.2):
+While `/var/lib/dtk/offsite-hold` exists, nothing is sent offsite:
+
+- the backend uploads and lists no image, and stops a run already under way after the object in progress;
+- the backend takes no catalogue dump;
+- freeing a volume from the card is refused. The free's dry run and restore are not held.
+
+The backend checks for the file at the start of each run, so creating or removing it takes effect at the next run, with no restart. It also holds through a restart caused by a crash, a reboot or a power cut. The commands in step 5 do not read it. Only the file's existence counts. Its path can be changed with `DTK_OFFSITE_HOLD_FILE`. `GET /system/catalogue-backup` reports it as `held` and `hold_file`. Sending to Fisqua is held too (lands with the Fisqua link).
+
+Create it before provisioning, or before step 2 on a unit whose `offsite.env` already records a remote and a tenant (2.5):
 
 ```bash
-sudo touch /var/lib/dtk/offsite-hold   # path to be confirmed
+sudo touch /var/lib/dtk/offsite-hold
 ```
 
-Until the change lands, there is no hold, and the order of steps 4 to 6 is what keeps the backend from uploading early (4.4).
+Remove it as the last step (6.2).
 
 ### 4.1 The key file
 
@@ -274,9 +289,11 @@ READ_APP_KEY=...
 
 | Key | What it is |
 |---|---|
-| `KEY_ID`, `APP_KEY` | The unit's B2 application key, scoped to the one bucket with `writeFiles` and `listFiles` only. |
+| `KEY_ID`, `APP_KEY` | The unit's upload key: a B2 application key scoped to the one bucket and the unit's tenant prefix, with `listFiles` and `writeFiles`. No `readFiles` and no `deleteFiles`, so a stolen unit can neither download nor erase the archive. |
 | `BUCKET` | The unit's bucket, one per institution. |
-| `READ_KEY_ID`, `READ_APP_KEY` | Optional. A second key, scoped to the same bucket and the unit's tenant prefix, with `listFiles` and `readFiles` only. It must differ from the upload key. Without it, restoring a freed volume is unavailable. |
+| `READ_KEY_ID`, `READ_APP_KEY` | Optional. A second key with the same scope, with `listFiles` and `readFiles`. It must differ from the upload key. Without it, restoring a freed volume is unavailable. |
+
+Both keys also carry `listBuckets` (verify against the keys issued: the scripts and the backend do not name it). The file's mode is 0600 and its owner root.
 
 Never pass a key as an assignment in front of `sudo`: it becomes part of sudo's command line, which any local user can read from `/proc/<pid>/cmdline`.
 
@@ -315,6 +332,8 @@ It holds `DTK_OFFSITE_REMOTE`, `DTK_OFFSITE_TENANT` and `DTK_OFFSITE_DUMP_RECIPI
 The backend reads `.env` and `/var/lib/dtk/offsite.env` once, when its settings are built at import; a key in `offsite.env` wins over the same key in `.env`. The upload and dump schedules are started at boot. The running backend therefore keeps the settings it started with, which have no tenant, and uploads nothing until it is restarted in step 6.
 
 Each command in step 5 is a new process, which builds its settings at its own start and so reads the new `offsite.env`. That is what lets step 5 list the bucket and record keys before the first upload.
+
+A backend restarted before step 6, by a crash, a reboot or a power cut, reads the tenant. The hold (4.0) is what keeps it from uploading then.
 
 ---
 
@@ -427,13 +446,15 @@ sudo systemctl restart dtk
 
 The backend now reads the tenant and starts both schedules. The backend runs each one first `DTK_OFFSITE_BACKUP_DELAY` seconds after the start (300 by default), and again `DTK_OFFSITE_BACKUP_INTERVAL` seconds after each run ends (1800 by default).
 
-### 6.2 Remove the hold (to be added when the hold lands)
+### 6.2 Remove the hold
 
-As the last step, remove the hold created in 4.0, so the backend starts uploading:
+As the last step, remove the hold created in 4.0:
 
 ```bash
-sudo rm /var/lib/dtk/offsite-hold   # path to be confirmed
+sudo rm /var/lib/dtk/offsite-hold
 ```
+
+The backend starts uploading at its next scheduled run, with no restart.
 
 ### 6.3 Check
 
@@ -451,7 +472,7 @@ sudo rm /var/lib/dtk/offsite-hold   # path to be confirmed
 
   `read -rs` keeps the password off the screen and out of the shell history, and the request body goes through a pipe, so the password is never on a command line.
 
-  `enabled` and `images.enabled` are `true`; `images.misconfigured` is `null`; `last_verified_at` fills in once the first dump is verified. A missing or invalid dump recipient is not shown here: `enabled` stays `true` and `last_verified_at` does not advance, and each run writes `catalogue_backup_failed` to the system log.
+  `held` is `false`; `enabled` and `images.enabled` are `true`; `images.misconfigured` is `null`; `last_verified_at` fills in once the first dump is verified. A missing or invalid dump recipient is not shown here: `enabled` stays `true` and `last_verified_at` does not advance, and each run writes `catalogue_backup_failed` to the system log.
 
 ### 6.4 Free one volume first
 
@@ -461,17 +482,76 @@ Before it removes each file, the backend recomputes its SHA1 and lists the bucke
 
 ---
 
-## 7. Rollback
+## 7. If `update.sh` fails
 
-### 7.0 Before you roll back
+### 7.1 What `update.sh` does on a failure
+
+- **Before the service stop.** It puts the checkout, the submodules, the frontend image and the pixi environment back to the version still running, and does not restart the service. The database has not been touched.
+- **After the stop, before the new version is started.** It puts back the code and the submodule pins, the frontend image and the pixi environment. If a migration had begun, it restores the database from the dump taken with the backend stopped, and from no other. It then starts the previous version and reports it online only once the backend answers `/health`. When the new commit is on no remote branch, it is kept as a local branch `failed-update/<timestamp>`.
+- **After the new version has been started.** Nothing is restored automatically: the new version may have saved data. The script stops `dtk`, leaves the unit stopped on the new code and the migrated database, writes the unresolved record, and prints the rollback command with its warning that everything written since the dump is discarded.
+
+Reinstalling the previous pixi environment needs the conda registry when `pixi.lock` changed in the update, unless every package is still in pixi's cache. The script says so when it cannot.
+
+After a restore, the local branch names the previous commit. For the 0.1.0 install, that is `main` pointing at the commit the unit ran before; before trying again, point it back at `origin/main` with `git -C /home/pi/dtk checkout -B main origin/main` (verify on the bench).
+
+### 7.2 A failed 0.1.0 install
+
+When `update.sh` fails during the 0.1.0 install and puts the previous code back, the `update.sh` on disk is the previous one again, which knows nothing of the unresolved record and would not refuse. The script prints `DO NOT RUN scripts/update.sh ON THIS UNIT UNTIL THE ROLLBACK HAS SUCCEEDED` in that case. Run only the rollback command it prints.
+
+### 7.3 The unresolved record
+
+When an update cannot leave code and database in agreement, `update.sh` writes `/var/lib/dtk/backups/unresolved-deployment` and creates the flag `/etc/dtk/unresolved-deployment`. A systemd drop-in, `/etc/systemd/system/dtk.service.d/unresolved.conf`, makes `ConditionPathExists=!/etc/dtk/unresolved-deployment` a start condition of `dtk`, so systemd does not start `dtk` while the flag exists, on a restart or a reboot. `install-service.sh` installs the drop-in, and `update.sh` installs it whenever it writes a record.
+
+While the record exists, `update.sh` refuses to run. It prints the record, its age, and whether `dtk` has been started since it was written, and names the way forward.
 
 ```bash
-ls -lt /var/lib/dtk/backups/
-cat /var/lib/dtk/backups/pre-update-SHA
-journalctl -u dtk-deploy | grep -A1 "Backing up the database to:"
+sudo cat /var/lib/dtk/backups/unresolved-deployment
 ```
 
-The last command gives the dump this update wrote. Check that it is in the listing and that `pre-update-SHA` names the commit noted in 1.1. Name that dump on the command line rather than relying on the newest one:
+| `kind` | What happened | What to do |
+|---|---|---|
+| `started-failed` | `update.sh` started the new version and then failed. The code is the new version's and the database is migrated for it. | Either run the recorded rollback command, which returns code and database to the previous version and discards everything written since the dump, or, once the cause is fixed, `update.sh --resolve-forward` (7.4). |
+| `migrated-not-restored` | `update.sh` failed after the migration began, and the code was not moved back, or only part-way. The database may be migrated or partly migrated. | The recorded rollback command, once whatever stopped the code from moving is cleared; or `--resolve-forward` if the code is exactly the failed commit and the database is at its head. |
+| `restore-failed` | The database was dropped for a restore, and loading the dump failed or was cut off. The database may be empty or partly restored. Also written by a rollback cut off after its drop. | Only the recorded rollback command. `--resolve-forward` refuses this kind. |
+| `restore-refused` | `update.sh` failed after the migration, and refused the restore before anything was dropped (a backend was running, or the start guard could not be put in place). The code is back on the previous commit; the database is as the migration left it. | Only the recorded rollback command. `--resolve-forward` refuses this kind. |
+
+The record names the rollback command in its `rollback-command` line. A successful rollback removes the record and the flag. If the rollback refuses because the checkout has modified files, clear them first.
+
+**A flag without a record.** `update.sh` refuses, and `dtk` does not start. Find out which version the code is on and whether the database matches it (the failed run's output, `systemctl status dtk`). When they agree, remove the flag: `sudo rm /etc/dtk/unresolved-deployment`.
+
+### 7.4 `update.sh --resolve-forward [--no-start]`
+
+Use it to keep the version that failed, once the cause is fixed and you would rather not discard what it saved. Use the rollback (step 8) to return to the previous version.
+
+```bash
+sudo systemd-run --unit=dtk-deploy --collect /home/pi/dtk/scripts/update.sh --resolve-forward
+```
+
+It changes nothing until every check passes:
+
+- `HEAD` is exactly the record's `failed-commit`;
+- no tracked file is modified;
+- every submodule is on its pin, and the checked-out submodule commits and any staged pointers match the gitlinks `HEAD` records;
+- `dtk` and every backend process are stopped;
+- with only the database container running, the database's `alembic_version` equals the migration head of the backend checked out.
+
+Then it writes the commit to `last-deployed-SHA`, removes the record and the flag, starts `dtk` and waits for `/health`. With `--no-start` it records the version and leaves the unit stopped, so that a fixed commit can then be deployed with an ordinary update. It refuses the `restore-failed` and `restore-refused` kinds, and refuses to run when there is no record.
+
+---
+
+## 8. Rollback
+
+### 8.0 Before you roll back
+
+If `/var/lib/dtk/backups/unresolved-deployment` exists, run the rollback command it records (7.3): the rollback refuses any other commit or dump while the record exists. Otherwise:
+
+```bash
+sudo ls -lt /var/lib/dtk/backups/
+sudo cat /var/lib/dtk/backups/pre-update-SHA
+journalctl -u dtk-deploy | grep -A1 "Backing up the database with the backend stopped, to:"
+```
+
+The last command gives the dump this update took with the backend stopped. Check that it is in the listing and that `pre-update-SHA` names the commit noted in 1.1. Name that dump on the command line rather than relying on the newest one:
 
 ```bash
 sudo systemd-run --unit=dtk-rollback --collect \
@@ -479,7 +559,7 @@ sudo systemd-run --unit=dtk-rollback --collect \
 journalctl -u dtk-rollback -f
 ```
 
-`--yes` is required for the same reason as in 2.2: with no terminal, the script aborts at its confirmation. With `--yes` it drops and restores the database without asking.
+`--yes` is required for the same reason as in 2.2: with no terminal, the script aborts at its confirmation. With `--yes` it drops and restores the database without asking. The rollback takes the same lock as `update.sh` (2.2).
 
 If the rollback stops part-way, run it again from the copy it keeps outside the checkout:
 
@@ -490,13 +570,14 @@ sudo systemd-run --unit=dtk-rollback --collect \
 
 The first start after a rollback may reinstall the pixi environment for the restored lock file, which needs the network.
 
-### 7.1 What it restores
+### 8.1 What it restores
 
 1. It checks that the checkout is clean and on its pins and that the pre-update commit is present, and stops with the unit still running if not. It keeps a copy of itself at `/var/lib/dtk/rollback-update.sh`.
 2. It stops `dtk`.
 3. It checks out the commit in `/var/lib/dtk/backups/pre-update-SHA` and syncs the submodules to that commit's pins. With no recorded commit, the code is left as it is.
 4. It drops the database and restores the newest `pre-update-*.sql.gz`, or the dump named on the command line.
-5. It starts `dtk` and reports, component by component, whether the pixi environment and the frontend image correspond to the restored version. It does not rebuild either; the summary gives the command for each.
+5. It puts back the frontend image recorded for the restored version, when the record names it and the image is still on the unit.
+6. It removes the unresolved record and flag, starts `dtk` and reports, component by component, whether the pixi environment and the frontend image correspond to the restored version. It does not rebuild the pixi environment; the summary gives the command.
 
 It does not touch `/var/lib/dtk/offsite.env`, the rclone config, the files on the card or the bucket.
 
@@ -506,21 +587,21 @@ It does not touch `/var/lib/dtk/offsite.env`, the rclone config, the files on th
 sudo mv /var/lib/dtk/offsite.env /var/lib/dtk/offsite.env.aside
 ```
 
-### 7.2 What it loses
+### 8.2 What it loses
 
 Everything written to the database after the dump: captures (their files stay on the card, named by no row), stems given in step 3, keys recorded by `adopt-map` and `adopt` in step 5, counter raises, uploads recorded in step 6, and freed state.
 
 Never roll back after a volume has been freed. The freed files are no longer on the card, the restored database names them as present, and the records that would let an admin restore them from the bucket are gone.
 
-### 7.3 When it is safe
+### 8.3 When it is safe
 
 The cleanest point is before step 3. By then the backend has moved files only for volumes that had a stem before the update; on a unit where no volume had one, it has moved nothing.
 
 Do not roll back after the restart in 3.3. From then on the files of each volume given a stem are in `<stem>/`, and the restored rows name their old paths. The earlier version cannot find the moved files, and nothing moves them back.
 
-### 7.4 The next update
+### 8.4 The next update
 
-Before updating again after a rollback past step 4, move `offsite.env` aside if it is still in place (7.1). Otherwise, when `update.sh` restarts it, the backend starts uploading with the recorded tenant before the stems and the step 5 commands are in place (2.5). Step 4 then needs the key file again, since 4.2 removed it; with the same key id, `provision-rclone.sh` keeps the existing `rclone.conf` and records the settings again.
+Before updating again after a rollback past step 4, move `offsite.env` aside if it is still in place (8.1). Otherwise, when `update.sh` restarts it, the backend starts uploading with the recorded tenant before the stems and the step 5 commands are in place (2.5). Step 4 then needs the key file again, since 4.2 removed it; with the same key id, `provision-rclone.sh` keeps the existing `rclone.conf` and records the settings again.
 
 When the unit is updated to 0.1.0 again, the backend moves files at its start:
 
@@ -529,15 +610,45 @@ When the unit is updated to 0.1.0 again, the backend moves files at its start:
 
 ---
 
-## 8. Connecting to Fisqua
+## 9. Fisqua
 
-The unit's Fisqua URL and token are installed at provisioning. The mechanism is not in the code at this version (to be added when the link lands).
+What the unit offers Fisqua at this version:
+
+- **The capture manifest.** `GET /collections/{id}/capture-manifest` returns a volume's capture manifest for Fisqua (exchange contract 1.1) as a JSON download, for admins and operators. It answers `409`, naming each problem, when Fisqua would refuse the file.
+- **The digitisation list.** `POST /imports/digitisation-list` imports a Fisqua digitisation list.
+
+The link to Fisqua is part of 0.1.0, but its code is not yet on `dev` (lands with the Fisqua link). That covers the unit's Fisqua URL and token, how they are installed at provisioning, and what the unit sends.
+
+---
+
+## 10. Checks after an update
+
+Run these on the bench unit after every update, and on a unit in service after its update:
+
+```bash
+curl -s http://localhost:8000/health
+sudo cat /var/lib/dtk/backups/last-deployed-SHA
+git -C /home/pi/dtk rev-parse HEAD
+git -C /home/pi/dtk submodule status
+sudo ls /var/lib/dtk/backups/unresolved-deployment /etc/dtk/unresolved-deployment
+systemctl cat dtk | grep ConditionPathExists
+sudo /home/pi/dtk/scripts/check-stack-health.sh
+journalctl -u dtk --since "15 min ago" | grep -E "Volume layout:|Cannot start|Traceback|offsite uploads are on hold"
+```
+
+- `/health` answers `{"status":"ok"}`.
+- `last-deployed-SHA` and `HEAD` name the same commit, and every line of `submodule status` begins with a space (on its pin).
+- Neither unresolved file exists (`ls` reports both missing).
+- The drop-in's `ConditionPathExists=!/etc/dtk/unresolved-deployment` is listed.
+- `check-stack-health.sh` reports the database healthy and listening on `127.0.0.1:5432`, the frontend running and nginx running.
+- The journal has no `Cannot start` and no `Traceback`; any `Volume layout:` lines are read as in 3.4. `offsite uploads are on hold` appears at each run while the hold exists.
+- `GET /system/catalogue-backup` (6.3) reports `held` as expected for the point of the procedure.
 
 ---
 
 ## A new unit
 
-1. Provision the card with `sudo ./scripts/setup.sh`, then `sudo ./scripts/install-service.sh` (see [SD Card Distribution](sd_card_distribution.qmd)).
+1. Provision the card with `sudo ./scripts/setup.sh`, then `sudo ./scripts/install-service.sh`, which also installs the unresolved-update drop-in (see [SD Card Distribution](sd_card_distribution.qmd)).
 2. Write the key file and run `provision-rclone.sh` with `--tenant` and `--dump-recipient`, as in step 4.
 3. Start or restart `dtk` and check as in 6.3.
 
