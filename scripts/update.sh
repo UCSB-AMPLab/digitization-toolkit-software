@@ -554,6 +554,35 @@ wait_for_health() {
 # merely on a different commit is what an interrupted update leaves, and the
 # restore moves it; a modified file inside it is someone's work, and the
 # restore will not discard it. The same refusal rollback-update.sh makes.
+# gitlinks_match_head <repo-dir> [checked-out]: 0 when every submodule's
+# entry in the index equals the gitlink in HEAD's tree and, with
+# "checked-out", the commit checked out in the submodule equals it too
+# (recursively); 1 when one differs; 2 when something could not be read.
+# `git submodule status` is no substitute: it compares the submodule with the
+# index, so a gitlink staged to another commit, with the submodule on that
+# commit, reads as on its pin. `diff --cached --ignore-submodules=all` does
+# not see a staged gitlink at all.
+gitlinks_match_head() {
+    local dir="$1" mode="${2:-}" tree line sha path idx cur rc
+    tree="$(run_as_repo_owner git -C "$dir" ls-tree -r HEAD 2>/dev/null)" || return 2
+    while IFS= read -r line; do
+        [ "${line%% *}" = 160000 ] || continue
+        sha="$(printf '%s' "${line%%$'\t'*}" | awk '{print $3}')"
+        path="${line#*$'\t'}"
+        idx="$(run_as_repo_owner git -C "$dir" ls-files -s -- "$path" 2>/dev/null | awk '{print $2}')" || return 2
+        [ "$idx" = "$sha" ] || return 1
+        if [ "$mode" = checked-out ]; then
+            [ -e "$dir/$path/.git" ] || return 1
+            cur="$(run_as_repo_owner git -C "$dir/$path" rev-parse HEAD 2>/dev/null)" || return 2
+            [ "$cur" = "$sha" ] || return 1
+            rc=0
+            gitlinks_match_head "$dir/$path" checked-out || rc=$?
+            [ "$rc" -eq 0 ] || return "$rc"
+        fi
+    done <<< "$tree"
+    return 0
+}
+
 tracked_files_modified() {
     local rc=0 subs sub
     # Working tree against HEAD, then the index against HEAD: `diff HEAD`
@@ -562,6 +591,9 @@ tracked_files_modified() {
     [ "$rc" -eq 0 ] || return "$rc"
     run_as_repo_owner git -C "$PROJECT_ROOT" diff --cached HEAD --quiet --ignore-submodules=all 2>/dev/null || rc=$?
     [ "$rc" -eq 0 ] || return "$rc"
+    # A gitlink staged to a commit other than HEAD's is a staged change as
+    # well, which the line above does not see.
+    gitlinks_match_head "$PROJECT_ROOT" || return $?
     subs="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'printf "%s\n" "$displaypath"' 2>/dev/null)" || return 2
     for sub in $subs; do
         run_as_repo_owner git -C "$PROJECT_ROOT/$sub" diff HEAD --quiet 2>/dev/null || rc=$?
@@ -599,7 +631,8 @@ restore_code() {
     fi
     if [ "$now" = "$RESTORE_SHA" ] \
             && sub_status="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)" \
-            && ! printf '%s\n' "$sub_status" | grep -qv '^ '; then
+            && ! printf '%s\n' "$sub_status" | grep -qv '^ ' \
+            && gitlinks_match_head "$PROJECT_ROOT" checked-out; then
         CODE_RESTORED=1
         note_restored "code: still on $RESTORE_SHA with submodules on its pins; the update had not moved it"
         return 0
@@ -643,6 +676,12 @@ restore_code() {
     fi
     if [ -n "$sub_status" ] && printf '%s\n' "$sub_status" | grep -qv '^ '; then
         note_not_restored "code: on $RESTORE_SHA, but a submodule is not at the commit it pins: $(printf '%s' "$sub_status" | grep -v '^ ' | tr '\n' ';')"
+        return 1
+    fi
+    # Against HEAD's tree, not the index: the checkout above resets the index,
+    # but this is what "on its pins" has to mean.
+    if ! gitlinks_match_head "$PROJECT_ROOT" checked-out; then
+        note_not_restored "code: on $RESTORE_SHA, but a submodule's index entry or checkout is not the commit $RESTORE_SHA records"
         return 1
     fi
     CODE_RESTORED=1
@@ -1303,6 +1342,19 @@ resolve_forward() {
             || printf '%s\n' "$sub_status" | grep -qv '^ '; then
         echo "✗ A submodule is not on the commit $want pins (or could not be read):"
         printf '%s\n' "$sub_status" | sed 's/^/      /'
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+        return 1
+    fi
+    # The pins are $want's own gitlinks, not the index's: a gitlink staged to
+    # another commit, with the submodule on it, passes the check above.
+    if ! gitlinks_match_head "$PROJECT_ROOT" checked-out; then
+        echo "✗ A submodule's staged pointer or checked-out commit is not the one $want"
+        echo "  records. To see which:"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT diff --cached HEAD --submodule"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule status --recursive"
+        echo "  To put them back on $want's pins (a staged pointer is discarded; the"
+        echo "  commit it named stays in the submodule):"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT reset -q -- <submodule path>"
         echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
         return 1
     fi

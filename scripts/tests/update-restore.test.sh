@@ -359,6 +359,7 @@ g -C "$UP/super/frontend" pull -q origin dev
 echo "B" > "$UP/super/VERSION"
 g -C "$UP/super" add -A; g -C "$UP/super" commit -m B
 SHA_B="$(git -C "$UP/super" rev-parse HEAD)"
+BACKEND_B="$(git -C "$UP/backend" rev-parse HEAD)"
 
 # An older deployed version, A_OLD: A with an update.sh that predates the
 # unresolved-deployment record (as 0.0.0-pre.3's does).
@@ -377,6 +378,15 @@ if [ "$(git -C "$TEMPLATE" rev-parse HEAD)" != "$SHA_A" ] || [ ! -f "$TEMPLATE/b
     echo "fixture: could not build the unit checkout"; exit 1
 fi
 
+# stage_backend_pin <sha>: check the backend submodule out at <sha> and stage
+# that commit as the superproject's backend gitlink, leaving HEAD's gitlink as
+# it was. `git submodule status` compares against the index and reports the
+# submodule as on its pin; only a comparison with HEAD's tree shows otherwise.
+stage_backend_pin() {
+    g -C "$PROJECT_ROOT/backend" checkout -q "$1"
+    g -C "$PROJECT_ROOT" update-index --cacheinfo "160000,$1,backend"
+}
+
 # ── Running one case ────────────────────────────────────────────────────────
 # run_case <name> [update.sh args...]; the case's fake settings are in the
 # environment of the call. Leaves OUT (the script's output), RC, and the
@@ -390,6 +400,7 @@ run_case() {
     export PROJECT_ROOT
     cp -R "$TEMPLATE" "$PROJECT_ROOT"
     [ -z "${FAKE_BREAK_ORIGIN:-}" ] || g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
+    [ -z "${FAKE_STAGE_BACKEND_PIN:-}" ] || stage_backend_pin "$FAKE_STAGE_BACKEND_PIN"
     export DTK_TEST_STATE="$CASE_DIR/state"
     mkdir -p "$DTK_TEST_STATE/backups"
     echo "$SHA_A" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
@@ -1252,6 +1263,43 @@ run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --
 eq "$RC" 0 "exit status"
 head_is "$SHA_A" A
 no_marker
+
+# ── Staged submodule pointers are not the commit's pins ────────────────────
+# Restore target A is already checked out (--no-pull, a redeploy), but the
+# backend gitlink is staged to B's pin with the submodule on it: the restore
+# must not certify "still on A with submodules on its pins".
+FAKE_STAGE_BACKEND_PIN="$BACKEND_B" DTK_UPDATE_FAIL_AT=build run_case "staged gitlink at the restore" --no-pull --yes
+eq "$RC" 1 "exit status"
+hasnt "code: still on $SHA_A with submodules on its pins"
+has "code: the checkout has modified tracked files"
+eq "$(git -C "$PROJECT_ROOT/backend" rev-parse HEAD)" "$BACKEND_B" "the staged pin was not discarded"
+
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward with a staged gitlink" --yes
+stage_backend_pin "$BACKEND_A"
+CASE="resolve forward with a staged gitlink: resolve"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+hasnt "Recorded $SHA_B as the deployed version"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA still names A"
+
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward with a submodule off HEAD's pin" --yes
+# The index matches HEAD; only the submodule's own checkout differs.
+g -C "$PROJECT_ROOT/backend" checkout -q "$BACKEND_A"
+CASE="resolve forward with a submodule off HEAD's pin: resolve"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+hasnt "Recorded $SHA_B as the deployed version"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+
+FAKE_HEALTHY_VERSIONS="A" run_case "rollback with a staged gitlink" --yes
+stage_backend_pin "$BACKEND_A"
+CASE="rollback with a staged gitlink: the rollback"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "has local changes"
+unlogged "psql DROP"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
