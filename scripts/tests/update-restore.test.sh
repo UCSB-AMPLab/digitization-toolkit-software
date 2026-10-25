@@ -1432,6 +1432,31 @@ for where in superproject submodule staged; do
     nothing_changed
 done
 
+# Index flags that hide a tracked file's edits from git: each kind, in the
+# superproject and in a submodule, with the file edited behind the flag.
+for flag in assume-unchanged skip-worktree; do
+    for where in superproject submodule; do
+        run_case "--no-pull with $flag ($where)" --no-pull --yes   # builds the case
+        case "$where" in
+            superproject) repo="$PROJECT_ROOT"; file=README; shown=README ;;
+            submodule)    repo="$PROJECT_ROOT/backend"; file=pixi.lock; shown=backend/pixi.lock ;;
+        esac
+        g -C "$repo" update-index "--$flag" "$file"
+        echo "edit behind the flag" >> "$repo/$file"
+        DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+        CASE="--no-pull with $flag ($where): run"
+        run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+        eq "$RC" 1 "exit status"
+        has "✗ --no-pull: tracked files are marked assume-unchanged or skip-worktree"
+        case "$flag" in
+            assume-unchanged) has "      h $shown" ;;
+            skip-worktree)    has "      S $shown" ;;
+        esac
+        has "update-index --no-assume-unchanged --no-skip-worktree <file>"
+        nothing_changed
+    done
+done
+
 run_case "--no-pull downgrade" --no-pull --yes   # builds the case: unit at A
 echo "$SHA_B" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
 DB_BEFORE="$(cat "$CASE_DIR/db_state")"

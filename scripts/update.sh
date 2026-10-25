@@ -586,6 +586,23 @@ gitlinks_match_head() {
     return 0
 }
 
+# flagged_index_entries: print "<tag> <path>" for every index entry marked
+# assume-unchanged (a lowercase tag in `git ls-files -v`) or skip-worktree
+# (S), in the superproject and in every submodule, recursively; submodule
+# paths are given from the superproject. Exit 2 when a listing failed. git
+# does not report changes to such an entry, so tracked_files_modified cannot
+# see them; rollback-update.sh refuses the same flags in its own preflight.
+flagged_index_entries() {
+    local super subs
+    super="$(run_as_repo_owner git -C "$PROJECT_ROOT" ls-files -v 2>/dev/null)" || return 2
+    # git's output is held first, so a failed listing fails the foreach
+    # rather than the sed that prefixes the paths; nothing is written.
+    subs="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive \
+        'out="$(git ls-files -v)" || exit 1; printf "%s\n" "$out" | sed "s|^\(.\) |\1 $displaypath/|"' 2>/dev/null)" || return 2
+    printf '%s\n%s\n' "$super" "$subs" | grep '^[a-zS] '
+    return 0
+}
+
 tracked_files_modified() {
     local rc=0 subs sub
     # Working tree against HEAD, then the index against HEAD: `diff HEAD`
@@ -1553,6 +1570,25 @@ if [ "$DO_PULL" -eq 0 ]; then
         echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT reset -q -- <submodule path>"
         echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
         echo "  then run this again."
+        exit 1
+    fi
+    NOPULL_RC=0
+    NOPULL_FLAGGED="$(flagged_index_entries)" || NOPULL_RC=$?
+    if [ "$NOPULL_RC" -ne 0 ] || [ -n "$NOPULL_FLAGGED" ]; then
+        echo "✗ --no-pull: tracked files are marked assume-unchanged or skip-worktree"
+        echo "  (or the index could not be read), so git does not report changes to"
+        echo "  them, and installing the checkout could deploy modified code as the"
+        echo "  commit recorded as deployed. Nothing has been changed."
+        if [ -n "$NOPULL_FLAGGED" ]; then
+            echo "  The files (a lowercase tag is assume-unchanged, S is skip-worktree; a"
+            echo "  path with a directory in front of it may be in a submodule):"
+            printf '%s\n' "$NOPULL_FLAGGED" | sed 's/^/      /'
+        fi
+        echo "  Clear the flag in the repository that owns each file (the superproject,"
+        echo "  or the submodule the path begins with, giving the path inside it), look"
+        echo "  at what git then reports, and run this again:"
+        echo "      sudo -u $REPO_USER git -C <repository> update-index --no-assume-unchanged --no-skip-worktree <file>"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT status --short"
         exit 1
     fi
     NOPULL_RC=0
