@@ -52,11 +52,39 @@ sudo systemctl stop b2push-interim.service
 
 Use the name `list-timers` shows on your unit (verify the unit names on Rionegro).
 
+If you abandon the update before step 3, enable the timer again, so the unit goes on uploading as it did before:
+
+```bash
+sudo systemctl enable --now b2push-interim.timer
+```
+
 ---
 
 ## 2. Run the update
 
-### 2.1 Start it outside the SSH session
+### 2.1 Check the unit's own `update.sh`
+
+The update is done by the copy of `update.sh` already on the unit, not by the new one. A copy from before 19–20 October 2026 does not fetch the new code (fixed in `a801e9f`), and under `systemd-run` it looks for pixi in `/root/.pixi` and stops at `pixi install` (fixed in `0b99d31`). Check for both fixes:
+
+```bash
+grep -cF 'DO_PULL=1' /home/pi/dtk/scripts/update.sh
+grep -cF 'DTK_USER="$(stat -c %U' /home/pi/dtk/scripts/update.sh
+```
+
+Both counts must be `1` or more. If either is `0`, fetch the code by hand, as `pi`, and tell the script not to fetch:
+
+```bash
+git -C /home/pi/dtk fetch origin
+git -C /home/pi/dtk merge --ff-only @{u}
+git -C /home/pi/dtk submodule update --init --recursive
+sudo systemd-run --unit=dtk-deploy --collect /home/pi/dtk/scripts/update.sh --yes --no-pull
+```
+
+After the merge, the `update.sh` on disk is the new one. If the merge refuses because of local changes, stop: the new script sets local changes aside before it merges, and the old one does not.
+
+### 2.2 Start it outside the SSH session
+
+Make sure nobody captures while `update.sh` is running: it stops the service part-way.
 
 ```bash
 sudo systemd-run --unit=dtk-deploy --collect /home/pi/dtk/scripts/update.sh --yes
@@ -66,23 +94,25 @@ Never run `update.sh` directly in an SSH session. If the connection is lost, the
 
 `--yes` is required here. `update.sh` asks for confirmation when the update may need internet access, and with no terminal and no `--yes` it aborts.
 
-### 2.2 What `update.sh` does
+### 2.3 What `update.sh` does
 
 In order:
 
 1. Fetches the branch's upstream and fast-forwards to it, then syncs the submodules. It refuses a branch that cannot be fast-forwarded. Locally modified tracked files are copied to `/var/lib/dtk/local-mods-<timestamp>/` before they are reset; untracked files are never deleted.
 2. Records the pre-update state in `/var/lib/dtk/backups/pre-update-state-<timestamp>`.
-3. Rebuilds the frontend image and runs `pixi install --locked` for the backend. The running service is not touched up to this point.
+3. Rebuilds the frontend image and runs `pixi install --locked` for the backend. The containers and the backend keep running until step 6, but from step 1 the code on disk is the new code, and from here the pixi environment on disk is the new one.
 4. Runs `provision-chdk-usb.sh` and `provision-rclone.sh --advisory`. The second installs the pinned rclone if needed and keeps what `offsite.env` already records. Under `--advisory` it never writes a read key.
 5. Takes and checks the database dump (1.3), and records the rollback target in `/var/lib/dtk/backups/pre-update-SHA`.
 6. Stops `dtk`, starts the database alone, applies the migrations with `pixi run db-upgrade`, and stops the database.
 7. Starts `dtk` and writes the new commit to `last-deployed-SHA`.
 
-If a step after the service stop fails, the script starts the previous stack again and prints the rollback command. A failure before the stop leaves the unit serving the old version.
+A failure before the service stop leaves the old backend serving.
+
+**A failure after the stop (this behaviour is changing).** At this version the script runs `systemctl start dtk` again, which starts the code on disk: the new code, with the new pixi environment and the new frontend image, against a database that may be partly or fully migrated. It reports the unit as back online. It does not return the checkout, the image or the environment to the previous version. After such a failure, run the rollback (step 7). A coming change to `update.sh` restores the previous checkout, frontend image and pixi environment; this paragraph will be rewritten when it lands.
 
 `update.sh` fast-forwards whatever branch the checkout is on. Which branch or tag a unit tracks for 0.1.0 (verify).
 
-### 2.3 Follow it
+### 2.4 Follow it
 
 ```bash
 journalctl -u dtk-deploy -f
@@ -90,9 +120,18 @@ journalctl -u dtk-deploy -f
 
 The script has finished when `Update complete!` or one of the failure messages appears in the log. With `--collect` the transient unit is removed when it ends; its log stays readable with `journalctl -u dtk-deploy`.
 
-### 2.4 Check that nothing uploads yet
+`Update complete!` means only that systemd reported `dtk` active five seconds after the start. Confirm that the backend is serving and read its start:
 
-The backend starts its upload schedules at boot only when `DTK_OFFSITE_REMOTE` and a valid `DTK_OFFSITE_TENANT` are both set. A unit not yet provisioned for 0.1.0 has no tenant, so nothing is uploaded. Confirm it before step 3 with the request in 6.2: `images.enabled` must be `false`. If it is `true`, stop and resolve it before going on. The uploader keys an object by the file's name on disk, so an image copied into the bucket under a contract name would be uploaded again at a second key, and `adopt-map` would then refuse its entry as `key_differs` (verify the remedy).
+```bash
+curl -s http://localhost:8000/health
+journalctl -u dtk --since "15 min ago" | grep -E "Volume layout:|Cannot start|Traceback"
+```
+
+`/health` answers `{"status":"ok"}` only once the backend has finished its start; through nginx the same route is `http://localhost/api/health`. `Cannot start: database schema is out of date` or `Cannot start: the database is unreachable` means the backend refused to serve. For the `Volume layout:` lines, see 3.4.
+
+### 2.5 Check that nothing uploads yet
+
+The backend starts its upload schedules at boot only when `DTK_OFFSITE_REMOTE` and a valid `DTK_OFFSITE_TENANT` are both set. A unit not yet provisioned for 0.1.0 has no tenant, so nothing is uploaded. Confirm it before step 3 with the request in 6.3: `images.enabled` must be `false`. If it is `true`, stop and resolve it before going on. The uploader keys an object by the file's name on disk, so an image copied into the bucket under a contract name would be uploaded again at a second key, and `adopt-map` would then refuse its entry as `key_differs` (verify the remedy).
 
 ---
 
@@ -108,19 +147,38 @@ In the interface, open the project, edit each volume (**Edit Volume**) and fill 
 - Refused while `<projects root>/<stem>/` already holds files that are not this volume's.
 - A volume with no stem can be given one at any time, including after it has captured. Once a volume has a stem and has captured, the stem cannot be changed or cleared.
 
-Setting a stem moves no file. New captures into the volume go to `<stem>/captures/` at once.
+On a volume that already has images, the stem is fixed the moment it is saved. Check each stem against the volume's reference code in Fisqua before you save it.
 
-### 3.2 Restart so the backend moves the files
+Setting a stem moves no file. New captures into the volume go to `<stem>/captures/` at once. Do not capture into a volume that has a rename map until its `adopt-map` and `raise-capture-counter` have been applied (5.1, 5.3): until then the counter can issue numbers the bucket already holds.
+
+### 3.2 Preview the move (optional)
+
+`python -m app.core.volume_layout --dry-run` prints, as JSON, what the next start would move, and writes nothing. It needs the database up and the backend stopped, so stop `dtk`, start the database alone, run it, and stop the database again (verify on the bench):
+
+```bash
+sudo systemctl stop dtk
+sudo docker compose -f /home/pi/dtk/docker-compose.yml -f /home/pi/dtk/docker-compose.pi.yml up -d db
+sudo docker compose -f /home/pi/dtk/docker-compose.yml -f /home/pi/dtk/docker-compose.pi.yml exec -T db pg_isready
+cd /home/pi/dtk/backend
+pixi run python -m app.core.volume_layout --dry-run > ~/volume-layout-dry-run.json
+sudo docker compose -f /home/pi/dtk/docker-compose.yml -f /home/pi/dtk/docker-compose.pi.yml down --remove-orphans
+```
+
+Repeat `pg_isready` until it reports that the server is accepting connections. The command exits with `1` when `failed` is not empty and with `2` when it refuses (a journal it cannot complete). Do not start `dtk` again here; 3.3 does.
+
+### 3.3 Restart so the backend moves the files
 
 ```bash
 sudo systemctl restart dtk
 ```
 
+Do not restart until every stem is right: from this start on, the files of each volume with a stem are in `<stem>/`, and rolling back no longer returns the unit to a usable state (7.3).
+
 At every start, before it serves, the backend moves the existing files of each volume with a stem from the name-based layout into `<stem>/captures/`, `<stem>/previews/` and `<stem>/thumbnails/`. It works one volume at a time, through a journal in `/var/lib/dtk/volume-layout.journal`, and completes an interrupted batch at the next start. Once every volume with a stem is in place, it moves nothing.
 
 The backend already moved the files of volumes that had a stem before the update, when `update.sh` started it.
 
-### 3.3 Read the `Volume layout:` lines
+### 3.4 Read the `Volume layout:` lines
 
 ```bash
 journalctl -u dtk --since "15 min ago" | grep "Volume layout:"
@@ -165,20 +223,36 @@ A line logged at INFO, for freed files pointed at their new names, does not appe
 
 ## 4. Provision the offsite copy, without restarting
 
+### 4.0 Create the upload hold (to be added when the hold lands)
+
+A coming change adds a hold file. While it exists, the backend uploads no image and no catalogue dump and sends nothing to Fisqua; it checks for the file at each run. The commands in step 5 are not affected. Create it before provisioning, and remove it as the last step (6.2):
+
+```bash
+sudo touch /var/lib/dtk/offsite-hold   # path to be confirmed
+```
+
+Until the change lands, there is no hold, and the order of steps 4 to 6 is what keeps the backend from uploading early (4.4).
+
 ### 4.1 The key file
 
-Put the unit's key material in a file only root can read:
+Put the unit's key material in a file only root can read, with an editor:
 
 ```bash
 sudo install -m 0600 /dev/null /root/dtk-offsite-key
-sudo sh -c 'cat > /root/dtk-offsite-key' <<'END'
+sudo nano /root/dtk-offsite-key
+```
+
+with these lines:
+
+```text
 KEY_ID=...
 APP_KEY=...
 BUCKET=...
 READ_KEY_ID=...
 READ_APP_KEY=...
-END
 ```
+
+`provision-rclone.sh` prints the same file as a heredoc (`sudo sh -c 'cat > /root/dtk-offsite-key' <<'END'`). Typed into an interactive shell, a heredoc's lines, keys included, are saved in that shell's history; an editor keeps them out of it.
 
 | Key | What it is |
 |---|---|
@@ -202,7 +276,23 @@ sudo DTK_OFFSITE_KEY_FILE=/root/dtk-offsite-key \
 
 The script writes the rclone config at `/var/lib/dtk/rclone.conf` (the upload remote, and `[b2read]` when a read key is given) and writes `/var/lib/dtk/offsite.env` whole, both `0600` and owned by `pi`. It never replaces an existing credential. It does not start, stop or restart `dtk`.
 
-### 4.3 Why nothing uploads yet
+If it reports `/var/lib/dtk/rclone.conf already exists and was NOT replaced`, the key material was not used and `offsite.env` was not written, so nothing was recorded, the tenant and the recipient included. Resolve it before step 5: the script prints the command that moves the file aside, after which it can be run again.
+
+When the run has succeeded, remove the key file:
+
+```bash
+sudo rm /root/dtk-offsite-key
+```
+
+### 4.3 Check what was recorded
+
+```bash
+sudo cat /var/lib/dtk/offsite.env
+```
+
+It holds `DTK_OFFSITE_REMOTE`, `DTK_OFFSITE_TENANT` and `DTK_OFFSITE_DUMP_RECIPIENT`, and `DTK_OFFSITE_READ_REMOTE` when a read key was given. It holds no key.
+
+### 4.4 Why nothing uploads yet
 
 The backend reads `.env` and `/var/lib/dtk/offsite.env` once, when its settings are built at import; a key in `offsite.env` wins over the same key in `.env`. The upload and dump schedules are started at boot. The running backend therefore keeps the settings it started with, which have no tenant, and uploads nothing until it is restarted in step 6.
 
@@ -219,13 +309,20 @@ cd /home/pi/dtk/backend
 pixi run python -m app.core.image_upload <command> ... [--apply]
 ```
 
-They exit with `0` and print the report, or print `error: <reason>` and exit with `2`. The database must be up, so leave `dtk` running.
+Exit codes: `0` with the report; `2` with `error: <reason>`, or with a usage message for a mistyped command; `1` with a Python traceback for any other failure. The database must be up, so leave `dtk` running.
 
-A command that hashes many files takes time, and an SSH disconnect stops it. For a large volume, run the `--apply` step under `systemd-run` as in 2.1 (verify the form on the bench unit):
+The reports can be long. Send each to a file and read it there:
+
+```bash
+pixi run python -m app.core.image_upload adopt-map /path/to/map.json > ~/adopt-map-<stem>-dry.json
+```
+
+`adopt`, `adopt-map` and `backfill-preview-digests` hash the files on the card in the dry run as well as with `--apply`, so both runs take time on a large volume, and an SSH disconnect stops them. Under `systemd-run` they survive a disconnect; send the output to a file rather than the journal (verify the form on the bench):
 
 ```bash
 sudo systemd-run --unit=dtk-adopt --collect --uid=pi \
     --working-directory=/home/pi/dtk/backend \
+    --property=StandardOutput=file:/home/pi/adopt-map-<stem>.json \
     /home/pi/.pixi/bin/pixi run python -m app.core.image_upload adopt-map /path/to/map.json --apply
 journalctl -u dtk-adopt -f
 ```
@@ -239,7 +336,20 @@ pixi run python -m app.core.image_upload adopt-map /path/to/map.json
 pixi run python -m app.core.image_upload adopt-map /path/to/map.json --apply
 ```
 
-Each listed object is recorded as the frozen key of its image, verified, with no upload, whether or not the file is still on the card. The whole map is refused if its volume (`captuaCollectionId` and `stem`) is not on the unit, if its bucket is not the bucket in `DTK_OFFSITE_REMOTE`, or if its root's first segment is not the tenant. Read `refused` and `refused_counts` in the dry run before applying.
+Each entry that passes every check is recorded as the frozen key of its image, verified, with no upload, whether or not the file is still on the card. An entry that fails any check is listed under `refused`, with its reason, and nothing is recorded for it.
+
+The whole map is refused, with `error: <reason>` and nothing written, when:
+
+- the file cannot be read or is not JSON, or is not a JSON object;
+- its `contract`, `version` or `kind` is not `fisqua-captua-exchange`, `1.1` and `rename-map`;
+- it has no `volume` or `destination` object, or `entries` is not a list;
+- no volume on the unit has both its `volume.captuaCollectionId` and its `volume.stem`;
+- `DTK_OFFSITE_REMOTE` is unset or not `<remote>:<bucket>`, or its bucket is not `destination.bucket`;
+- `destination.root` is not a key prefix;
+- `DTK_OFFSITE_TENANT` is unset or invalid, or is not the first segment of `destination.root`;
+- a bucket listing does not answer.
+
+Read `refused` and `refused_counts` in the dry run. Resolve every refused entry whose image is still on the card before the backend starts uploading in step 6: the uploader would otherwise upload that file at a second key, its name on disk. Apply every map before 5.2, so that `adopt` does not record a key a map names differently.
 
 ### 5.2 `adopt <prefix>`, for objects not in a map
 
@@ -248,7 +358,9 @@ pixi run python -m app.core.image_upload adopt <prefix>
 pixi run python -m app.core.image_upload adopt <prefix> --apply
 ```
 
-`<prefix>` is relative to `DTK_OFFSITE_REMOTE`. The command lists it, hashes each image of a volume with a stem that has no key yet, and records a listed object as the image's key when exactly one object carries the same SHA1. It does not need the tenant. Ambiguous matches and keys already held are reported, not recorded. It only matches files still on the card.
+`<prefix>` is relative to `DTK_OFFSITE_REMOTE`. The command lists it, hashes each image of a volume with a stem that has no key yet, and records a listed object as the image's key when exactly one object carries the same SHA1. Ambiguous matches and keys already held are reported, not recorded. It only matches files still on the card.
+
+The command does not check the tenant, but give it a prefix under the tenant (`<tenant>/...`). A free lists each key's directory and lists nothing outside the tenant prefix, so a volume with a key adopted outside it can never be freed.
 
 ### 5.3 `raise-capture-counter <stem> <counterAfter>`
 
@@ -272,6 +384,8 @@ pixi run python -m app.core.image_upload mark-freed <stem> --apply
 
 It marks as freed each absent file whose verified object a fresh listing shows with the same SHA1. It deletes nothing. An absent file the bucket does not account for is listed under `unaccounted` and left unmarked.
 
+Run it only with the volume's storage mounted at the active projects root. The command judges a file absent when it is not at its path, so a volume on an external drive that is not mounted reads as entirely absent.
+
 ### 5.5 `backfill-preview-digests <stem>`
 
 For each volume with RAW masters:
@@ -281,7 +395,7 @@ pixi run python -m app.core.image_upload backfill-preview-digests <stem>
 pixi run python -m app.core.image_upload backfill-preview-digests <stem> --apply
 ```
 
-It records the sha256 of each RAW preview captured before previews were listed in the capture record, by appending a `preview_digest` record to the volume's `metadata/manifest.jsonl`. A free refuses a preview with no digest (`no_preview_digest`), so run this before the first free.
+It records the sha256 of each RAW preview captured before previews were listed in the capture record, by appending a `preview_digest` record to the volume's `metadata/manifest.jsonl`. A free refuses a preview with no digest (`no_preview_digest`), so run this before the first free. The digest is computed from the file on the card: a preview removed before its digest was recorded is reported as `missing` (or `freed`) and cannot be backfilled.
 
 ---
 
@@ -295,23 +409,35 @@ sudo systemctl restart dtk
 
 The backend now reads the tenant and starts both schedules. The backend runs each one first `DTK_OFFSITE_BACKUP_DELAY` seconds after the start (300 by default), and again `DTK_OFFSITE_BACKUP_INTERVAL` seconds after each run ends (1800 by default).
 
-### 6.2 Check
+### 6.2 Remove the hold (to be added when the hold lands)
+
+As the last step, remove the hold created in 4.0, so the backend starts uploading:
+
+```bash
+sudo rm /var/lib/dtk/offsite-hold   # path to be confirmed
+```
+
+### 6.3 Check
 
 - **Each volume's received indicator.** On the volume's page, the offsite line is `Uploading: N of M files verified, P pending` while the upload is under way, and `Stored offsite: N of N files verified` once every object is verified. `N files need attention` means objects were refused: the bucket holds a different file at the key (`remote_differs`), or the file's sha256 is not the one its capture record holds (`fixity`). A refused object is not retried. `GET /collections/{id}/offsite` returns the same counts.
 - **The unit's offsite state.** The Configuration page's **Offsite copy** section and the indicator in the dashboard read `GET /system/catalogue-backup`. From the unit:
 
   ```bash
-  TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
-    -H "Content-Type: application/json" \
-    -d '{"username":"<admin>","password":"<password>"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+  read -rs -p "Password: " PW; echo
+  TOKEN=$(PW="$PW" python3 -c 'import json,os; print(json.dumps({"username": "<admin>", "password": os.environ["PW"]}))' \
+    | curl -s -X POST http://localhost:8000/auth/login -H "Content-Type: application/json" -d @- \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')
+  unset PW
   curl -s http://localhost:8000/system/catalogue-backup -H "Authorization: Bearer $TOKEN"
   ```
 
+  `read -rs` keeps the password off the screen and out of the shell history, and the request body goes through a pipe, so the password is never on a command line.
+
   `enabled` and `images.enabled` are `true`; `images.misconfigured` is `null`; `last_verified_at` fills in once the first dump is verified. A missing or invalid dump recipient is not shown here: `enabled` stays `true` and `last_verified_at` does not advance, and each run writes `catalogue_backup_failed` to the system log.
 
-### 6.3 Free one volume first
+### 6.4 Free one volume first
 
-Choose one volume whose offsite line is `Stored offsite`. As an admin, open it, choose **Space on the SD card**, then **Free space on the SD card**. Captua first asks the backend for the dry run (`GET /collections/{id}/offsite/free`) and lists in the dialog what would be freed, and each file that would stay on the card with its reason. The dry run changes nothing. Confirm with **Free space** only when that list is what you expect.
+Free nothing until a catalogue dump has been verified: `last_verified_at` in 6.3 is not `null`. Then choose one volume whose offsite line is `Stored offsite`. As an admin, open it, choose **Space on the SD card**, then **Free space on the SD card**. Captua first asks the backend for the dry run (`GET /collections/{id}/offsite/free`) and lists in the dialog what would be freed, and each file that would stay on the card with its reason. The dry run changes nothing. Confirm with **Free space** only when that list is what you expect.
 
 Before it removes each file, the backend recomputes its SHA1 and lists the bucket again; a file that fails either check stays on the card and is listed with a reason. The thumbnails stay, so the volume can still be browsed. A freed file can be restored by an admin with **Restore to the SD card**, which needs the read key from 4.1.
 
@@ -319,12 +445,32 @@ Before it removes each file, the backend recomputes its SHA1 and lists the bucke
 
 ## 7. Rollback
 
+### 7.0 Before you roll back
+
 ```bash
-sudo systemd-run --unit=dtk-rollback --collect /home/pi/dtk/scripts/rollback-update.sh --yes
+ls -lt /var/lib/dtk/backups/
+cat /var/lib/dtk/backups/pre-update-SHA
+journalctl -u dtk-deploy | grep -A1 "Backing up the database to:"
+```
+
+The last command gives the dump this update wrote. Check that it is in the listing and that `pre-update-SHA` names the commit noted in 1.1. Name that dump on the command line rather than relying on the newest one:
+
+```bash
+sudo systemd-run --unit=dtk-rollback --collect \
+    /home/pi/dtk/scripts/rollback-update.sh --yes /var/lib/dtk/backups/pre-update-<YYYYmmdd-HHMMSS>.sql.gz
 journalctl -u dtk-rollback -f
 ```
 
-`--yes` is required for the same reason as in 2.1: with no terminal, the script aborts at its confirmation.
+`--yes` is required for the same reason as in 2.2: with no terminal, the script aborts at its confirmation. With `--yes` it drops and restores the database without asking.
+
+If the rollback stops part-way, run it again from the copy it keeps outside the checkout:
+
+```bash
+sudo systemd-run --unit=dtk-rollback --collect \
+    /var/lib/dtk/rollback-update.sh --project-root=/home/pi/dtk --yes /var/lib/dtk/backups/pre-update-<YYYYmmdd-HHMMSS>.sql.gz
+```
+
+The first start after a rollback may reinstall the pixi environment for the restored lock file, which needs the network.
 
 ### 7.1 What it restores
 
@@ -336,9 +482,15 @@ journalctl -u dtk-rollback -f
 
 It does not touch `/var/lib/dtk/offsite.env`, the rclone config, the files on the card or the bucket.
 
+**Move `offsite.env` aside before rolling back past step 4.** Backends from `ba1688e` (16 October 2026) up to, but not including, `2dda6ac` (24 October 2026) read `offsite.env` but do not encrypt the catalogue dump, so they upload it in plain text. No released version is affected (0.0.0-pre.3 predates the range); the dev superproject pins from `60f05b1` (17 October) to `f429ef7` (24 October) are. A rollback target in that range, with `offsite.env` in place, uploads the plaintext catalogue:
+
+```bash
+sudo mv /var/lib/dtk/offsite.env /var/lib/dtk/offsite.env.aside
+```
+
 ### 7.2 What it loses
 
-Everything written to the database after the dump: captures (their files stay on the card, named by no row), stems given in step 3, keys recorded in step 5, uploads recorded in step 6, and freed state.
+Everything written to the database after the dump: captures (their files stay on the card, named by no row), stems given in step 3, keys recorded by `adopt-map` and `adopt` in step 5, counter raises, uploads recorded in step 6, and freed state.
 
 Never roll back after a volume has been freed. The freed files are no longer on the card, the restored database names them as present, and the records that would let an admin restore them from the bucket are gone.
 
@@ -346,9 +498,11 @@ Never roll back after a volume has been freed. The freed files are no longer on 
 
 The cleanest point is before step 3. By then the backend has moved files only for volumes that had a stem before the update; on a unit where no volume had one, it has moved nothing.
 
-After step 3, the files of each volume given a stem are in `<stem>/`, and the restored rows name their old paths. What the earlier version does with those volumes (verify against the version being rolled back to).
+Do not roll back after the restart in 3.3. From then on the files of each volume given a stem are in `<stem>/`, and the restored rows name their old paths. The earlier version cannot find the moved files, and nothing moves them back.
 
-### 7.4 The layout on the next update
+### 7.4 The next update
+
+Before updating again after a rollback past step 4, move `offsite.env` aside if it is still in place (7.1). Otherwise, when `update.sh` restarts it, the backend starts uploading with the recorded tenant before the stems and the step 5 commands are in place (2.5). Step 4 then needs the key file again, since 4.2 removed it; with the same key id, `provision-rclone.sh` keeps the existing `rclone.conf` and records the settings again.
 
 When the unit is updated to 0.1.0 again, the backend moves files at its start:
 
@@ -367,6 +521,6 @@ The unit's Fisqua URL and token are installed at provisioning. The mechanism is 
 
 1. Provision the card with `sudo ./scripts/setup.sh`, then `sudo ./scripts/install-service.sh` (see [SD Card Distribution](sd_card_distribution.qmd)).
 2. Write the key file and run `provision-rclone.sh` with `--tenant` and `--dump-recipient`, as in step 4.
-3. Start or restart `dtk` and check as in 6.2.
+3. Start or restart `dtk` and check as in 6.3.
 
 A new volume must be given its stem when it is created, so step 3 does not apply, and with nothing in the bucket before the unit, step 5 does not apply either.
