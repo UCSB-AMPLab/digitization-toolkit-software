@@ -166,6 +166,11 @@ case "$1" in
             echo "pixi: cannot reach the registry" >&2; exit 1
         fi
         echo "$lock" > "$CASE_DIR/pixi_env"
+        if [ -n "${FAKE_STAGE_BACKEND_PIN_ON_INSTALL:-}" ] && [ ! -f "$CASE_DIR/staged" ]; then
+            git -C "$PROJECT_ROOT/backend" checkout -q "$FAKE_STAGE_BACKEND_PIN_ON_INSTALL" >/dev/null 2>&1
+            git -C "$PROJECT_ROOT" update-index --cacheinfo "160000,$FAKE_STAGE_BACKEND_PIN_ON_INSTALL,backend"
+            touch "$CASE_DIR/staged"
+        fi
         if [ -n "${FAKE_DIRTY_ON_PIXI_INSTALL:-}" ] && [ ! -f "$CASE_DIR/dirtied" ]; then
             echo "hand edit" >> "$PROJECT_ROOT/README"; touch "$CASE_DIR/dirtied"
         fi ;;
@@ -848,7 +853,11 @@ mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
 PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT
 cp -R "$TEMPLATE" "$PROJECT_ROOT"
 g -C "$PROJECT_ROOT" fetch origin
-g -C "$PROJECT_ROOT" merge --ff-only origin/dev
+# B's tree as a child of A_OLD, so that A_OLD is an ancestor of what is
+# checked out, as --no-pull requires.
+g -C "$PROJECT_ROOT" checkout -q -B dev "$SHA_A_OLD"
+g -C "$PROJECT_ROOT" checkout "$SHA_B" -- .
+g -C "$PROJECT_ROOT" commit -qm "B on top of A_OLD"
 g -C "$PROJECT_ROOT" submodule update --init --recursive
 export DTK_TEST_STATE="$CASE_DIR/state"
 mkdir -p "$DTK_TEST_STATE/backups"
@@ -1268,7 +1277,7 @@ no_marker
 # Restore target A is already checked out (--no-pull, a redeploy), but the
 # backend gitlink is staged to B's pin with the submodule on it: the restore
 # must not certify "still on A with submodules on its pins".
-FAKE_STAGE_BACKEND_PIN="$BACKEND_B" DTK_UPDATE_FAIL_AT=build run_case "staged gitlink at the restore" --no-pull --yes
+FAKE_STAGE_BACKEND_PIN_ON_INSTALL="$BACKEND_B" DTK_UPDATE_FAIL_AT=pixi run_case "staged gitlink at the restore" --no-pull --yes
 eq "$RC" 1 "exit status"
 hasnt "code: still on $SHA_A with submodules on its pins"
 has "code: the checkout has modified tracked files"
@@ -1337,6 +1346,83 @@ unlogged "psql DROP"
 db_is schema-A
 active
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag was created"; else ok "no start flag"; fi
+
+# ── --no-pull checks the checkout before anything changes ──────────────────
+# nothing_changed: the refusal came before 0a's tag, the build, the stop, any
+# record, and the unit still runs A on schema A.
+nothing_changed() {
+    unlogged "docker tag"
+    unlogged "build frontend"
+    unlogged "systemctl stop"
+    unlogged "pixi install"
+    db_is "${DB_BEFORE:-schema-A}"
+    no_marker
+    active
+}
+FAKE_STAGE_BACKEND_PIN="$BACKEND_B" run_case "--no-pull with a staged gitlink" --no-pull --yes
+eq "$RC" 1 "exit status"
+has "✗ --no-pull: a submodule is not on the commit HEAD records"
+has "diff --cached HEAD --submodule"
+nothing_changed
+
+run_case "--no-pull with a submodule checked out off its pin" --no-pull --yes   # builds the case
+g -C "$PROJECT_ROOT/backend" checkout -q "$BACKEND_B"
+DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+CASE="--no-pull with a submodule checked out off its pin: run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+eq "$RC" 1 "exit status"
+has "✗ --no-pull: a submodule is not on the commit HEAD records"
+nothing_changed
+
+for where in superproject submodule staged; do
+    run_case "--no-pull with a modified tracked file ($where)" --no-pull --yes   # builds the case
+    case "$where" in
+        superproject) echo "hand edit" >> "$PROJECT_ROOT/README" ;;
+        submodule)    echo "hand edit" >> "$PROJECT_ROOT/backend/pixi.lock" ;;
+        staged)       echo "hand edit" >> "$PROJECT_ROOT/README"; g -C "$PROJECT_ROOT" add README
+                      git -C "$PROJECT_ROOT" show HEAD:README > "$PROJECT_ROOT/README" ;;
+    esac
+    DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+    CASE="--no-pull with a modified tracked file ($where): run"
+    run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+    eq "$RC" 1 "exit status"
+    has "✗ --no-pull: the checkout has modified tracked files"
+    has "submodule foreach --recursive git status --short"
+    nothing_changed
+done
+
+run_case "--no-pull downgrade" --no-pull --yes   # builds the case: unit at A
+echo "$SHA_B" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+CASE="--no-pull downgrade: run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes
+eq "$RC" 1 "exit status"
+has "✗ --no-pull: the code checked out ($SHA_A) does not descend from the version"
+has "this unit last deployed ($SHA_B)"
+has "rollback-update.sh"
+nothing_changed
+
+DB_BEFORE=""
+run_case "--no-pull redeploy of the same commit" --no-pull --yes
+eq "$RC" 0 "exit status"
+has "Update complete!"
+hasnt "✗ --no-pull"
+
+setup_no_pull_case "no-pull-forward" "$SHA_A"
+CASE="--no-pull forward from the deployed commit"
+run_no_pull
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+hasnt "✗ --no-pull"
+
+# The pull path is unchanged: a local modification is set aside, not refused.
+run_case "pull path with a modified tracked file" --yes   # builds the case
+echo "hand edit" >> "$PROJECT_ROOT/README"
+CASE="pull path with a modified tracked file: run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 0 "exit status"
+has "locally modified files"
+hasnt "✗ --no-pull"
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below

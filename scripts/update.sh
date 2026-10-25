@@ -42,7 +42,10 @@
 #   --yes       Skip the "this update needs internet" confirmation prompt
 #               (for scripted / unattended use).
 #   --no-pull   Do not fetch; update to whatever is already checked out.
-#               For offline updates, and for testing a specific commit.
+#               For offline updates, and for testing a specific commit. The
+#               checkout must be clean, with every submodule on its pin, and
+#               must descend from the deployed commit (see 0a); otherwise it
+#               is refused before anything changes.
 #   --resolve-forward [--no-start]
 #               After an update that failed once its new version had started
 #               (see UNRESOLVED_FILE below), accept that version as deployed
@@ -1511,6 +1514,78 @@ if [ -z "$RESTORE_SHA" ]; then
         echo "      echo <commit> | sudo tee $LAST_DEPLOYED_SHA_FILE"
     fi
     exit 1
+fi
+
+# --no-pull installs whatever is checked out, which this script did not put
+# there: the pull path fast-forwards to the remote and sets local changes
+# aside (0b), but here nothing vouches for the checkout. So it is checked as
+# it is, before anything changes, and refused if it is not exactly a commit
+# that descends from the deployed one:
+#   • every submodule's staged pointer and checked-out commit are the
+#     gitlinks HEAD records (gitlinks_match_head), so the commit installed is
+#     the commit that will be recorded as deployed;
+#   • no tracked file is modified or staged, in the superproject or in any
+#     submodule (tracked_files_modified, recursive), for the same reason;
+#   • last-deployed-SHA is HEAD or an ancestor of it. Going back to an older
+#     version is a rollback: rollback-update.sh restores the database the
+#     older code expects, which an update cannot. Nothing here consults the
+#     remote: --no-pull is for units without a network.
+# An unresolved record (a failed update, kept or resolved by --resolve-forward)
+# is refused earlier, before this point; a commit kept as a failed-update/
+# branch can be checked out and installed again, since it descends from the
+# deployed one.
+if [ "$DO_PULL" -eq 0 ]; then
+    NOPULL_RC=0
+    gitlinks_match_head "$PROJECT_ROOT" checked-out || NOPULL_RC=$?
+    if [ "$NOPULL_RC" -ne 0 ]; then
+        echo "✗ --no-pull: a submodule is not on the commit HEAD records ($PRE_HEAD),"
+        echo "  or its staged pointer differs from it (or this could not be read)."
+        echo "  Installing it would deploy code that is not the commit recorded as"
+        echo "  deployed. Nothing has been changed. To see which:"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT diff --cached HEAD --submodule"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule status --recursive"
+        echo "  To put every submodule on HEAD's pins (a staged pointer is dropped; the"
+        echo "  commit it named stays in the submodule):"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT reset -q -- <submodule path>"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+        echo "  then run this again."
+        exit 1
+    fi
+    NOPULL_RC=0
+    tracked_files_modified || NOPULL_RC=$?
+    if [ "$NOPULL_RC" -ne 0 ]; then
+        echo "✗ --no-pull: the checkout has modified tracked files (changed or staged),"
+        echo "  in the superproject or a submodule, or this could not be read."
+        echo "  Installing them would deploy code that is not the commit recorded as"
+        echo "  deployed. Nothing has been changed. To see them:"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT status --short"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule foreach --recursive git status --short"
+        echo "  Copy aside anything worth keeping, commit it, or discard it, then run"
+        echo "  this again. To discard every local change to tracked files:"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT reset --hard HEAD"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule foreach --recursive git reset --hard HEAD"
+        exit 1
+    fi
+    # RESTORE_SHA is the deployed commit here: --no-pull takes no other target.
+    NOPULL_RC=0
+    run_as_repo_owner git -C "$PROJECT_ROOT" merge-base --is-ancestor "$RESTORE_SHA" "$PRE_HEAD" 2>/dev/null || NOPULL_RC=$?
+    if [ "$NOPULL_RC" -ne 0 ]; then
+        if [ "$NOPULL_RC" -eq 1 ]; then
+            echo "✗ --no-pull: the code checked out ($PRE_HEAD) does not descend from the version"
+            echo "  this unit last deployed ($RESTORE_SHA)."
+        else
+            echo "✗ --no-pull: could not check whether the code checked out ($PRE_HEAD)"
+            echo "  descends from the version this unit last deployed ($RESTORE_SHA)."
+        fi
+        echo "  It would be an older or an unrelated version, installed over a database"
+        echo "  migrated for $RESTORE_SHA. Nothing has been changed."
+        echo "  Going back to an earlier version is rollback-update.sh's job: it returns"
+        echo "  the code and restores the database that version expects:"
+        echo "      sudo $SCRIPT_DIR/rollback-update.sh"
+        echo "  To install a newer version instead, check out a commit that contains"
+        echo "  $RESTORE_SHA and run this again."
+        exit 1
+    fi
 fi
 
 FRONTEND_IMAGE="$(frontend_image_name || true)"
