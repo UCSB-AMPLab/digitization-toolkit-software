@@ -1149,14 +1149,26 @@ report_component "Frontend:" "$IMG_STATUS" "$IMG_DETAIL" "$IMG_FIX"
 # makes update.sh refuse to run (update.sh, UNRESOLVED_FILE). The database and
 # the code are now both back on the previous version, so it is resolved.
 UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
-if [ -e "$UNRESOLVED_FILE" ] && [ "$CODE_ROLLED_BACK" -eq 1 ]; then
+# Cleared only when this run restored both: the code (CODE_ROLLED_BACK) and
+# the database from the very dump the record names. Any other dump may be
+# from another version's schema.
+UNRESOLVED_DUMP=""
+if [ -e "$UNRESOLVED_FILE" ]; then
+    UNRESOLVED_DUMP="$(sed -n 's/^dump-to-restore: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    [ -n "$UNRESOLVED_DUMP" ] || UNRESOLVED_DUMP="$(sed -n 's/^dump: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+fi
+if [ -e "$UNRESOLVED_FILE" ] && [ "$CODE_ROLLED_BACK" -eq 1 ] \
+        && [ -n "$UNRESOLVED_DUMP" ] && [ "$DUMP_FILE" -ef "$UNRESOLVED_DUMP" ]; then
     if rm -f "$UNRESOLVED_FILE"; then
         echo "  Record:    $UNRESOLVED_FILE removed; update.sh will run again"
     else
         echo "  Record:    ⚠ could not remove $UNRESOLVED_FILE; update.sh still refuses"
     fi
-elif [ -e "$UNRESOLVED_FILE" ]; then
+elif [ -e "$UNRESOLVED_FILE" ] && [ "$CODE_ROLLED_BACK" -ne 1 ]; then
     echo "  Record:    $UNRESOLVED_FILE kept: the code was not rolled back"
+elif [ -e "$UNRESOLVED_FILE" ]; then
+    echo "  Record:    $UNRESOLVED_FILE kept: it names the backup"
+    echo "             ${UNRESOLVED_DUMP:-(unreadable)}, and this run restored another."
 fi
 if [ "$SERVICE_OK" -eq 1 ]; then
     echo "  Service:   running ✓"

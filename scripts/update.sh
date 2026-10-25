@@ -261,6 +261,11 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         echo "  That update failed, and restoring the database from its backup then"
         echo "  failed too: the database may be empty or partly restored. The unit"
         echo "  was left stopped. It recorded, in $UNRESOLVED_FILE:"
+    elif [ "$UNRESOLVED_KIND" = migrated-not-restored ]; then
+        echo "  That update failed after its migration began, and the code could not"
+        echo "  be moved back (git says why in that run's output). The unit was left"
+        echo "  stopped, on the new code, with the database migrated or partly"
+        echo "  migrated for it. It recorded, in $UNRESOLVED_FILE:"
     else
         echo "  That update started the new version and then failed. The unit was"
         echo "  left stopped, on the new code, with the database migrated for it. It"
@@ -278,6 +283,8 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         echo "       $(record_field rollback-command)"
         echo "     It discards everything written since that backup. It removes this"
         echo "     record when it succeeds."
+        echo "     (If the checkout has modified files, clear them first: the rollback"
+        echo "     refuses a checkout with local changes.)"
         echo "  2. Keep the failed version, once whatever stopped it is fixed:"
         echo "       sudo $SCRIPT_DIR/update.sh --resolve-forward"
         echo "     It checks that the code is that version and that the database is at"
@@ -290,7 +297,7 @@ if [ "$RESOLVE_FORWARD" -eq 1 ] && [ -z "$UNRESOLVED_KIND" ]; then
     echo "  ($UNRESOLVED_FILE does not exist)."
     exit 2
 fi
-if [ "$RESOLVE_FORWARD" -eq 1 ] && [ "$UNRESOLVED_KIND" != started-failed ]; then
+if [ "$RESOLVE_FORWARD" -eq 1 ] && [ "$UNRESOLVED_KIND" = restore-failed ]; then
     echo "✗ --resolve-forward cannot resolve this record (kind: $UNRESOLVED_KIND)."
     echo "  The database restore failed, so there is no version to keep. Restore"
     echo "  the database with:"
@@ -800,6 +807,13 @@ restore_after_stop() {
             echo "    restored. This run's backup is $RESTORE_DUMP. Once the reason the"
             echo "    code could not move is cleared, this restores code and database:"
             echo "      $ROLLBACK_CMD"
+            if write_unresolved_marker migrated-not-restored; then
+                echo "    Until then update.sh refuses to run; the record is"
+                echo "    $UNRESOLVED_FILE."
+            else
+                echo "  ⚠ Could not write $UNRESOLVED_FILE. Do NOT run update.sh again"
+                echo "    before the rollback."
+            fi
         else
             echo "    The database was not changed by this update. To move the code"
             echo "    back by hand, then start the unit:"
@@ -810,7 +824,13 @@ restore_after_stop() {
         echo ""
         return
     fi
-    restore_frontend_image || true
+    if ! restore_frontend_image; then
+        # The previous version will start with whatever the tag holds now, not
+        # with the image last-deployed-frontend names for it; that record must
+        # not then claim to describe what is serving.
+        rm -f "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null || true
+        note_not_restored "frontend record: $LAST_DEPLOYED_FRONTEND_FILE removed, because the image that will serve is not the one it names"
+    fi
     restore_pixi || true
     if [ "$MIGRATION_STARTED" -eq 1 ]; then
         if restore_database; then
@@ -1099,7 +1119,19 @@ resolve_forward() {
     echo "→ Starting the service..."
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
-    if wait_for_health "$HEALTH_TIMEOUT"; then
+    local healthy=0 img
+    wait_for_health "$HEALTH_TIMEOUT" && healthy=1
+    # As the success path does: the image serving now, recorded against this
+    # commit, so a later rollback to it can put that image back. No record
+    # rather than a wrong one when it cannot be read.
+    img="$(frontend_image_id || true)"
+    if [ -n "$img" ] && { echo "sha: $want"; echo "image: $img"; } > "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null; then
+        echo "  Frontend image recorded for $want: $img"
+    else
+        rm -f "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null || true
+        echo "  ⚠ The running frontend image could not be read; no frontend record kept."
+    fi
+    if [ "$healthy" -eq 1 ]; then
         echo "  ✓ The appliance is online on $want: the backend answers /health."
         return 0
     fi

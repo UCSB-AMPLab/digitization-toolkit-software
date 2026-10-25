@@ -25,6 +25,7 @@
 #   curl       answers /health when the unit is active and the version
 #              started is one the case calls healthy.
 #   chown, sleep, ss   do nothing (ss reports the db port listening).
+#   install    GNU-style install -D, which macOS lacks.
 #   pgrep      finds no backend process, unless a case says one is stuck.
 #
 # Each case states the failure it injects, through the fakes or through
@@ -84,6 +85,9 @@ for f in chown sleep; do
     printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/$f"
 done
 printf '#!/bin/sh\necho "LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:*"\n' > "$FAKEBIN/ss"
+# GNU install -D <src> <dest> (step 0b's copy of a modified file); BSD install
+# on macOS has no -D.
+printf '#!/bin/sh\n[ "$1" = -D ] && shift\nmkdir -p "$(dirname "$2")" && cp "$1" "$2"\n' > "$FAKEBIN/install"
 
 cat > "$FAKEBIN/systemctl" <<'EOF'
 #!/bin/bash
@@ -103,6 +107,9 @@ case "$1" in
         if [ -f "$S/active" ] && [ -n "${FAKE_WRITE_BEFORE_STOP:-}" ] && [ ! -f "$S/wrote" ]; then
             echo "row written at $(date +%s) before the stop" >> "$CASE_DIR/db_rows"
             touch "$S/wrote"
+        fi
+        if [ -n "${FAKE_DIRTY_ON_STOP:-}" ] && [ ! -f "$CASE_DIR/dirtied" ]; then
+            echo "hand edit" >> "$PROJECT_ROOT/README"; touch "$CASE_DIR/dirtied"
         fi
         rm -f "$S/active"; exit 0 ;;
     start)
@@ -136,7 +143,10 @@ case "$1" in
         if [ -n "${FAKE_PIXI_FAIL_LOCK:-}" ] && [ "$lock" = "$FAKE_PIXI_FAIL_LOCK" ]; then
             echo "pixi: cannot reach the registry" >&2; exit 1
         fi
-        echo "$lock" > "$CASE_DIR/pixi_env" ;;
+        echo "$lock" > "$CASE_DIR/pixi_env"
+        if [ -n "${FAKE_DIRTY_ON_PIXI_INSTALL:-}" ] && [ ! -f "$CASE_DIR/dirtied" ]; then
+            echo "hand edit" >> "$PROJECT_ROOT/README"; touch "$CASE_DIR/dirtied"
+        fi ;;
     run)
         if [ "$2" = alembic ] && [ "$3" = heads ]; then
             echo "${FAKE_ALEMBIC_HEAD:-rev-B} (head)"
@@ -220,6 +230,7 @@ if [ "$1" = compose ]; then
 fi
 case "$1" in
     tag)
+        if [ -n "${FAKE_RETAG_FAIL:-}" ] && [ "$3" = dtk-frontend ]; then exit 1; fi
         id="$(resolve "$2")"; [ -n "$id" ] || exit 1
         echo "$id" > "$D/$(norm "$3")" ;;
     image)
@@ -303,6 +314,7 @@ run_case() {
     PROJECT_ROOT="$CASE_DIR/dtk"
     export PROJECT_ROOT
     cp -R "$TEMPLATE" "$PROJECT_ROOT"
+    [ -z "${FAKE_BREAK_ORIGIN:-}" ] || g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
     export DTK_TEST_STATE="$CASE_DIR/state"
     mkdir -p "$DTK_TEST_STATE/backups"
     echo "$SHA_A" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
@@ -402,6 +414,26 @@ active
 unlogged "systemctl stop"
 has "frontend image: dtk-frontend is $OLD_IMG again"
 
+# ── rollback-update.sh keeps the record unless code AND database came back ──
+FAKE_HEALTHY_VERSIONS="A" run_case "rollback without a recorded commit" --yes
+rm -f "$DTK_TEST_STATE/backups/pre-update-SHA"
+CASE="rollback without a recorded commit: the rollback"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" "B (no commit to return to)"
+db_is restored
+has "kept: the code was not rolled back"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+
+FAKE_HEALTHY_VERSIONS="A" run_case "rollback whose code move fails" --yes
+printf '#!/bin/sh\nexit 1\n' > "$PROJECT_ROOT/.git/hooks/post-checkout"; chmod +x "$PROJECT_ROOT/.git/hooks/post-checkout"
+CASE="rollback whose code move fails: the rollback"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "The code could not be moved"
+db_is migrated
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+
 # ── Resolving forward after a started-then-failed update ────────────────────
 FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward" --yes
 marker_has "kind: started-failed"
@@ -429,6 +461,8 @@ has "Recorded $SHA_B as the deployed version"
 has "online on $SHA_B"
 no_marker
 eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
+eq "$(sed -n 's/^sha: //p' "$DTK_TEST_STATE/backups/last-deployed-frontend")" "$SHA_B" "last-deployed-frontend names B"
+eq "$(sed -n 's/^image: //p' "$DTK_TEST_STATE/backups/last-deployed-frontend")" "$NEW_IMG" "last-deployed-frontend names B's running image"
 head_is "$SHA_B" B
 active
 unlogged "DROP DATABASE"
@@ -672,6 +706,93 @@ if [ -x "$DTK_TEST_STATE/rollback-update.sh" ] && cmp -s "$DTK_TEST_STATE/rollba
 else
     fail "rollback-update.sh not copied outside the checkout"
 fi
+marker_has "kind: migrated-not-restored"
+marker_has "failed-commit: $SHA_B"
+marker_has "restore-target: $SHA_A"
+marker_has "dump: $(dump_name)"
+CASE="code restore refused: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "the code could not"
+has "--resolve-forward"
+unlogged "git"
+CASE="code restore refused: the rollback refuses the modified checkout and keeps the record"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "has local changes"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+CASE="code restore refused: a rollback from another dump keeps the record"
+g -C "$PROJECT_ROOT" checkout -- README
+OTHER_DUMP="$DTK_TEST_STATE/backups/pre-update-19990101-000000.sql.gz"
+cp "$(dump_name)" "$OTHER_DUMP"; touch -t 199901010000 "$OTHER_DUMP"
+REAL_DUMP="$(ls -t "$DTK_TEST_STATE/backups"/pre-update-*.sql.gz | head -n 1)"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$OTHER_DUMP"
+eq "$RC" 0 "exit status"
+has "kept: it names the backup"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+CASE="code restore refused: the rollback from the named dump clears it"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$REAL_DUMP"
+eq "$RC" 0 "exit status"
+head_is "$SHA_A" A
+db_is restored
+no_marker
+
+# ── The fetch fails: nothing has moved ──────────────────────────────────────
+FAKE_BREAK_ORIGIN=1 run_case "fetch fails" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+db_is schema-A
+active
+unlogged "systemctl stop"
+has "Nothing changed."
+no_marker
+
+# ── Before the stop, the code cannot be moved back (no migration) ───────────
+# The database and last-deployed-SHA still name A and A is what runs; only the
+# checkout is B. No record: a retry is the repair, since its restore target A
+# matches the database, and its step 0b sets the modification aside.
+FAKE_DIRTY_ON_PIXI_INSTALL=1 DTK_UPDATE_FAIL_AT=pixi run_case "code not restored before the stop" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_B" "B (left in the checkout)"
+db_is schema-A
+active
+unlogged "systemctl stop"
+has "The checkout is NOT on the version that is running"
+no_marker
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA still names A, which is running"
+CASE="code not restored before the stop: a retry"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 0 "exit status"
+has "locally modified files"
+head_is "$SHA_B" B
+db_is migrated
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
+
+# ── After the stop, before any migration, the code cannot be moved back ─────
+FAKE_DIRTY_ON_STOP=1 DTK_UPDATE_FAIL_AT=stopped run_case "code not restored after the stop" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_B" "B (left in the checkout)"
+db_is schema-A
+inactive
+has "The database was not changed by this update"
+no_marker
+CASE="code not restored after the stop: a retry"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+active
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
+
+# ── After a migration, the frontend image cannot be put back ────────────────
+FAKE_MIGRATE_FAIL=1 FAKE_RETAG_FAIL=1 run_case "frontend not put back after the stop" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+db_is restored
+active
+if [ -e "$DTK_TEST_STATE/backups/last-deployed-frontend" ]; then fail "last-deployed-frontend still names A's image"; else ok "last-deployed-frontend removed"; fi
+has "frontend record:"
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA names A"
+no_marker
 
 # ── Restore fails: the database restore fails ───────────────────────────────
 FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 run_case "database restore fails" --yes
