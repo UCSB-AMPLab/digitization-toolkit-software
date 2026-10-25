@@ -250,11 +250,24 @@ if [ "$1" = compose ]; then
                     fi
                     echo "-- dump $n of the database at schema A"
                     cat "$CASE_DIR/db_rows" 2>/dev/null
-                    if [ -z "${FAKE_DUMP_NO_COLLECTIONS:-}" ]; then
-                        printf 'COPY public.collections (id, name, description, filename_stem, created_at) FROM stdin;\n'
-                        [ -z "${FAKE_DUMP_COLLECTIONS:-}" ] || printf '%b\n' "$FAKE_DUMP_COLLECTIONS"
+                    # The tables the stem guard reads, in pg_dump's order. Rows
+                    # may name @STATE@ for the case's state directory.
+                    rows() { [ -z "$1" ] || printf '%b\n' "$1" | sed "s#@STATE@#$DTK_TEST_STATE#g"; }
+                    printf 'COPY public.collections (id, name, description, filename_stem, created_at) FROM stdin;\n'
+                    rows "${FAKE_DUMP_COLLECTIONS:-}"
+                    printf '\\.\n'
+                    if [ -z "${FAKE_DUMP_NO_IMAGES:-}" ]; then
+                        if [ -n "${FAKE_DUMP_OLD_IMAGES_SCHEMA:-}" ]; then
+                            printf 'COPY public.record_images (id, record_id, filename, file_path, format) FROM stdin;\n'
+                        else
+                            printf 'COPY public.record_images (id, record_id, filename, file_path, format, is_current, master_freed_at, master_freed_bytes) FROM stdin;\n'
+                        fi
+                        rows "${FAKE_DUMP_RECORD_IMAGES:-}"
                         printf '\\.\n'
                     fi
+                    printf 'COPY public.records (id, title, collection_id, capture_mode) FROM stdin;\n'
+                    rows "${FAKE_DUMP_RECORDS:-}"
+                    printf '\\.\n'
                     seq 1 300 ;;
                 psql)
                     case "$*" in *alembic_version*) echo "${FAKE_DB_REV:-rev-B}"; exit 0 ;; esac
@@ -263,6 +276,10 @@ if [ "$1" = compose ]; then
                             [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
                             [ -n "${FAKE_DB_ABSENT:-}" ] || echo 1
                             exit 0 ;;
+                        *"information_schema.columns"*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -n "${FAKE_NO_STEM_COLUMN:-}" ] || echo 1
+                            exit 0 ;;
                         *to_regclass*)
                             [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
                             [ -z "${FAKE_DB_ABSENT:-}" ] || { echo "psql: database does not exist" >&2; exit 2; }
@@ -270,6 +287,7 @@ if [ "$1" = compose ]; then
                             exit 0 ;;
                         *"filename_stem IS NOT NULL"*)
                             [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -z "${FAKE_NO_STEM_COLUMN:-}" ] || { echo "psql: column \"filename_stem\" does not exist" >&2; exit 1; }
                             [ -z "${FAKE_DB_ABSENT:-}" ] || { echo "psql: database does not exist" >&2; exit 2; }
                             [ -z "${FAKE_STEMMED:-}" ] || printf '%b\n' "$FAKE_STEMMED"
                             exit 0 ;;
@@ -1447,11 +1465,12 @@ eq "$RC" 0 "exit status"
 has "locally modified files"
 hasnt "✗ --no-pull"
 
-# ── rollback-update.sh: volumes whose stem the restored dump does not have ─
+# ── rollback-update.sh: volumes the restored dump would cut off from files ─
 STEMS_FILE_REL="backups/rollback-stems-at-risk"
-# stem_case <name>: a successful update (its dump is the one
-# the rollback restores), with volume 7 "Libro 7" stemmed libro-7 in the
-# current database and its directory under the projects root.
+# stem_case <name>: a successful update (its dump is the one the rollback
+# restores), with volume 7 "Libro 7" stemmed libro-7 in the current database
+# and its directory under the projects root. FAKE_DUMP_* in the caller's
+# environment shape the dump.
 stem_case() {
     run_case "$1" --yes
     mkdir -p "$DTK_TEST_STATE/projects/libro-7/captures"
@@ -1466,22 +1485,36 @@ stems_untouched() {
     if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag exists"; else ok "no start flag"; fi
     active
 }
+list_has() { if grep -qxF -e "$(printf '%b' "$1")" "$DTK_TEST_STATE/$STEMS_FILE_REL" 2>/dev/null; then ok "the list file has: $1"; else fail "the list file lacks: $1"; fi; }
+# Volume 7 in the dump with its stem, one record, and images as given.
+DUMP_7='7\tLibro 7\t\\N\tlibro-7\t2026-10-01 00:00:00'
+RECORDS_7='70\tFolio 1\t7\tsingle'
+OLD_PATH='@STATE@/projects/rionegro/libro-7/images/main/libro-7-img_0001.jpg'
+NEW_PATH='@STATE@/projects/libro-7/captures/libro-7-img_0001.jpg'
 
-stem_case "stem not in the dump"
-CASE="stem not in the dump: the rollback"
+# The first 0.1.0 install at an archive: the volume had its stem already,
+# the backup was taken before the layout pass moved its files into
+# <stem>/captures/ and rewrote the paths. Same stem, paths gone.
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "backup from before the layout move, same stem"
+mkdir -p "$DTK_TEST_STATE/projects/libro-7/captures"; : > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+CASE="backup from before the layout move, same stem: the rollback"
 FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
 eq "$RC" 1 "exit status"
 has "✗ Restoring this backup may cut volumes off from their files:"
-has "id 7  \"Libro 7\"  stem libro-7  ($DTK_TEST_STATE/projects/libro-7)"
+has "id 7  \"Libro 7\"  stem libro-7: 1 of 1 images not on disk, e.g. $DTK_TEST_STATE/projects/rionegro/libro-7/images/main/libro-7-img_0001.jpg"
 has "--accept-lost-stems"
 hasnt "some of them may be safe"
 stems_untouched
 eq "$(stat -c %a "$DTK_TEST_STATE/$STEMS_FILE_REL" 2>/dev/null || stat -f %Lp "$DTK_TEST_STATE/$STEMS_FILE_REL")" 600 "the list file is mode 600"
-if grep -qxF "$(printf '7\tLibro 7\tlibro-7\t%s' "$DTK_TEST_STATE/projects/libro-7")" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file has the volume"; else fail "the list file lacks the volume"; fi
+list_has "id\tname\tfilename_stem\timages_missing\timages_total\texample"
+list_has "7\tLibro 7\tlibro-7\t1\t1\t$DTK_TEST_STATE/projects/rionegro/libro-7/images/main/libro-7-img_0001.jpg"
 if grep -qx "# accepted: no" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says not accepted"; else fail "the list file does not say not accepted"; fi
 if grep -qx "# dump: $(dump_name)" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file names the dump"; else fail "the list file does not name the dump"; fi
+if grep -qx "# dump-check: per image" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says per image"; else fail "the list file does not say per image"; fi
 
-CASE="stem not in the dump: accepted"
+CASE="backup from before the layout move, same stem: accepted"
 FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
 eq "$RC" 0 "exit status"
 has "--accept-lost-stems: rolling back anyway"
@@ -1489,55 +1522,90 @@ db_is restored
 if grep -qx "# accepted: yes (--accept-lost-stems)" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says accepted"; else fail "the list file does not say accepted"; fi
 active
 
-stem_case "stem not in the dump, accepted, killed after the DROP"
-CASE="stem not in the dump, accepted, killed after the DROP: the rollback"
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "accepted, killed after the DROP"
+CASE="accepted, killed after the DROP: the rollback"
 FAKE_STEMMED="$STEMMED_7" FAKE_KILL_ON_DROP=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
 marker_has "kind: restore-failed"
 marker_has "lost-stems-accepted: $DTK_TEST_STATE/$STEMS_FILE_REL"
 
-stem_case "stem directory absent"
+# Every image the backup records is where it says: nothing at risk.
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "backup whose paths all exist"
+: > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+CASE="backup whose paths all exist: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "may cut volumes off"
+db_is restored
+
+# Mixed: volume 7 intact, volume 8 not; a freed master missing on disk is
+# stored offsite and does not count; an image with no volume is reported.
+FAKE_DUMP_COLLECTIONS="$DUMP_7\n8\tLibro 8\t\\N\tlibro-8\t2026-10-01 00:00:00" \
+FAKE_DUMP_RECORDS="$RECORDS_7\n80\tFolio 1\t8\tsingle\n81\tFolio 2\t8\tsingle\n90\tLoose\t\\N\tsingle" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\ta.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N\n701\t70\tb.jpg\t@STATE@/projects/libro-7/captures/freed.jpg\tjpg\tt\t2026-10-02 00:00:00\t12345\n800\t80\tc.jpg\t@STATE@/projects/libro-8/captures/c.jpg\tjpg\tt\t\\N\t\\N\n801\t81\td.jpg\t@STATE@/projects/old/libro-8/d.jpg\tjpg\tt\t\\N\t\\N\n802\t81\te.jpg\t@STATE@/projects/old/libro-8/e.jpg\tjpg\tf\t\\N\t\\N\n900\t90\tf.jpg\t@STATE@/projects/loose/f.jpg\tjpg\tt\t\\N\t\\N" \
+    stem_case "mixed volumes"
+: > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+mkdir -p "$DTK_TEST_STATE/projects/libro-8/captures"; : > "$DTK_TEST_STATE/projects/libro-8/captures/c.jpg"
+CASE="mixed volumes: the rollback"
+FAKE_STEMMED="$STEMMED_7\n8\tLibro 8\tlibro-8" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "id 8  \"Libro 8\"  stem libro-8: 2 of 3 images not on disk, e.g. $DTK_TEST_STATE/projects/old/libro-8/d.jpg"
+has "no volume: 1 of 1 images not on disk, e.g. $DTK_TEST_STATE/projects/loose/f.jpg"
+hasnt "id 7  \"Libro 7\""
+list_has "8\tLibro 8\tlibro-8\t2\t3\t$DTK_TEST_STATE/projects/old/libro-8/d.jpg"
+list_has "-\t(no volume)\t-\t1\t1\t$DTK_TEST_STATE/projects/loose/f.jpg"
+stems_untouched
+
+# A dump from an older schema, without master_freed_at: its paths are still
+# checked.
+FAKE_DUMP_OLD_IMAGES_SCHEMA=1 FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg" \
+    stem_case "older image schema in the dump"
+CASE="older image schema in the dump: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "stem libro-7: 1 of 1 images not on disk"
+stems_untouched
+
+# The second signal: a volume with a stem directory that the backup lacks.
+stem_case "volume the backup does not have"
+CASE="volume the backup does not have: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "id 7  \"Libro 7\"  stem libro-7: not in the backup; its files are in $DTK_TEST_STATE/projects/libro-7"
+list_has "7\tLibro 7\tlibro-7\tnot-in-backup\t-\t$DTK_TEST_STATE/projects/libro-7"
+stems_untouched
+
+stem_case "volume the backup does not have, directory absent"
 rm -rf "$DTK_TEST_STATE/projects/libro-7"
-CASE="stem directory absent: the rollback"
+CASE="volume the backup does not have, directory absent: the rollback"
 FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
 eq "$RC" 0 "exit status"
 hasnt "may cut volumes off"
 db_is restored
 
-FAKE_DUMP_COLLECTIONS='7\tLibro 7\t\\N\tlibro-7\t2026-10-01 00:00:00' run_case "stem already in the dump" --yes
-mkdir -p "$DTK_TEST_STATE/projects/libro-7"
-CASE="stem already in the dump: the rollback"
-FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
-eq "$RC" 0 "exit status"
-hasnt "may cut volumes off"
-db_is restored
-
-FAKE_DUMP_COLLECTIONS='7\tLibro 7\t\\N\t\\N\t2026-10-01 00:00:00' run_case "volume in the dump without its stem" --yes
-mkdir -p "$DTK_TEST_STATE/projects/libro-7"
-DB_BEFORE="$(cat "$CASE_DIR/db_state")"
-CASE="volume in the dump without its stem: the rollback"
-FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
-eq "$RC" 1 "exit status"
-has "stem libro-7"
-stems_untouched
-
-FAKE_DUMP_NO_COLLECTIONS=1 run_case "dump without a collections table" --yes
-mkdir -p "$DTK_TEST_STATE/projects/libro-7"
-DB_BEFORE="$(cat "$CASE_DIR/db_state")"
-CASE="dump without a collections table: the rollback"
-FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
-eq "$RC" 1 "exit status"
-has "some of them may be safe"
-if grep -qx "# dump-check: not possible; every volume with a stem directory is listed" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says the dump could not be checked"; else fail "the list file does not say so"; fi
-stems_untouched
-
-stem_case "stem directory under the storage override"
+stem_case "volume the backup does not have, under the storage override"
 rm -rf "$DTK_TEST_STATE/projects/libro-7"
 mkdir -p "$CASE_DIR/drive/libro-7"
 printf '{\n  "projects_root": "%s"\n}\n' "$CASE_DIR/drive" > "$DTK_TEST_STATE/storage-override.json"
-CASE="stem directory under the storage override: the rollback"
+CASE="volume the backup does not have, under the storage override: the rollback"
 FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
 eq "$RC" 1 "exit status"
-has "($CASE_DIR/drive/libro-7)"
+has "its files are in $CASE_DIR/drive/libro-7"
+stems_untouched
+
+# The fallback: the dump's images cannot be read.
+FAKE_DUMP_NO_IMAGES=1 FAKE_DUMP_COLLECTIONS="$DUMP_7" stem_case "dump without readable images"
+CASE="dump without readable images: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "some of them may be safe"
+has "id 7  \"Libro 7\"  stem libro-7: its files are in $DTK_TEST_STATE/projects/libro-7"
+if grep -qx "# dump-check: not possible; every volume with a stem directory is listed" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says the dump could not be checked"; else fail "the list file does not say so"; fi
+list_has "7\tLibro 7\tlibro-7\tunknown\t-\t$DTK_TEST_STATE/projects/libro-7"
 stems_untouched
 
 stem_case "database unreachable"

@@ -728,20 +728,32 @@ fi
 # 1d. Volumes the restore would cut off from their files, asked while the
 #     unit still runs and before anything is stopped or written.
 #
-#     A volume with a file name stem keeps its files in <projects root>/<stem>/
-#     (backend capture/project_manager.volume_root), where the backend moves
-#     them once the stem is set. A dump taken before that describes the
-#     volume without the stem, or not at all, so after the restore its rows
-#     point at paths that do not hold its files, or it is gone from the
-#     catalogue with its files left in the directory.
+#     The question is whether, after the restore, the catalogue would point
+#     at files that are not there. A backup taken before the backend moved a
+#     volume's files (into <projects root>/<stem>/ when its stem was set, or
+#     into <stem>/captures/ by the layout pass at startup, which rewrites the
+#     paths and keeps the stem) records paths that hold nothing now. A stem
+#     that matches proves nothing, so the backup's own image rows are
+#     checked:
 #
-#     At risk: every volume with a stem in the current database whose stem
-#     directory exists, unless the dump's own collections table has that
-#     volume with that same stem (the dump is plain pg_dump SQL, as this
-#     script loads it with psql, so its COPY block can be read). The model
-#     records no time a stem was set, so the dump itself is the evidence. If
-#     the dump's table cannot be read, every such volume is listed, and the
-#     message says some may be safe.
+#     • Every image the dump records (record_images.file_path, joined to its
+#       volume through records.collection_id) is looked for on disk now,
+#       resolved as the backend resolves it (Path(file_path).resolve(): an
+#       absolute path as stored, a relative one against the backend's working
+#       directory, <project>/backend). A master freed to offsite storage
+#       (master_freed_at set; the column exists from migration c4e8f1a3b5d7
+#       on, and its absence means none is freed) is absent by design and not
+#       counted. A volume is at risk when any of its images is missing;
+#       the count and one example path are reported.
+#     • A volume with a stem directory in the current database that the dump
+#       does not have at all would be gone from the catalogue, its files left
+#       in the directory: reported as not in the backup.
+#     • If the dump's image or record rows cannot be read, every volume with
+#       a stem directory is listed, and the message says some may be safe.
+#
+#     The dump is plain pg_dump SQL (this script loads it with psql), read in
+#     one streaming pass; its rows go to a private temporary directory, so
+#     memory holds only the records map, whatever the number of images.
 #
 #     The projects root is checked where the backend may have it (backend
 #     app/core/config.py, storage_override.py): the root named in
@@ -776,21 +788,79 @@ print(v)' "$STORAGE_OVERRIDE_FILE" 2>/dev/null)"
     printf '%s\n%s\n' "$override" "$default" | awk 'NF && !seen[$0]++'
 }
 
-# The dump's collections as "<id>\t<stem>" lines ("\N" for no stem); exit 1
-# when the dump has no readable COPY block for the table.
-dump_collection_stems() {
-    gunzip -c "$DUMP_FILE" 2>/dev/null | awk -F'\t' '
+# read_dump_catalogue <dir>: stream the dump once and write, in <dir>,
+#   collections  <id>\t<name>\t<stem>          (stem as in the dump, \N for none)
+#   records      <id>\t<collection_id>
+#   images       <record_id>\t<file_path>      (masters not freed to offsite)
+# Exit 0 when the dump has COPY blocks for record_images (with record_id and
+# file_path) and records (with id and collection_id); 1 otherwise. COPY text
+# escapes a backslash as \\; that is undone in paths and names.
+read_dump_catalogue() {
+    gunzip -c "$DUMP_FILE" 2>/dev/null | awk -F'\t' -v dir="$1" '
+        function cols(line, prefix,    c, n, i) {
+            c = line; sub(prefix, "", c); sub(/\) FROM stdin;$/, "", c)
+            n = split(c, names, /, /)
+            delete col
+            for (i = 1; i <= n; i++) col[names[i]] = i
+        }
+        function unesc(v) { gsub(/\\\\/, "\\", v); return v }
         /^COPY public\.collections \(/ {
-            cols = $0
-            sub(/^COPY public\.collections \(/, "", cols); sub(/\) FROM stdin;$/, "", cols)
-            n = split(cols, names, /, /)
-            for (i = 1; i <= n; i++) { if (names[i] == "id") ci = i; if (names[i] == "filename_stem") cs = i }
-            if (ci && cs) { inblock = 1; found = 1 }
+            cols($0, "^COPY public\\.collections \\(")
+            if (("id" in col) && ("name" in col)) { block = "c"; cid = col["id"]; cname = col["name"]; cstem = ("filename_stem" in col) ? col["filename_stem"] : 0 }
             next
         }
-        inblock && $0 == "\\." { inblock = 0; next }
-        inblock { print $ci "\t" $cs }
-        END { exit found ? 0 : 1 }'
+        /^COPY public\.record_images \(/ {
+            cols($0, "^COPY public\\.record_images \\(")
+            if (("record_id" in col) && ("file_path" in col)) { block = "i"; irec = col["record_id"]; ipath = col["file_path"]; ifreed = ("master_freed_at" in col) ? col["master_freed_at"] : 0; got_i = 1 }
+            next
+        }
+        /^COPY public\.records \(/ {
+            cols($0, "^COPY public\\.records \\(")
+            if (("id" in col) && ("collection_id" in col)) { block = "r"; rid = col["id"]; rcol = col["collection_id"]; got_r = 1 }
+            next
+        }
+        block != "" && $0 == "\\." { block = ""; next }
+        block == "c" { print $cid "\t" unesc($cname) "\t" (cstem ? $cstem : "\\N") > (dir "/collections"); next }
+        block == "i" { if (!ifreed || $ifreed == "\\N") print $irec "\t" unesc($ipath) > (dir "/images"); next }
+        block == "r" { print $rid "\t" $rcol > (dir "/records"); next }
+        END { exit (got_i && got_r) ? 0 : 1 }'
+}
+
+# check_dump_images <dir>: look for each image of <dir>/images on disk, as
+# the backend resolves its path, and write <dir>/missing_by_volume:
+#   <volume id or ->\t<name>\t<stem or ->\t<missing>\t<total>\t<first missing path>
+# for each volume with at least one image missing.
+check_dump_images() {
+    local d="$1" rec path full
+    : > "$d/checked"
+    while IFS="$(printf '\t')" read -r rec path; do
+        case "$path" in
+            /*) full="$path" ;;
+            *)  full="$PROJECT_ROOT/backend/$path" ;;
+        esac
+        if [ -e "$full" ]; then
+            printf '%s\t1\t\n' "$rec"
+        else
+            printf '%s\t0\t%s\n' "$rec" "$full"
+        fi
+    done < "$d/images" > "$d/checked"
+    : >> "$d/collections"; : >> "$d/records"
+    awk -F'\t' '
+        FILENAME ~ /\/collections$/ { name[$1] = $2; stem[$1] = $3; next }
+        FILENAME ~ /\/records$/     { vol[$1] = $2; next }
+        {
+            v = ($1 in vol) ? vol[$1] : "\\N"
+            if (v == "") v = "\\N"
+            total[v]++
+            if ($2 == "0") { missing[v]++; if (!(v in example)) example[v] = $3 }
+        }
+        END {
+            for (v in missing) {
+                if (v == "\\N") { id = "-"; n = "(no volume)"; st = "-" }
+                else { id = v; n = (v in name) ? name[v] : "(not in the backup)"; st = (v in stem && stem[v] != "\\N") ? stem[v] : "-" }
+                print id "\t" n "\t" st "\t" missing[v] "\t" total[v] "\t" example[v]
+            }
+        }' "$d/collections" "$d/records" "$d/checked" | sort -t"$(printf '\t')" -k1,1n > "$d/missing_by_volume"
 }
 
 STEM_DB_STARTED=0
@@ -848,6 +918,21 @@ if [ -n "$DB_EXISTS" ]; then
 fi
 STEMS_AT_RISK=""
 DUMP_CHECKED=1
+STEM_WORK="$(umask 077; mktemp -d "${TMPDIR:-/tmp}/dtk-stem-guard.XXXXXX")" \
+    || stem_guard_refuse_unanswered "no temporary directory for reading the backup"
+# The backup's own images, against the disk.
+if read_dump_catalogue "$STEM_WORK"; then
+    : >> "$STEM_WORK/images"
+    check_dump_images "$STEM_WORK"
+    while IFS="$(printf '\t')" read -r vid vname vstem vmiss vtotal vex; do
+        [ -n "$vid" ] || continue
+        STEMS_AT_RISK="${STEMS_AT_RISK}$(printf '%s\t%s\t%s\t%s\t%s\t%s' "$vid" "$vname" "$vstem" "$vmiss" "$vtotal" "$vex")"$'\n'
+    done < "$STEM_WORK/missing_by_volume"
+else
+    DUMP_CHECKED=0
+fi
+# The current database: volumes with a stem directory that the backup does
+# not have (or, when the backup could not be read, every one of them).
 if [ -z "$DB_EXISTS" ]; then
     # Dropped and not created again: a restore interrupted after its DROP.
     echo "  The database $DATABASE_NAME does not exist: an interrupted restore removed it."
@@ -858,10 +943,10 @@ elif [ -z "$HAS_COLLECTIONS" ]; then
 else
     if ! STEMMED="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At -F "$(printf '\t')" \
             -c "SELECT id, translate(name, E'\t\n\r', '   '), filename_stem FROM collections WHERE filename_stem IS NOT NULL ORDER BY id" 2>/dev/null)"; then
+        rm -rf "$STEM_WORK"
         stem_guard_refuse_unanswered "the query failed"
     fi
     if [ -n "$STEMMED" ]; then
-        DUMP_STEMS="$(dump_collection_stems)" || DUMP_CHECKED=0
         ROOTS="$(stem_roots)"
         while IFS="$(printf '\t')" read -r vid vname vstem; do
             [ -n "$vid" ] || continue
@@ -871,19 +956,25 @@ else
                 if [ -d "$root/$vstem" ]; then vdir="$root/$vstem"; break; fi
             done <<< "$ROOTS"
             [ -n "$vdir" ] || continue
-            if [ "$DUMP_CHECKED" -eq 1 ] && printf '%s\n' "$DUMP_STEMS" | grep -qxF "$(printf '%s\t%s' "$vid" "$vstem")"; then
-                continue
+            if [ "$DUMP_CHECKED" -eq 1 ]; then
+                if cut -f1 "$STEM_WORK/collections" 2>/dev/null | grep -qxF "$vid"; then
+                    continue
+                fi
+                STEMS_AT_RISK="${STEMS_AT_RISK}$(printf '%s\t%s\t%s\tnot-in-backup\t-\t%s' "$vid" "$vname" "$vstem" "$vdir")"$'\n'
+            else
+                STEMS_AT_RISK="${STEMS_AT_RISK}$(printf '%s\t%s\t%s\tunknown\t-\t%s' "$vid" "$vname" "$vstem" "$vdir")"$'\n'
             fi
-            STEMS_AT_RISK="${STEMS_AT_RISK}$(printf '%s\t%s\t%s\t%s' "$vid" "$vname" "$vstem" "$vdir")"$'\n'
         done <<< "$STEMMED"
     fi
 fi
+rm -rf "$STEM_WORK"
 
 if [ -n "$STEMS_AT_RISK" ]; then
     if ! ( umask 077
            {
-               echo "# rollback-update.sh, $(date +%Y-%m-%dT%H:%M:%S%z): volumes whose files are in their"
-               echo "# stem directory and that the backup being restored does not have with that stem."
+               echo "# rollback-update.sh, $(date +%Y-%m-%dT%H:%M:%S%z): volumes whose images, as the"
+               echo "# backup being restored records them, are not on disk now, or that the backup"
+               echo "# does not have."
                echo "# dump: $DUMP_FILE"
                if [ "$ACCEPT_LOST_STEMS" -eq 1 ]; then
                    echo "# accepted: yes (--accept-lost-stems)"
@@ -891,11 +982,11 @@ if [ -n "$STEMS_AT_RISK" ]; then
                    echo "# accepted: no"
                fi
                if [ "$DUMP_CHECKED" -eq 1 ]; then
-                   echo "# dump-check: per volume"
+                   echo "# dump-check: per image"
                else
                    echo "# dump-check: not possible; every volume with a stem directory is listed"
                fi
-               printf 'id\tname\tfilename_stem\tdirectory\n'
+               printf 'id\tname\tfilename_stem\timages_missing\timages_total\texample\n'
                printf '%s' "$STEMS_AT_RISK"
            } > "$STEMS_AT_RISK_FILE.tmp" ) || ! mv -f "$STEMS_AT_RISK_FILE.tmp" "$STEMS_AT_RISK_FILE"; then
         rm -f "$STEMS_AT_RISK_FILE.tmp" 2>/dev/null || true
@@ -906,20 +997,28 @@ if [ -n "$STEMS_AT_RISK" ]; then
     fi
     if [ "$ACCEPT_LOST_STEMS" -ne 1 ]; then
         echo "✗ Restoring this backup may cut volumes off from their files:"
-        while IFS="$(printf '\t')" read -r vid vname vstem vdir; do
+        while IFS="$(printf '\t')" read -r vid vname vstem vmiss vtotal vex; do
             [ -n "$vid" ] || continue
-            echo "    id $vid  \"$vname\"  stem $vstem  ($vdir)"
+            case "$vmiss" in
+                not-in-backup) echo "    id $vid  \"$vname\"  stem $vstem: not in the backup; its files are in $vex" ;;
+                unknown)       echo "    id $vid  \"$vname\"  stem $vstem: its files are in $vex" ;;
+                *)  if [ "$vid" = "-" ]; then
+                        echo "    no volume: $vmiss of $vtotal images not on disk, e.g. $vex"
+                    else
+                        echo "    id $vid  \"$vname\"  stem $vstem: $vmiss of $vtotal images not on disk, e.g. $vex"
+                    fi ;;
+            esac
         done <<< "$STEMS_AT_RISK"
-        echo "  Each of these volumes keeps its files in its stem directory, and the"
-        echo "  backup $DUMP_FILE"
-        echo "  does not have the volume with that stem: it was taken before the stem"
-        echo "  was set, or before the volume existed. After the rollback the catalogue"
-        echo "  would be as it was in the backup: the volume's records would point at"
-        echo "  paths that do not hold its files, or a volume the backup does not have"
-        echo "  would be gone from it, its files left in the directory."
+        echo "  After the rollback the catalogue would be as it is in the backup"
+        echo "  $DUMP_FILE."
+        echo "  Its records would point at image files that are not where it says,"
+        echo "  for instance because they were moved into the volume's stem directory"
+        echo "  after the backup was taken; and a volume the backup does not have would"
+        echo "  be gone from the catalogue, its files left in its directory. Masters"
+        echo "  freed to offsite storage are not counted."
         if [ "$DUMP_CHECKED" -ne 1 ]; then
-            echo "  The backup's own list of volumes could not be read, so every volume"
-            echo "  with a stem directory is listed; some of them may be safe."
+            echo "  The backup's images could not be read, so every volume with a stem"
+            echo "  directory is listed; some of them may be safe."
         fi
         echo "  The list is in $STEMS_AT_RISK_FILE."
         echo "  Nothing has been changed. To roll back anyway, accepting this, run the"
@@ -929,6 +1028,8 @@ if [ -n "$STEMS_AT_RISK" ]; then
     fi
     echo "  --accept-lost-stems: rolling back anyway. The volumes at risk are listed"
     echo "  in $STEMS_AT_RISK_FILE."
+    # A retry of an interrupted run is the same decision.
+    RESUME_CMD="$RESUME_CMD --accept-lost-stems"
 else
     echo "  None."
 fi
