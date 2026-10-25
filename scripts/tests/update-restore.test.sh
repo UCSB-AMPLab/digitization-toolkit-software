@@ -25,6 +25,7 @@
 #   curl       answers /health when the unit is active and the version
 #              started is one the case calls healthy.
 #   chown, sleep, ss   do nothing (ss reports the db port listening).
+#   pgrep      finds no backend process, unless a case says one is stuck.
 #
 # Each case states the failure it injects, through the fakes or through
 # update.sh's test-only DTK_UPDATE_FAIL_AT.
@@ -97,11 +98,6 @@ case "$1" in
         esac
         exit 0 ;;
     stop)
-        if [ -f "$S/active" ] && [ "$(tail -n 1 "$S/started")" = B ] && [ -n "${FAKE_WRITE_DURING_STOP:-}" ]; then
-            # A request that commits during the graceful shutdown.
-            echo 'INFO:     172.30.0.4:5000 - "POST /captures/ HTTP/1.1" 201 Created' >> "$CASE_DIR/journal"
-        fi
-        [ -f "$S/active" ] && echo "Stopped dtk.service - Digitization Toolkit." >> "$CASE_DIR/journal"
         # The old version serves until here: a write it accepted after the
         # trial dump must survive a restore.
         if [ -f "$S/active" ] && [ -n "${FAKE_WRITE_BEFORE_STOP:-}" ] && [ ! -f "$S/wrote" ]; then
@@ -110,7 +106,6 @@ case "$1" in
         fi
         rm -f "$S/active"; exit 0 ;;
     start)
-        printf 'Starting dtk.service - Digitization Toolkit...\nStarted dtk.service - Digitization Toolkit.\n' >> "$CASE_DIR/journal"
         cat "$PROJECT_ROOT/VERSION" >> "$S/started"
         touch "$S/active" "$CASE_DIR/docker/db_running"
         cp "$CASE_DIR/docker/tag_dtk-frontend_latest" "$CASE_DIR/docker/frontend_container"
@@ -229,18 +224,6 @@ case "$1" in
 esac
 exit 0
 EOF
-cat > "$FAKEBIN/journalctl" <<'EOF2'
-#!/bin/sh
-echo "journalctl $*" >> "$CASE_DIR/log"
-case "$*" in *--sync*) exit 0 ;; esac
-[ -z "${FAKE_JOURNAL_FAIL:-}" ] || { echo "Failed to open journal" >&2; exit 1; }
-case "$*" in
-    *"-t systemd-journald"*) [ -n "${FAKE_JOURNALD:-}" ] && printf '%s\n' "$FAKE_JOURNALD"; exit 0 ;;
-esac
-cat "$CASE_DIR/journal" 2>/dev/null
-[ -n "${FAKE_JOURNAL:-}" ] && printf '%s\n' "$FAKE_JOURNAL"
-exit 0
-EOF2
 cat > "$FAKEBIN/pgrep" <<'EOF2'
 #!/bin/sh
 [ -n "${FAKE_PGREP_STUCK:-}" ] && { echo 4243; exit 0; }
@@ -438,23 +421,52 @@ has "database: restored from this run's backup $(dump_name)"
 has "back online on the previous version"
 
 # ── The new version starts but never answers /health ────────────────────────
+# Once started it may have taken writes: nothing is restored, the unit stops.
+started_failure_checks() {
+    eq "$RC" 1 "exit status"
+    head_is "$SHA_B" "B (not moved back)"
+    tag_is "$NEW_IMG" "the new build (not moved back)"
+    db_is migrated
+    unlogged "DROP DATABASE"
+    unlogged "pixi install --locked lock=lock-A"
+    started "A B "
+    inactive
+    has "UPDATE FAILED after the new version was started"
+    has "dtk service: STOPPED, with no backend process left running"
+    has "database: migrated for the new version, NOT restored"
+    has "rollback-update.sh --project-root="
+    has "--yes $(dump_name)"
+    has "DISCARDS"
+    has "writes the new version"
+    has "docker tag dtk-frontend:pre-update-"
+    hasnt "back online"
+    eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA still names A"
+}
 FAKE_HEALTHY_VERSIONS="A" run_case "health fails after start" --yes
-eq "$RC" 1 "exit status"
-head_is "$SHA_A" A
-tag_is "$OLD_IMG" "the old image"
-eq "$(cat "$CASE_DIR/pixi_env")" "lock-A" "pixi environment is A's again"
-db_is restored
-started "A B A "
-active
-has "did not answer /health"
-has "back online on the previous version"
-eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA still names A"
+started_failure_checks
+has "did not become healthy"
 
-# ── The previous version does not come back healthy either ──────────────────
-FAKE_HEALTHY_VERSIONS="none" run_case "previous version unhealthy" --yes
+DTK_UPDATE_FAIL_AT=started run_case "fails right after start" --yes
+started_failure_checks
+
+DTK_UPDATE_FAIL_AT=served run_case "fails after serving" --yes
+started_failure_checks
+has "answered /health, and the update"
+
+FAKE_HEALTHY_VERSIONS="A" FAKE_PGREP_STUCK=1 run_case "backend does not stop" --yes
+eq "$RC" 1 "exit status"
+db_is migrated
+unlogged "DROP DATABASE"
+has "still running after"
+has "--yes $(dump_name)"
+hasnt "back online"
+
+# ── Migration fails and the previous version does not come back healthy ─────
+FAKE_MIGRATE_FAIL=1 FAKE_HEALTHY_VERSIONS="none" run_case "previous version unhealthy" --yes
 eq "$RC" 1 "exit status"
 head_is "$SHA_A" A
-started "A B A "
+db_is restored
+started "A A "
 hasnt "back online"
 has "The previous version did NOT come back up"
 has "--yes $(dump_name)"
@@ -469,72 +481,6 @@ unlogged "pixi run db-upgrade"
 started "A A "
 active
 has "database: untouched"
-has "back online on the previous version"
-
-# ── The new version served, then the update failed ──────────────────────────
-DTK_UPDATE_FAIL_AT=served run_case "fails after serving" --yes
-eq "$RC" 1 "exit status"
-head_is "$SHA_B" "B (left running)"
-db_is migrated
-unlogged "DROP DATABASE"
-started "A B "
-active
-has "after the new version had started serving"
-has "database: migrated for the new version, NOT restored"
-has "--yes $(dump_name)"
-has "DISCARDS everything saved since"
-hasnt "back online"
-
-# ── /health never answered, but the access log shows a write ────────────────
-FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL='INFO:     172.30.0.4:5000 - "POST /projects/ HTTP/1.1" 201 Created' \
-    run_case "write in the log without /health" --yes
-eq "$RC" 1 "exit status"
-head_is "$SHA_B" "B (left running)"
-db_is migrated
-unlogged "DROP DATABASE"
-has "after the new version had started serving"
-
-FAKE_HEALTHY_VERSIONS="A" FAKE_WRITE_DURING_STOP=1 run_case "write committed during the stop" --yes
-eq "$RC" 1 "exit status"
-db_is migrated
-unlogged "DROP DATABASE"
-inactive
-has "after the new version had started serving"
-has "--yes $(dump_name)"
-has "DISCARDS everything saved since"
-has "left STOPPED"
-hasnt "back online"
-if grep -n "journalctl -u dtk" "$CASE_DIR/log" | head -n 1 | cut -d: -f1 > "$CASE_DIR/j" \
-   && [ "$(cat "$CASE_DIR/j")" -gt "$(grep -n "systemctl stop dtk" "$CASE_DIR/log" | tail -n 1 | cut -d: -f1)" ]; then
-    ok "the journal is read only after the last stop"
-else
-    fail "the journal is read before the stop"
-fi
-
-FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL_FAIL=1 run_case "journal unreadable" --yes
-eq "$RC" 1 "exit status"
-db_is migrated
-unlogged "DROP DATABASE"
-has "whether the new version took writes is not known"
-has "--yes $(dump_name)"
-hasnt "back online"
-
-FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNALD="Suppressed 4127 messages from dtk.service" run_case "journal lines suppressed" --yes
-db_is migrated
-unlogged "DROP DATABASE"
-has "whether the new version took writes is not known"
-
-FAKE_HEALTHY_VERSIONS="A" FAKE_PGREP_STUCK=1 run_case "backend does not stop" --yes
-db_is migrated
-unlogged "DROP DATABASE"
-has "did not stop within 60s"
-hasnt "back online"
-
-FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL='INFO:     172.30.0.4:5000 - "GET /projects/ HTTP/1.1" 200 OK' \
-    run_case "only reads in the log" --yes
-eq "$RC" 1 "exit status"
-head_is "$SHA_A" A
-db_is restored
 has "back online on the previous version"
 
 # ── Restore fails: the code cannot be moved back ────────────────────────────

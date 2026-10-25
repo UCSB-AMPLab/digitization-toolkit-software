@@ -20,10 +20,10 @@
 #     image, the pixi environment, and the database from that stopped-backend
 #     dump if a migration had begun. It starts the service only once those are
 #     back, and says the unit is online only when the backend answers /health.
-#     Once the new version may have served (it answered /health, or its log,
-#     read after it is fully stopped, shows a write or cannot be read whole),
-#     nothing is restored automatically: it may hold new data, and the script
-#     prints the rollback command with its data-loss warning instead.
+#     Once the new version has been started (step 8), nothing is restored
+#     automatically: it may have saved data. The script stops it, leaves the
+#     unit stopped on the new code and migrated database, and prints the
+#     rollback command with its data-loss warning instead.
 #   • Before starting, it checks whether the update changed dependency manifests
 #     (which need the npm / conda registries) and, if so, warns the operator that
 #     internet is required and lets them abort.
@@ -554,11 +554,6 @@ print_restore_summary() {
     fi
 }
 
-# The failure came after the service was stopped. Put the previous version
-# back, component by component, and start it only when the code is back and,
-# if a migration began, the database too: starting the new code after a failed
-# migration is what left units looping on a backend that refuses an unmigrated
-# schema while this script said they were online.
 # Is the new backend fully stopped? The unit inactive or failed with no main
 # process, and no uvicorn left for it (stop.sh, the unit's ExecStop, finds the
 # backend by "uvicorn app.main:app" and SIGTERMs it, then SIGKILLs it after
@@ -582,77 +577,59 @@ wait_backend_stopped() {
     return 1
 }
 
-# NEW_VERSION_VERDICT: did the new version serve between its start in step 8
-# and the stop just done? Called only with the backend fully stopped, so no
-# request can land after the answer. One of:
-#   served     it answered /health, or the backend's access log for the span
-#              shows a POST, PUT, PATCH or DELETE
-#   none       the span's log is complete and shows no write; /health never
-#              answered
-#   uncertain  the log could not be read, does not cover the span (no start
-#              and stop record from systemd), or journald suppressed lines
-# Only "none" lets the database be restored. A request that commits during the
-# graceful shutdown writes its access-log line before uvicorn exits, so it is
-# in the span once the stop has completed.
-NEW_VERSION_VERDICT=""
-judge_new_version() {
-    local since until log jd
-    if [ "$NEW_SERVED" -eq 1 ]; then NEW_VERSION_VERDICT=served; return; fi
-    NEW_VERSION_VERDICT=uncertain
-    since="@$((NEW_STARTED_AT - 1))"
-    until="@$(( $(date +%s) + 1 ))"
-    journalctl --sync >/dev/null 2>&1 || true
-    log="$(journalctl -u dtk --since "$since" --until "$until" -o cat --no-pager 2>/dev/null)" || return
-    jd="$(journalctl -t systemd-journald --since "$since" --until "$until" -o cat --no-pager 2>/dev/null)" || return
-    if printf '%s\n' "$jd" | grep -qiE 'suppressed .*dtk'; then return; fi
-    printf '%s\n' "$log" | grep -qE 'Start(ing|ed) dtk[.]service' || return
-    printf '%s\n' "$log" | grep -qE 'Stopped dtk[.]service|dtk[.]service: (Deactivated|Failed with result)' || return
-    if printf '%s\n' "$log" | grep -qE '"(POST|PUT|PATCH|DELETE) [^"]* HTTP/[0-9.]+" [0-9]{3}'; then
-        NEW_VERSION_VERDICT=served
-    else
-        NEW_VERSION_VERDICT=none
-    fi
-}
-
-# The new version served and then the update failed. It may have accepted
-# writes since the backup, so nothing is restored automatically and nothing is
-# stopped: restoring the database would discard those writes, and restoring the
-# code alone would put old code over a migrated database.
-report_served_failure() {
+# The new version was started in step 8 and the update then failed. From its
+# start it could take writes, and nothing on the unit can prove it did not: a
+# handler commits before it responds, uvicorn logs the request only on the
+# response, and stop.sh kills the backend 2s after asking it to stop. So the
+# database is never restored automatically from here, and the code is not
+# moved back either, because the old code cannot run over the migrated
+# database. The new version is stopped, fully, and the unit left stopped.
+report_started_failure() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    if [ "$NEW_VERSION_VERDICT" = uncertain ]; then
-        echo "  UPDATE FAILED, and whether the new version took writes is not known"
-    else
-        echo "  UPDATE FAILED after the new version had started serving"
-    fi
+    echo "  UPDATE FAILED after the new version was started"
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo ""
-    if [ "$NEW_VERSION_VERDICT" = uncertain ]; then
-        echo "  The new version ($CURRENT_SHA) was started, and the log of the"
-        echo "  time it ran could not be read in full (journalctl failed, lines"
-        echo "  were suppressed, or the span is not covered), so it cannot be"
-        echo "  ruled out that it accepted writes. Nothing has been restored."
+    if [ "$NEW_SERVED" -eq 1 ]; then
+        echo "  The new version ($CURRENT_SHA) answered /health, and the update"
+        echo "  failed after that."
     else
-        echo "  The new version ($CURRENT_SHA) has served requests, so it may"
-        echo "  already hold new data. Nothing has been restored."
+        echo "  The new version ($CURRENT_SHA) did not become healthy: the backend"
+        echo "  did not answer /health."
     fi
+    echo ""
     echo "  State of the unit:"
-    if backend_healthy; then
-        echo "    • dtk service: active, the backend answers /health"
+    if [ "$1" = stopped ]; then
+        echo "    • dtk service: STOPPED, with no backend process left running"
     else
-        echo "    • dtk service: NOT answering /health (systemctl status dtk)"
+        echo "    • dtk service: asked to stop, but the backend was still running after"
+        echo "      60s. Check: systemctl status dtk"
     fi
-    echo "    • database: migrated for the new version, NOT restored"
+    echo "    • code: the new version, $CURRENT_SHA (not moved back: the previous"
+    echo "      code cannot run over the migrated database)"
+    echo "    • database: migrated for the new version, NOT restored. The new"
+    echo "      version was running and may have saved data that a restore would"
+    echo "      discard, so this script does not restore it on its own."
     echo ""
     echo "  To return to the previous version, code and database, run:"
     echo "      $ROLLBACK_CMD"
-    echo "  ⚠ That restores the backup taken at $(date -r "$RESTORE_DUMP" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo 'the start of the downtime')"
-    echo "    and DISCARDS everything saved since, including work done on the new"
-    echo "    version. Export or note that work first."
+    echo "  ⚠ That restores $RESTORE_DUMP,"
+    echo "    taken with the backend stopped before the migration, and DISCARDS"
+    echo "    everything written since, which may include writes the new version"
+    echo "    accepted before it failed."
+    if [ -n "$SAVED_FRONTEND_TAG" ] && [ -n "$FRONTEND_IMAGE" ]; then
+        echo "  rollback-update.sh does not put the frontend image back. After it, run:"
+        echo "      docker tag $SAVED_FRONTEND_TAG $FRONTEND_IMAGE && sudo systemctl restart dtk"
+    fi
     echo ""
 }
 
+# The failure came after the service was stopped. Put the previous version
+# back, component by component, and start it only when the code is back and,
+# if a migration began, the database too: starting the new code after a failed
+# migration is what left units looping on a backend that refuses an unmigrated
+# schema while this script said they were online. Only for a failure before
+# step 8 started the new version; after that, see report_started_failure.
 restore_after_stop() {
     local db_ok=1
     if [ -n "$RESTORE_DUMP" ] && [ "$RESTORE_DUMP_VERIFIED" -eq 0 ]; then
@@ -660,32 +637,14 @@ restore_after_stop() {
     fi
     if [ -n "$NEW_STARTED_AT" ]; then
         keep_rollback_copy
-        if [ "$NEW_SERVED" -eq 1 ]; then
-            # It answered /health: it served, and nothing below would change
-            # that. Left running, as it is.
-            NEW_VERSION_VERDICT=served
-            report_served_failure
-            return
-        fi
-        # Stop it, and only once it is fully stopped decide from its log:
-        # a request that arrives or commits after the decision would otherwise
-        # be discarded by the restore.
         systemctl stop dtk 2>/dev/null || true
-        if ! wait_backend_stopped; then
-            NEW_VERSION_VERDICT=uncertain
-            echo "  ✗ The new backend did not stop within 60s (systemctl status dtk)."
-            report_served_failure
-            return
-        fi
-        judge_new_version
-        if [ "$NEW_VERSION_VERDICT" != none ]; then
+        if wait_backend_stopped; then
             $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
-            report_served_failure
-            echo "  The appliance has been left STOPPED: the new version never answered"
-            echo "  /health, and starting the old one over a migrated database would fail."
-            echo ""
-            return
+            report_started_failure stopped
+        else
+            report_started_failure running
         fi
+        return
     fi
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -693,8 +652,8 @@ restore_after_stop() {
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo ""
     [ "$MIGRATION_STARTED" -eq 1 ] && keep_rollback_copy
-    # The new version may be up (a failure after step 8's start) or looping
-    # under Restart=on-failure: stop it before anything moves under it.
+    # Make sure nothing is up before anything moves under it (the unit is
+    # stopped already; this is belt and braces for the containers).
     # --remove-orphans: containers from services dropped between releases must
     # go too, or they keep an endpoint on the project network and wedge the
     # restart (NEH-214).
@@ -1715,8 +1674,6 @@ systemctl start dtk
 fail_point started
 echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
 if wait_for_health "$HEALTH_TIMEOUT"; then
-    # From here the new version has served, and may have accepted writes: a
-    # failure no longer restores the database automatically.
     NEW_SERVED=1
     echo "  Service running and the backend answers /health ✓"
     fail_point served
