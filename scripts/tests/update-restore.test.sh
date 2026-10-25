@@ -1622,6 +1622,33 @@ eq "$RC" 1 "exit status"
 has "its files are in $CASE_DIR/drive/libro-7"
 stems_untouched
 
+# Relative roots resolve as the backend resolves them, against its working
+# directory, <project>/backend (start.sh cds there), not the project root.
+# A copy of the directory under the project root is not what the backend
+# uses, and is placed there to show it is not the one found.
+for rel in projects-root data-dir override; do
+    stem_case "volume the backup does not have, relative $rel"
+    rm -rf "$DTK_TEST_STATE/projects/libro-7"
+    case "$rel" in
+        projects-root) printf 'PROJECTS_ROOT=rel/projects\n' > "$PROJECT_ROOT/.env"; found="$PROJECT_ROOT/backend/rel/projects/libro-7" ;;
+        data-dir)      printf 'DTK_DATA_DIR=rel/data\n' > "$PROJECT_ROOT/.env"; found="$PROJECT_ROOT/backend/rel/data/projects/libro-7" ;;
+        override)      printf '{\n  "projects_root": "rel/drive"\n}\n' > "$DTK_TEST_STATE/storage-override.json"; found="$PROJECT_ROOT/backend/rel/drive/libro-7" ;;
+    esac
+    mkdir -p "$found"
+    # The script names it from its own normalised project root.
+    found="$(cd "$PROJECT_ROOT" && pwd)${found#"$PROJECT_ROOT"}"
+    case "$rel" in
+        projects-root) mkdir -p "$PROJECT_ROOT/rel/projects/libro-7" ;;
+        data-dir)      mkdir -p "$PROJECT_ROOT/rel/data/projects/libro-7" ;;
+        override)      mkdir -p "$PROJECT_ROOT/rel/drive/libro-7" ;;
+    esac
+    CASE="volume the backup does not have, relative $rel: the rollback"
+    FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+    eq "$RC" 1 "exit status"
+    has "id 7  \"Libro 7\"  stem libro-7: not in the backup; its files are in $found"
+    stems_untouched
+done
+
 # The fallback: the dump's images cannot be read.
 FAKE_DUMP_NO_IMAGES=1 FAKE_DUMP_COLLECTIONS="$DUMP_7" stem_case "dump without readable images"
 CASE="dump without readable images: the rollback"
