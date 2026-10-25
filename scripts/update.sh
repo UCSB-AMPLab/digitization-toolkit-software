@@ -20,7 +20,8 @@
 #     image, the pixi environment, and the database from that stopped-backend
 #     dump if a migration had begun. It starts the service only once those are
 #     back, and says the unit is online only when the backend answers /health.
-#     Once the new version has served (answered /health, or logged a write),
+#     Once the new version may have served (it answered /health, or its log,
+#     read after it is fully stopped, shows a write or cannot be read whole),
 #     nothing is restored automatically: it may hold new data, and the script
 #     prints the rollback command with its data-loss warning instead.
 #   • Before starting, it checks whether the update changed dependency manifests
@@ -558,16 +559,59 @@ print_restore_summary() {
 # if a migration began, the database too: starting the new code after a failed
 # migration is what left units looping on a backend that refuses an unmigrated
 # schema while this script said they were online.
-# Did the new version serve? It did if it answered /health in step 8. Between
-# two polls it could also have answered a request and then died, so the
-# backend's access log since the start is asked as well, for any request that
-# writes; GETs, from the kiosk or the health check, change nothing.
-new_version_served() {
-    [ "$NEW_SERVED" -eq 1 ] && return 0
-    [ -n "$NEW_STARTED_AT" ] || return 1
-    command -v journalctl >/dev/null 2>&1 || return 1
-    journalctl -u dtk --since "@$NEW_STARTED_AT" -o cat --no-pager 2>/dev/null \
-        | grep -Eq '"(POST|PUT|PATCH|DELETE) [^"]* HTTP/[0-9.]+" [0-9]{3}'
+# Is the new backend fully stopped? The unit inactive or failed with no main
+# process, and no uvicorn left for it (stop.sh, the unit's ExecStop, finds the
+# backend by "uvicorn app.main:app" and SIGTERMs it, then SIGKILLs it after
+# 2s). The bracket keeps pgrep from matching a command line that merely
+# contains the pattern.
+backend_fully_stopped() {
+    local state pid
+    state="$(systemctl show dtk -p ActiveState --value 2>/dev/null)"
+    case "$state" in inactive|failed) ;; *) return 1 ;; esac
+    pid="$(systemctl show dtk -p MainPID --value 2>/dev/null)"
+    [ -z "$pid" ] || [ "$pid" = 0 ] || return 1
+    ! pgrep -f '[u]vicorn app[.]main:app' >/dev/null 2>&1
+}
+
+wait_backend_stopped() {
+    local i
+    for i in $(seq 1 30); do
+        backend_fully_stopped && return 0
+        sleep 2
+    done
+    return 1
+}
+
+# NEW_VERSION_VERDICT: did the new version serve between its start in step 8
+# and the stop just done? Called only with the backend fully stopped, so no
+# request can land after the answer. One of:
+#   served     it answered /health, or the backend's access log for the span
+#              shows a POST, PUT, PATCH or DELETE
+#   none       the span's log is complete and shows no write; /health never
+#              answered
+#   uncertain  the log could not be read, does not cover the span (no start
+#              and stop record from systemd), or journald suppressed lines
+# Only "none" lets the database be restored. A request that commits during the
+# graceful shutdown writes its access-log line before uvicorn exits, so it is
+# in the span once the stop has completed.
+NEW_VERSION_VERDICT=""
+judge_new_version() {
+    local since until log jd
+    if [ "$NEW_SERVED" -eq 1 ]; then NEW_VERSION_VERDICT=served; return; fi
+    NEW_VERSION_VERDICT=uncertain
+    since="@$((NEW_STARTED_AT - 1))"
+    until="@$(( $(date +%s) + 1 ))"
+    journalctl --sync >/dev/null 2>&1 || true
+    log="$(journalctl -u dtk --since "$since" --until "$until" -o cat --no-pager 2>/dev/null)" || return
+    jd="$(journalctl -t systemd-journald --since "$since" --until "$until" -o cat --no-pager 2>/dev/null)" || return
+    if printf '%s\n' "$jd" | grep -qiE 'suppressed .*dtk'; then return; fi
+    printf '%s\n' "$log" | grep -qE 'Start(ing|ed) dtk[.]service' || return
+    printf '%s\n' "$log" | grep -qE 'Stopped dtk[.]service|dtk[.]service: (Deactivated|Failed with result)' || return
+    if printf '%s\n' "$log" | grep -qE '"(POST|PUT|PATCH|DELETE) [^"]* HTTP/[0-9.]+" [0-9]{3}'; then
+        NEW_VERSION_VERDICT=served
+    else
+        NEW_VERSION_VERDICT=none
+    fi
 }
 
 # The new version served and then the update failed. It may have accepted
@@ -577,12 +621,23 @@ new_version_served() {
 report_served_failure() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "  UPDATE FAILED after the new version had started serving"
+    if [ "$NEW_VERSION_VERDICT" = uncertain ]; then
+        echo "  UPDATE FAILED, and whether the new version took writes is not known"
+    else
+        echo "  UPDATE FAILED after the new version had started serving"
+    fi
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo ""
-    echo "  The new version ($CURRENT_SHA) is running and has served requests,"
-    echo "  so it may already hold new data. Nothing has been restored and the"
-    echo "  service has been left as it is:"
+    if [ "$NEW_VERSION_VERDICT" = uncertain ]; then
+        echo "  The new version ($CURRENT_SHA) was started, and the log of the"
+        echo "  time it ran could not be read in full (journalctl failed, lines"
+        echo "  were suppressed, or the span is not covered), so it cannot be"
+        echo "  ruled out that it accepted writes. Nothing has been restored."
+    else
+        echo "  The new version ($CURRENT_SHA) has served requests, so it may"
+        echo "  already hold new data. Nothing has been restored."
+    fi
+    echo "  State of the unit:"
     if backend_healthy; then
         echo "    • dtk service: active, the backend answers /health"
     else
@@ -603,10 +658,34 @@ restore_after_stop() {
     if [ -n "$RESTORE_DUMP" ] && [ "$RESTORE_DUMP_VERIFIED" -eq 0 ]; then
         rm -f "$RESTORE_DUMP"
     fi
-    if new_version_served; then
+    if [ -n "$NEW_STARTED_AT" ]; then
         keep_rollback_copy
-        report_served_failure
-        return
+        if [ "$NEW_SERVED" -eq 1 ]; then
+            # It answered /health: it served, and nothing below would change
+            # that. Left running, as it is.
+            NEW_VERSION_VERDICT=served
+            report_served_failure
+            return
+        fi
+        # Stop it, and only once it is fully stopped decide from its log:
+        # a request that arrives or commits after the decision would otherwise
+        # be discarded by the restore.
+        systemctl stop dtk 2>/dev/null || true
+        if ! wait_backend_stopped; then
+            NEW_VERSION_VERDICT=uncertain
+            echo "  ✗ The new backend did not stop within 60s (systemctl status dtk)."
+            report_served_failure
+            return
+        fi
+        judge_new_version
+        if [ "$NEW_VERSION_VERDICT" != none ]; then
+            $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+            report_served_failure
+            echo "  The appliance has been left STOPPED: the new version never answered"
+            echo "  /health, and starting the old one over a migrated database would fail."
+            echo ""
+            return
+        fi
     fi
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"

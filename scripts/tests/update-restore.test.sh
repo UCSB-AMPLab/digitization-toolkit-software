@@ -90,7 +90,18 @@ echo "systemctl $*" >> "$CASE_DIR/log"
 S="$CASE_DIR/sys"
 case "$1" in
     is-active) [ -f "$S/active" ] ;;
+    show)
+        case "$*" in
+            *ActiveState*) if [ -f "$S/active" ]; then echo active; else echo inactive; fi ;;
+            *MainPID*) if [ -f "$S/active" ]; then echo 4242; else echo 0; fi ;;
+        esac
+        exit 0 ;;
     stop)
+        if [ -f "$S/active" ] && [ "$(tail -n 1 "$S/started")" = B ] && [ -n "${FAKE_WRITE_DURING_STOP:-}" ]; then
+            # A request that commits during the graceful shutdown.
+            echo 'INFO:     172.30.0.4:5000 - "POST /captures/ HTTP/1.1" 201 Created' >> "$CASE_DIR/journal"
+        fi
+        [ -f "$S/active" ] && echo "Stopped dtk.service - Digitization Toolkit." >> "$CASE_DIR/journal"
         # The old version serves until here: a write it accepted after the
         # trial dump must survive a restore.
         if [ -f "$S/active" ] && [ -n "${FAKE_WRITE_BEFORE_STOP:-}" ] && [ ! -f "$S/wrote" ]; then
@@ -99,6 +110,7 @@ case "$1" in
         fi
         rm -f "$S/active"; exit 0 ;;
     start)
+        printf 'Starting dtk.service - Digitization Toolkit...\nStarted dtk.service - Digitization Toolkit.\n' >> "$CASE_DIR/journal"
         cat "$PROJECT_ROOT/VERSION" >> "$S/started"
         touch "$S/active" "$CASE_DIR/docker/db_running"
         cp "$CASE_DIR/docker/tag_dtk-frontend_latest" "$CASE_DIR/docker/frontend_container"
@@ -220,8 +232,19 @@ EOF
 cat > "$FAKEBIN/journalctl" <<'EOF2'
 #!/bin/sh
 echo "journalctl $*" >> "$CASE_DIR/log"
+case "$*" in *--sync*) exit 0 ;; esac
+[ -z "${FAKE_JOURNAL_FAIL:-}" ] || { echo "Failed to open journal" >&2; exit 1; }
+case "$*" in
+    *"-t systemd-journald"*) [ -n "${FAKE_JOURNALD:-}" ] && printf '%s\n' "$FAKE_JOURNALD"; exit 0 ;;
+esac
+cat "$CASE_DIR/journal" 2>/dev/null
 [ -n "${FAKE_JOURNAL:-}" ] && printf '%s\n' "$FAKE_JOURNAL"
 exit 0
+EOF2
+cat > "$FAKEBIN/pgrep" <<'EOF2'
+#!/bin/sh
+[ -n "${FAKE_PGREP_STUCK:-}" ] && { echo 4243; exit 0; }
+exit 1
 EOF2
 chmod +x "$FAKEBIN"/*
 export FAKEBIN OLD_IMG NEW_IMG
@@ -470,6 +493,42 @@ head_is "$SHA_B" "B (left running)"
 db_is migrated
 unlogged "DROP DATABASE"
 has "after the new version had started serving"
+
+FAKE_HEALTHY_VERSIONS="A" FAKE_WRITE_DURING_STOP=1 run_case "write committed during the stop" --yes
+eq "$RC" 1 "exit status"
+db_is migrated
+unlogged "DROP DATABASE"
+inactive
+has "after the new version had started serving"
+has "--yes $(dump_name)"
+has "DISCARDS everything saved since"
+has "left STOPPED"
+hasnt "back online"
+if grep -n "journalctl -u dtk" "$CASE_DIR/log" | head -n 1 | cut -d: -f1 > "$CASE_DIR/j" \
+   && [ "$(cat "$CASE_DIR/j")" -gt "$(grep -n "systemctl stop dtk" "$CASE_DIR/log" | tail -n 1 | cut -d: -f1)" ]; then
+    ok "the journal is read only after the last stop"
+else
+    fail "the journal is read before the stop"
+fi
+
+FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL_FAIL=1 run_case "journal unreadable" --yes
+eq "$RC" 1 "exit status"
+db_is migrated
+unlogged "DROP DATABASE"
+has "whether the new version took writes is not known"
+has "--yes $(dump_name)"
+hasnt "back online"
+
+FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNALD="Suppressed 4127 messages from dtk.service" run_case "journal lines suppressed" --yes
+db_is migrated
+unlogged "DROP DATABASE"
+has "whether the new version took writes is not known"
+
+FAKE_HEALTHY_VERSIONS="A" FAKE_PGREP_STUCK=1 run_case "backend does not stop" --yes
+db_is migrated
+unlogged "DROP DATABASE"
+has "did not stop within 60s"
+hasnt "back online"
 
 FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL='INFO:     172.30.0.4:5000 - "GET /projects/ HTTP/1.1" 200 OK' \
     run_case "only reads in the log" --yes
