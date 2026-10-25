@@ -173,6 +173,20 @@ Configuration: [backend/pixi.toml](backend/pixi.toml)
 
 Legacy venv still works but pixi preferred for new development.
 
+## Code comments
+
+Comments are in English in every repository; the interface's Spanish and English live in the catalogue under `frontend/src/lib/i18n/`. A comment explains why, not what: a decision a later reader might undo by mistake, an edge case or hardware quirk, a contract another module relies on, a value or ordering that matters and is not obvious.
+
+- State the constraint, not the history; "previously…" belongs in the commit message.
+- Delete commented-out code.
+- No mention of AI tools or assistants.
+- No internal review or planning codes; Linear keys (NEH-…) and public issue and PR numbers are fine.
+- Update or delete a comment in the same commit that changes its code.
+
+## Complexity
+
+Cyclomatic 10, cognitive 15 and 1,000 lines per file are reporting floors, measured at 0.1.0. No measured number may get worse without a logged decision, and code that moves or checks archival files gets characterization tests before it is refactored.
+
 ## Testing Strategy
 
 ```bash
