@@ -203,7 +203,7 @@ sudo grep -E '^DTK_OFFSITE_(REMOTE|TENANT)=' /var/lib/dtk/offsite.env
 In the interface, open the project, edit each volume (**Edit Volume**) and fill in **FILE NAME STEM**. The rules:
 
 - Lowercase letters and digits joined by single hyphens, at most 27 characters.
-- The stem equals the volume's reference code in Fisqua. A stem that differs from the volume's recorded reference code is refused. In **Edit Volume** the message is `The stem has to be the volume's Fisqua reference code, "<code>"; "<stem>" is different. Use "<code>" as the stem.` A `PATCH` to the volume, or an import, gets `409` with `The reference code '<code>' is not the file name stem '<stem>'; a volume's reference code is its file name stem.`
+- The stem equals the volume's reference code in Fisqua. A stem that differs from the volume's recorded reference code is refused. In **Edit Volume** the message is `The stem has to be the volume's Fisqua reference code, "<code>"; "<stem>" is different. Use "<code>" as the stem.` A `PATCH` to the volume gets `409` with `The reference code '<code>' is not the file name stem '<stem>'; a volume's reference code is its file name stem.` An import rejects the item with `filename_stem_differs_from_reference_code` ("The filenameStem is not the same as the referenceCode.") and goes on with the rest.
 - Unique on the unit, and not the directory name of a project.
 - Refused while `<projects root>/<stem>/` already holds files that are not this volume's.
 - A volume with no stem can be given one at any time, including after it has captured. Once a volume has a stem and has captured, the stem cannot be changed or cleared.
@@ -398,7 +398,7 @@ Set it in `/home/pi/dtk/.env`; `provision-rclone.sh` does not write it:
 DTK_OFFSITE_BWLIMIT=1.5M
 ```
 
-The backend reads it at start, so restart dtk for a new value to take effect: `sudo systemctl restart dtk`.
+The backend reads it at start. During an update, set it before step 6, and the restart in 6.1 applies it. Outside an update, restart dtk: `sudo systemctl restart dtk`.
 
 ---
 
@@ -773,11 +773,16 @@ sudo DTK_OFFSITE_KEY_FILE=/root/dtk-offsite-key \
 - Under `--advisory`, as `update.sh` runs it, the script does not take the token.
 - The script makes no call to Fisqua. The backend learns of a wrong token at its first call: Fisqua answers `401`, and the backend stops sending and polling (9.4). The backend makes its first call to Fisqua only when the first handed-over volume is fully verified offsite, so a wrong token can go unnoticed for hours or days after provisioning.
 
-The backend reads `offsite.env` at start, so restart dtk after the run, then remove the key file:
+The backend reads `offsite.env` at start. During an update, run the script before step 6, and the restart in 6.1 applies it. Outside an update, restart dtk. Remove the key file once the script has run:
+
+```bash
+sudo rm /root/dtk-offsite-key
+```
+
+Outside an update, restart dtk as well:
 
 ```bash
 sudo systemctl restart dtk
-sudo rm /root/dtk-offsite-key
 ```
 
 ### 9.3 What a handover does
@@ -786,7 +791,7 @@ When an operator sends a volume for review, the backend queues a capture manifes
 
 1. The backend holds a queued manifest until the volume is received: every object of the volume verified in the bucket.
 2. The backend then builds the manifest, under a fixed manifest id, and sends it in the same pass.
-3. From Fisqua's answer, the backend marks the manifest delivered or refused. After a transient failure the manifest becomes due again after `DTK_FISQUA_RETRY_BASE` seconds (300), twice as long after each further failure, at most `DTK_FISQUA_RETRY_MAX` (6 hours), and never before the time Fisqua's `Retry-After` gives. The backend sends it at the first send pass after that. The backend runs a send pass after each image upload run, and runs those every `DTK_OFFSITE_BACKUP_INTERVAL` (30 minutes by default), or at once when a handover wakes the schedule. Retries do not stop.
+3. From Fisqua's answer, the backend marks the manifest delivered or refused. After a transient failure the manifest becomes due again after `DTK_FISQUA_RETRY_BASE` seconds (300), twice as long after each further failure, at most `DTK_FISQUA_RETRY_MAX` (6 hours), and never before the time Fisqua's `Retry-After` gives. The backend sends it at the first send pass after that. The backend runs a send pass after each image upload run, and runs those every `DTK_OFFSITE_BACKUP_INTERVAL` (30 minutes by default), or at once when a handover wakes the schedule. The backend does not stop retrying.
 
 A volume whose recorded reference code is not its stem is refused at once, not sent, with the problem `reference_code_differs`. A volume the manifest builder refuses is refused with the builder's problems. Taking a volume back from review withdraws its unsent manifests; nothing is sent to Fisqua. A new handover replaces the volume's unsent manifests. While the hold exists (4.0), no manifest is built or sent.
 
@@ -810,7 +815,7 @@ In the volume view's top bar, under the offsite copy line, a line shows the deli
 
 The panel's `Earlier sends (<n>)` list shows the volume's other manifests with the same texts. Two texts appear only there: `Not sent: a later send for review replaced it` for a superseded manifest and `Not sent: the volume was withdrawn from review` for a withdrawn one.
 
-Once Fisqua answers, the line shows its status, from `Fisqua received the volume` to `Published in Fisqua`, or `Fisqua does not know this volume yet` (usually the manifest did not arrive; the backend keeps asking). The panel lists the problems and notes from Fisqua, with Fisqua's text prefixed `From Fisqua: `. Captua words four rules itself: `unlisted-object` and `missing-object` (when Fisqua names the object), `bad-request` and `payload-too-large`. `Fisqua could not find some files in the offsite copy that Captua had already verified there.` is an incident: check the bucket for the keys listed.
+Once Fisqua answers, the line shows its status, from `Fisqua received the volume` to `Published in Fisqua`, or `Fisqua does not know this volume yet` (usually the manifest did not arrive; the backend keeps asking). The panel lists the problems and notes from Fisqua, with Fisqua's text prefixed `From Fisqua: `. Captua words four rules itself: `unlisted-object` and `missing-object` (when Fisqua names the object), `bad-request` and `payload-too-large`. `Fisqua could not find some files in the offsite copy that Captua had already verified there. This needs investigating: ask whoever manages the scanner to check the offsite copy. The missing files are listed below.` is an incident: check the bucket for the keys listed.
 
 **Configuration stops.** The backend stops sending and polling for the whole unit when Fisqua answers `401` or `403` (reason `token`), `404` (`not_found`) or any redirect (`redirect`). A `404` with rule `no-decisions` on a decisions read is not a stop (9.5). The backend also stops on a `400` whose problems say Fisqua cannot read the manifests this software writes (rules `version`, `envelope` or `shape`, reason `version`); that manifest is refused for good. The journal has:
 
@@ -824,20 +829,20 @@ For reason `version` the backend writes this line instead; `<seconds>` is `DTK_F
 ERROR app.core.fisqua_outbox: Fisqua answered HTTP 400 (version) for this unit's manifests (fingerprint <8 hex>); sending and polling stop until the software is updated, or until a retest every <seconds> s finds that Fisqua reads its manifests
 ```
 
-The volume page and the Configuration page say why, for instance `Fisqua does not accept the token configured on this scanner, so Captua has stopped sending volumes to Fisqua and checking their status.`
+The volume page and the Configuration page say why. For a token stop they read `Fisqua does not accept the token configured on this scanner, so Captua has stopped sending volumes to Fisqua and checking their status. Ask whoever manages the scanner to correct DTK_FISQUA_TOKEN and restart Captua.` For reason `version` they read `Fisqua does not read the capture manifests this version of Captua writes, so Captua has stopped sending volumes to Fisqua and checking their status. Ask whoever manages the scanner to update Captua or Fisqua.`
 
-The stop is kept in `/var/lib/dtk/fisqua-config-error.json` and survives restarts. The backend clears the stop when the environment, the tenant (through the base URL built from it), `DTK_FISQUA_BASE_URL`, the token or the installed code changes; the journal then has `INFO app.core.fisqua_outbox: The Fisqua configuration was changed since Fisqua refused it; sending resumes`. The backend reads `offsite.env` at start, so a change to it takes effect only after `sudo systemctl restart dtk`. An update that changes the backend commit or the release also clears a token stop; if the token is still wrong, the backend's next call stops the unit again. The backend also removes a version stop after a retest that Fisqua reads (below).
+The stop is kept in `/var/lib/dtk/fisqua-config-error.json` and survives restarts. The backend clears the stop when the environment, the tenant (through the base URL built from it, unless `DTK_FISQUA_BASE_URL` is set), `DTK_FISQUA_BASE_URL`, the token or the installed code changes; the journal then has `INFO app.core.fisqua_outbox: The Fisqua configuration was changed since Fisqua refused it; sending resumes`. The backend reads `offsite.env` at start, so a change to it takes effect only after `sudo systemctl restart dtk`. An update that changes the backend commit or the release also clears a token stop; if the token is still wrong, the backend's next call stops the unit again. The backend also removes a version stop after a retest that Fisqua reads (below).
 
 **The version stop.** While it holds, the backend builds no manifest except the one a retest sends (below). Manifests already built but never sent when the refusal came are put back to be built again under new ids, so their line reads `Waiting for the complete offsite copy before sending to Fisqua`. The installed code, for this stop, is the backend commit and the release in `VERSION`: an update that changes either clears it, and an update that changes neither does not. When it cannot read its commit, the backend removes the stop at every restart. A change of environment, tenant, base URL or token clears it too, and so does a retest that Fisqua reads (below). Once the stop is removed, the backend hands each volume whose newest manifest was refused for version over again under a new manifest id, as long as none of its records is captured, and logs `INFO app.core.fisqua_outbox: Volume <id> handed to Fisqua again under a new manifest id after a version refusal`.
 
-**The retest.** While a version stop holds, the backend sends one manifest every `DTK_FISQUA_RETRY_MAX` seconds (21600, six hours), counted from the time it recorded the stop or from the last retest, whichever is later. The first retest therefore comes six hours after the stop. The backend sends the retest at the first send pass after that time, and runs a send pass after each image upload run (9.3). A retest needs a volume handed over and received offsite: the backend takes, oldest first, a manifest waiting to be built or built and never sent, or a volume whose newest manifest was refused for version and none of whose records is captured, which it hands over again under a new manifest id. With no such volume, or no call left in the per-minute budget, the backend sends nothing and tries again at the next send pass. Its answer decides what follows:
+**The retest.** While a version stop holds, the backend sends one manifest every `DTK_FISQUA_RETRY_MAX` seconds (21600, six hours), counted from the time it recorded the stop or from the last retest, whichever is later. The backend sends the first retest six hours after it records the stop. The backend sends the retest at the first send pass after that time, and runs a send pass after each image upload run (9.3). A retest needs a volume handed over and received offsite: the backend takes, oldest first, a manifest waiting to be built or built and never sent, or a volume whose newest manifest was refused for version and none of whose records is captured, which it hands over again under a new manifest id. With no such volume, or no call left in the per-minute budget, the backend sends nothing and tries again at the next send pass. What the backend does next depends on Fisqua's answer:
 
 - Fisqua accepts the manifest, or refuses it for its content rather than its version: the backend removes the stop. In the same pass it hands over again each volume whose newest manifest was refused for version, then builds and sends what is due, within the per-pass limit.
 - Fisqua refuses it again for version: the backend records the stop again with the time of this refusal, so the next retest is one interval later.
 - The send fails transiently: the stop holds. The backend sends the same manifest, under the same id, at the next retest, and never before the time Fisqua's `Retry-After` gives.
-- Fisqua answers with a configuration error (`token`, `not_found` or `redirect`): that stop replaces the version stop. The backend does not retest it; it holds until the configuration changes.
+- Fisqua answers with a configuration error (`token`, `not_found` or `redirect`): that stop replaces the version stop. The backend does not retest it; it holds until the configuration or the installed code changes (above).
 
-When Fisqua is changed to read the manifests this software writes, the backend resumes sending within six hours plus the time to the next send pass, with nothing done on the unit. Removing `/var/lib/dtk/fisqua-config-error.json` by hand is not needed. When an update or a configuration change removes the stop instead, the backend builds again, under the new code and new manifest ids, the manifests the retests built and never sent, and the last retest's manifest when its answer was lost or its send failed.
+When Fisqua is changed to read the manifests this software writes, the backend resumes sending within six hours plus the time to the next send pass, with nothing done on the unit, provided some volume is handed over and received offsite and none of its records is captured. Otherwise the stop holds until such a volume exists, or until an update or a configuration change removes it. The backend retests nothing while the offsite upload hold (4.0) exists. Removing `/var/lib/dtk/fisqua-config-error.json` by hand is not needed. When an update or a configuration change removes the stop instead, the backend builds again, under the new code and new manifest ids, the manifests the retests built and never sent, and the last retest's manifest when its answer was lost or its send failed.
 
 The Configuration page's **Offsite copy** card has a **Fisqua** section with the environment, the last send and the last status check. `GET /system/catalogue-backup` returns the same under `fisqua`: `configured`, `token_invalid`, `environment`, `config_error`, `held`, `last_send` and `last_poll`.
 
@@ -864,7 +869,7 @@ INFO app.core.fisqua_decisions: Fisqua decisions <id> applied to volume <id>: ap
 INFO app.core.fisqua_outbox: Fisqua has no decisions to give for volume <id> yet; read again at the next poll
 ```
 
-During a version stop (9.4), each retest writes a line when it sends, and one for its outcome; `<seconds>` is `DTK_FISQUA_RETRY_MAX`:
+During a version stop (9.4), the backend writes a line when it sends each retest, and one for its outcome; `<seconds>` is `DTK_FISQUA_RETRY_MAX`:
 
 ```text
 INFO app.core.fisqua_outbox: Fisqua version stop retest: sending manifest <manifest id> of volume <id>
@@ -883,17 +888,17 @@ The accepted line ends `no state given` when Fisqua's answer names no state.
 The word after `run`, `pass` or `poll` is how the run ended. The levels:
 
 - An image upload run is written at `WARNING` when it refused an object or ended `aborted` or `failed`; `done`, `stopped` and `held` stay at `INFO`.
-- A send pass is written at `WARNING` when it refused or failed a manifest, or ended `error` or `config_error`; `done`, `stopped` and `rate_limited` stay at `INFO`. A pass that finds a stop already recorded writes no summary line, unless a retest leads the backend to remove a version stop in that pass; the retest writes its own lines.
+- A send pass is written at `WARNING` when it refused or failed a manifest, or ended `error` or `config_error`; `done`, `stopped` and `rate_limited` stay at `INFO`. A pass that finds a stop already recorded writes no summary line, unless a retest leads the backend to remove a version stop in that pass; the backend writes the retest's own lines.
 - A status poll is written at `WARNING` when it ended `error`, or `cooling_down` after a `Retry-After` on a decisions read; `done` and `rate_limited` stay at `INFO`. A poll that meets a configuration error, or a `Retry-After` on the status read, writes no summary line.
 
 Failures have their own lines: `Sending manifest <id> of volume <id> to Fisqua failed (attempt <n>): <error>`, `Fisqua refused manifest <id> of volume <id>`, `Fisqua manifest <id> for volume <id> is not exportable: <rules>`, `Asking Fisqua for the status of <n> volume(s) failed: <error>`, `Reading Fisqua's decisions for volume <id> failed: <error>`.
 
 ### 9.7 When nothing arrives in Fisqua
 
-1. `GET /system/catalogue-backup` (6.3): `fisqua.configured` must be `true`. If `token_invalid` is `true`, the token is not 64 lowercase hexadecimal characters. If `configured` is `false` and the token is valid, check `DTK_FISQUA_ENV` and `DTK_OFFSITE_TENANT` in `offsite.env` with the command in 4.3, and restart dtk after any change. If `config_error` is set, see the configuration stops in 9.4. For reason `version`, the backend retests every six hours with nothing done on the unit: `config_error.at` is the time the backend last recorded the stop, which a retest refused for version renews, `config_error.retest_at` is the time of the last retest whose send failed (`null` otherwise), and the next retest is due six hours after the later of the two. If `held` is `true` and step 5 is complete, remove the hold (6.2); during an update, leave it.
-2. The volume's line in 9.4. `Waiting for the complete offsite copy` means the upload has not verified every object: read the volume's offsite line and the `Image upload run` lines.
+1. `GET /system/catalogue-backup` (6.3): `fisqua.configured` must be `true`. If `token_invalid` is `true`, the token is not 64 lowercase hexadecimal characters. If `configured` is `false` and `token_invalid` is `false`, check that `DTK_FISQUA_TOKEN` is present (the command in 4.3 shows it as `(not shown)`), and check `DTK_FISQUA_ENV` and `DTK_OFFSITE_TENANT`. During an update, set any change before step 6, and the restart in 6.1 applies it; outside an update, restart dtk with `sudo systemctl restart dtk`. If `config_error` is set, see the configuration stops in 9.4. For reason `version`, the backend retests every six hours with nothing done on the unit, provided some volume is handed over and received offsite and none of its records is captured; otherwise the stop holds until such a volume exists, or until an update or a configuration change removes it, and the backend retests nothing while the hold exists. `config_error.at` is the time the backend last recorded the stop, which a retest refused for version renews, and `config_error.retest_at` is the time of the last retest whose send failed (`null` otherwise). Both are UTC, written without an offset. The next retest is due six hours after the later of the two. If `held` is `true` and step 5 is complete, remove the hold (6.2); during an update, leave it.
+2. The volume's line in 9.4. `Waiting for the complete offsite copy…` (the start of the text) means the upload has not verified every object: read the volume's offsite line and the `Image upload run` lines.
 3. The journal: `journalctl -u dtk --since "1 hour ago" | grep -E "Fisqua|Image upload run"`.
-4. The backend asks again every ten minutes about a delivered volume that Fisqua reports as `Fisqua does not know this volume yet`, and resends nothing on its own. To send it again, take the volume back from review and send it for review again: the backend queues a new manifest under a new id and sends it once the volume is received. This works only while some of the volume's records are in review, since a take-back returns only those records to captured, and a handover with no captured record queues nothing.
+4. The backend asks again every ten minutes about a delivered volume that Fisqua reports as `Fisqua does not know this volume yet`, and resends nothing on its own. To send it again, take the volume back from review and send it for review again: the backend queues a new manifest under a new id and sends it once the volume is received. The backend queues a new manifest only while some of the volume's records are in review; taking the volume back returns only those records to captured, and the backend queues nothing for a handover with no captured record.
 
 ## 10. Checks after an update
 
@@ -918,7 +923,7 @@ journalctl -u dtk --since "15 min ago" | grep -E "Volume layout:|Cannot start|Tr
 - `check-stack-health.sh` reports the database healthy and port 5432 listening on the host, on any address, the frontend running and nginx running.
 - The journal has no `Cannot start` and no `Traceback`; any `Volume layout:` lines are read as in 3.4. `offsite uploads are on hold` appears at each run while the hold exists.
 - `GET /system/catalogue-backup` (6.3) reports `held` as expected for the point of the procedure, and, on a unit with the link, `fisqua.configured` `true` with no `config_error`.
-- The journal, on a unit with the link, has no `Fisqua answered HTTP` line since the restart. The `Fisqua outbox pass` and `Fisqua accepted manifest` lines (9.6) appear only after a handed-over volume is received offsite, and never while the hold exists.
+- The journal, on a unit with the link, has no `Fisqua answered HTTP` line since the restart. The `Fisqua accepted manifest` line (9.6) appears only after a handed-over volume is received offsite; a `Fisqua outbox pass` line can also report a volume refused as not exportable. Neither appears while the hold exists.
 - On a volume handed over since the update, the Fisqua line under the offsite copy line reads `Sent to Fisqua; waiting for its status` or a status from Fisqua (9.4).
 
 ---
