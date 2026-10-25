@@ -14,7 +14,6 @@ echo "Stopping Digitization Toolkit"
 echo "=========================================="
 echo ""
 
-# Stop native backend if running
 echo "→ Checking for native backend process..."
 BACKEND_PID=$(ps aux | grep "[u]vicorn app.main:app" | awk '{print $2}')
 
@@ -22,8 +21,7 @@ if [ -n "$BACKEND_PID" ]; then
     echo "  Found backend process (PID: $BACKEND_PID)"
     kill -SIGTERM $BACKEND_PID 2>/dev/null || true
     sleep 2
-    
-    # Force kill if still running
+
     if ps -p $BACKEND_PID > /dev/null 2>&1; then
         echo "  Backend didn't stop gracefully, forcing..."
         kill -9 $BACKEND_PID 2>/dev/null || true

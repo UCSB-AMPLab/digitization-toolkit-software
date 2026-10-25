@@ -183,8 +183,7 @@ DATABASE_NAME="${DATABASE_NAME:-digitization_toolkit}"
 # checkout fails dubious-ownership. Every git call in this script runs as this
 # user, so getting it wrong fails all of them: the preflight in 1b then refuses
 # a rollback the unit was able to perform, which is at least a refusal rather
-# than a half-done rollback. update.sh already asks the filesystem who owns the
-# checkout; this script was never given the same treatment.
+# than a half-done rollback. update.sh asks the filesystem the same way.
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
@@ -200,8 +199,7 @@ COMPOSE="docker compose -f $PROJECT_ROOT/docker-compose.yml -f $PROJECT_ROOT/doc
 # anything else when a read failed, which every caller treats as "not clean"
 # rather than as clean. Two diffs, not one: `git diff HEAD` reads the working
 # tree against HEAD and never consults the index, so a gitlink staged with
-# nothing checked out behind it -- the input that defeated an earlier version
-# of this script -- is invisible to it and visible to `--cached`.
+# nothing checked out behind it is invisible to it and visible to `--cached`.
 # --ignore-submodules=untracked leaves an untracked file inside a submodule
 # alone, as update.sh does, and still reports a modified tracked one.
 tree_clean() {
@@ -302,7 +300,7 @@ RESUME_CMD="$RESUME_CMD $(printf '%q' "$DUMP_FILE")"
 # The recorded commit has four states, not two. An absent record is a
 # legitimate older backup: the code rollback is skipped and the operator is told
 # so before she confirms. A record that is present but unreadable, or present
-# and empty, is a BROKEN record, and reading it as absent is what let the
+# and empty, is a BROKEN record, and reading it as absent would let the
 # database be replaced with no code rollback attempted at all -- the old
 # database under newer code that this script exists to undo. update.sh
 # classifies its own records the same four ways (NEH-218).
@@ -339,14 +337,12 @@ fi
 #     a state the move can start from, and what the target's own update.sh
 #     does.
 #
-#     None of these predicts whether the checkout will succeed. An earlier
-#     version tried -- a read-tree dry run, an enumeration of the target's
-#     pins, a ref pinning the target -- and two adversarial rounds kept finding
-#     inputs where the prediction and the act diverged. The version after that
-#     moved the code first and undid the move on failure, and a third round
-#     found the undo restoring less than the snapshot it worked from: no index,
-#     no working files, no off-pin submodule heads, no guarantee the objects
-#     it needed were still reachable offline.
+#     None of these predicts whether the checkout will succeed. A prediction
+#     (a read-tree dry run, an enumeration of the target's pins, a ref
+#     pinning the target) can diverge from the act. Moving the code first and
+#     undoing the move on failure restores less than the snapshot it works
+#     from: no index, no working files, no off-pin submodule heads, no
+#     guarantee the objects it needs are still reachable offline.
 #
 #     What is asked instead is the one thing the repository can answer now and
 #     that makes both problems go away: is the tree clean and on its pins? From
@@ -643,7 +639,7 @@ if [ -n "$TARGET_SHA" ]; then
     #
     # The markers allow for `export DO_PULL=1` and for a case arm with
     # alternatives (`--offline|--no-pull)`), both of which a line-anchored
-    # pattern missed. They are still spelling rather than structure: a
+    # pattern would miss. They are still spelling rather than structure: a
     # `DO_PULL=1` inside a heredoc comment would read as pulling. That is
     # the direction to be wrong in, so the `yes` branch in step 3 carries
     # the recovery too.
@@ -1109,14 +1105,14 @@ echo ""
 #
 #    Before the database, so a failure here leaves the database as it was and
 #    the backup unopened. What this step does NOT do is put the code back
-#    where it was. Two designs that did -- one predicting the move, one undoing
-#    it -- each failed review on inputs where git's idea of "back" and the
-#    script's disagreed: a staged gitlink, an off-pin submodule, a lock taken
-#    after the files had moved, a commit that was local but no longer
-#    ref-reachable. 1b accepts only a clean tree on its pins, and from there
-#    the move either completes or stops with the target still local, the dump
-#    still on disk, a marker saying which move was interrupted and a copy of
-#    this script outside the tree to finish it with.
+#    where it was. Predicting the move and undoing it both fail on inputs
+#    where git's idea of "back" and the script's disagree: a staged gitlink,
+#    an off-pin submodule, a lock taken after the files have moved, a commit
+#    that is local but no longer ref-reachable. 1b accepts only a clean tree
+#    on its pins, and from there the move either completes or stops with the
+#    target still local, the dump still on disk, a marker saying which move
+#    was interrupted and a copy of this script outside the tree to finish it
+#    with.
 # ---------------------------------------------------------------------------
 CODE_ROLLED_BACK=0
 ROLLBACK_BACKUP_CREATED=""
@@ -1197,11 +1193,10 @@ if [ -n "$TARGET_SHA" ]; then
     echo "→ Returning code to commit $TARGET_SHA ..."
     # Which branch the unit is on, and the commit it is at, were read above,
     # before anything changed. A plain
-    # `git checkout <sha>` detaches HEAD, and the documented update then
-    # refuses to run at all ("You are not currently on a branch") — so taking
-    # the recovery path blocked the upgrade path until someone knew to check
-    # out dev by hand (NEH-273). `checkout -B` moves the branch to the target
-    # and stays on it, which keeps the next `git pull --ff-only` working: the
+    # `git checkout <sha>` detaches HEAD, and update.sh then has no branch to
+    # pull into and refuses to run, which blocks the upgrade path until
+    # someone checks out dev by hand (NEH-273). `checkout -B` moves the
+    # branch to the target and stays on it, which keeps the next `git pull --ff-only` working: the
     # target is an ancestor of the remote tip in the case that matters, a
     # rollback to the previously deployed commit.
     #
@@ -1265,9 +1260,8 @@ if [ -n "$TARGET_SHA" ]; then
 
     # Verified, not inferred from the exit statuses above. Three reads, each
     # with one side already known, so a read that fails fails the check rather
-    # than producing an empty string that equals another empty string -- which
-    # is what the previous comparison did when both of its pipelines reported
-    # `sort`'s exit status instead of git's. HEAD at the target; index
+    # than producing an empty string that equals another empty string. HEAD
+    # at the target; index
     # matching HEAD and working tree matching index, which with HEAD at the
     # target means the index's gitlinks are the target's; and every submodule
     # checked out at its index pin, which `submodule status` marks with a
@@ -1326,8 +1320,8 @@ if [ -n "$TARGET_SHA" ]; then
         echo "    and then deploy with scripts/update.sh."
     fi
     # The code is now the rolled-back version, so the deploy record has
-    # to say so. Leaving it naming the commit we rolled AWAY from made
-    # the next update log a false "previously-deployed" and made its
+    # to say so. Left naming the commit we rolled AWAY from, it would make
+    # the next update log a false "previously-deployed" and make its
     # offline-safety check compare a commit against itself (NEH-272).
     # Only inside this branch: with no commit recorded the code is not
     # rolled back at all, the new code is still deployed, and the existing
@@ -1490,8 +1484,7 @@ file_digest() {
         shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
     fi
 }
-# Image the compose tag points at NOW, which is what the stack starts from.
-# Read the RUNNING container's image, exactly as update.sh records it. The
+# Image of the RUNNING frontend container, exactly as update.sh records it. The
 # tag is not the same question: update.sh rebuilds the tag before it stops
 # anything, so a tag can point at an image no container is serving. With no
 # container running - the service did not come back up - this returns empty

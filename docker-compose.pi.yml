@@ -13,7 +13,7 @@ services:
   frontend:
     environment:
       # Route browser-side API calls through Nginx (same-origin, fixes Chrome PNA policy)
-      # http://digitool.local/api/* → Nginx strips /api → backend:8000/*
+      # http://digitool.local/api/* → Nginx strips /api → host.docker.internal:8000/*
       - PUBLIC_API_BASE=http://${HOST_IP:-localhost}/api
       # ORIGIN must match the URL users open (port 80 via Nginx, no explicit port)
       - ORIGIN=http://${HOST_IP:-localhost}

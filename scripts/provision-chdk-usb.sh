@@ -4,8 +4,8 @@
 #
 # Shared, not copied, between scripts/setup.sh (first-time provisioning) and
 # scripts/update.sh (every later update), because update.sh is the supported
-# way an appliance already in the field moves forward, and it never ran
-# setup.sh's provisioning again. Without this also running on update, an
+# way an appliance already in the field moves forward, and it does not rerun
+# setup.sh's provisioning. Without this also running on update, an
 # appliance upgraded to a release with the CHDK backend would still have no
 # udev rule and no group membership, and a camera that cannot be opened
 # looks exactly like a broken backend — on the machine furthest away and
@@ -103,7 +103,7 @@ echo "→ Adding $DTK_USER to plugdev group..."
 # fails, the same reasoning as libusb and the directory above. A silent
 # `if usermod ...; then ... else warn; fi` here would let provisioning
 # report success while the udev rule's GROUP="plugdev" grant — and
-# scripts/dtk.service's own SupplementaryGroups= belt-and-suspenders entry —
+# scripts/dtk.service's deliberately duplicate `SupplementaryGroups=` entry —
 # both resolve to a group the appliance user was never actually added to.
 # usermod -aG is itself idempotent — adding a user to a group they already
 # belong to is a silent no-op — so this is exactly as safe to re-run as

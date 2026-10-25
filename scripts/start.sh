@@ -14,7 +14,6 @@ echo "Starting Digitization Toolkit (Production)"
 echo "=========================================="
 echo ""
 
-# Start Docker services (DB + Frontend)
 # Uses docker-compose.pi.yml overlay for proper appliance volume paths (/var/lib/dtk, /var/log/dtk)
 echo "→ Starting database and frontend containers..."
 # --pull never: skip registry checks (device is offline after initial build)

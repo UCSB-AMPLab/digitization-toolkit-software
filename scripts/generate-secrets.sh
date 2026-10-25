@@ -60,12 +60,11 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 
 # Assert the mode on every boot (NEH-269). setup.sh creates .env with
-# `install -m 600 -o $DTK_USER`, but nothing afterwards re-checked it, so a
-# mode loosened once stayed loosened — a hand-edit with a tool that recreates
-# the file under the default umask is the likely cause — and every secret
-# written below inherited it. Asserting it here also covers the run that
-# decides it has nothing to do: a unit whose secrets are already its own was
-# previously left world-readable for good.
+# `install -m 600 -o $DTK_USER`, but a hand-edit with a tool that recreates
+# the file under the default umask loosens the mode, and every secret written
+# below would inherit it. Asserting it here also covers the run that decides
+# it has nothing to do, so a unit whose secrets are already its own does not
+# stay world-readable.
 #
 # Ownership comes FIRST, and the mode is only tightened when it is safe to.
 # Tightening alone is not: a `.env` that is root-owned and 644 — which a hand
@@ -110,11 +109,11 @@ set_env_atomic() {
         echo "$var=$val" >> "$tmp"
     fi
     chown --reference="$ENV_FILE" "$tmp"
-    # Mode asserted rather than copied: --reference propagated a loose mode
-    # onto a file it had just written a fresh secret into (NEH-269). Ownership
-    # still follows the real file, which the block above has already corrected
-    # where it could. When it could not, the old copying behaviour is kept so
-    # the unit stays able to read its own configuration.
+    # Mode asserted rather than copied: `--reference` would propagate a loose
+    # mode onto a file that holds a fresh secret (NEH-269). Ownership still
+    # follows the real file, which the block above has already corrected where
+    # it could. When it could not, the mode is copied from the real file so the
+    # unit stays able to read its own configuration.
     if [ "$ENV_FORCE_600" -eq 1 ]; then
         chmod 600 "$tmp"
     else
