@@ -307,7 +307,7 @@ READ_APP_KEY=...
 | `BUCKET` | The unit's bucket, one per institution. |
 | `READ_KEY_ID`, `READ_APP_KEY` | Optional. A second key with the same scope, with `listFiles` and `readFiles`. It must differ from the upload key. Without it, restoring a freed volume is unavailable. |
 
-The keys issued for 0.1.0 also carry `listBuckets`, as the interim Rionegro key did. `provision-rclone.sh` asks only for `writeFiles` and `listFiles` on the upload key and `listFiles` and `readFiles` on the read key (verify on the bench whether rclone needs `listBuckets`). The file's mode is 0600 and its owner root.
+The keys issued for 0.1.0 also carry `listBuckets`, each scoped to its unit's bucket and tenant prefix. The interim Rionegro key carries `listBuckets`, `listFiles` and `writeFiles`, scoped to its bucket with no prefix. `provision-rclone.sh` asks only for `writeFiles` and `listFiles` on the upload key and `listFiles` and `readFiles` on the read key. Whether rclone needs `listBuckets` (verify on the bench). The file's mode is 0600 and its owner root.
 
 Never pass a key as an assignment in front of `sudo`: it becomes part of sudo's command line, which any local user can read from `/proc/<pid>/cmdline`.
 
