@@ -242,7 +242,7 @@ if [ "$1" = compose ]; then
             [ "$1" = "-T" ] && shift
             shift   # service
             case "$1" in
-                pg_isready) exit 0 ;;
+                pg_isready) [ -z "${FAKE_DB_UNREACHABLE:-}" ] || exit 2; exit 0 ;;
                 pg_dump)
                     n=$(( $(cat "$CASE_DIR/dumps" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CASE_DIR/dumps"
                     if [ -n "${FAKE_DUMP_FAIL_AT:-}" ] && [ "$n" = "$FAKE_DUMP_FAIL_AT" ]; then
@@ -250,9 +250,24 @@ if [ "$1" = compose ]; then
                     fi
                     echo "-- dump $n of the database at schema A"
                     cat "$CASE_DIR/db_rows" 2>/dev/null
+                    if [ -z "${FAKE_DUMP_NO_COLLECTIONS:-}" ]; then
+                        printf 'COPY public.collections (id, name, description, filename_stem, created_at) FROM stdin;\n'
+                        [ -z "${FAKE_DUMP_COLLECTIONS:-}" ] || printf '%b\n' "$FAKE_DUMP_COLLECTIONS"
+                        printf '\\.\n'
+                    fi
                     seq 1 300 ;;
                 psql)
                     case "$*" in *alembic_version*) echo "${FAKE_DB_REV:-rev-B}"; exit 0 ;; esac
+                    case "$*" in
+                        *to_regclass*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -n "${FAKE_NO_COLLECTIONS_TABLE:-}" ] || echo "collections"
+                            exit 0 ;;
+                        *"filename_stem IS NOT NULL"*)
+                            [ -z "${FAKE_DB_UNREACHABLE:-}" ] || { echo "psql: could not connect" >&2; exit 2; }
+                            [ -z "${FAKE_STEMMED:-}" ] || printf '%b\n' "$FAKE_STEMMED"
+                            exit 0 ;;
+                    esac
                     case "$*" in *"DROP DATABASE"*)
                         echo "psql DROP" >> "$CASE_DIR/log"
                         [ -z "${FAKE_KILL_ON_DROP:-}" ] || { kill-update KILL "$PPID"; sleep 1; } ;;
@@ -1423,6 +1438,126 @@ run_again "$PROJECT_ROOT/scripts/update.sh" --yes
 eq "$RC" 0 "exit status"
 has "locally modified files"
 hasnt "✗ --no-pull"
+
+# ── rollback-update.sh: volumes whose stem the restored dump does not have ─
+STEMS_FILE_REL="backups/rollback-stems-at-risk"
+# stem_case <name>: a successful update (its dump is the one
+# the rollback restores), with volume 7 "Libro 7" stemmed libro-7 in the
+# current database and its directory under the projects root.
+stem_case() {
+    run_case "$1" --yes
+    mkdir -p "$DTK_TEST_STATE/projects/libro-7/captures"
+    DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+}
+STEMMED_7='7\tLibro 7\tlibro-7'
+stems_untouched() {
+    unlogged "systemctl stop"
+    unlogged "psql DROP"
+    db_is "$DB_BEFORE"
+    no_marker
+    if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag exists"; else ok "no start flag"; fi
+    active
+}
+
+stem_case "stem not in the dump"
+CASE="stem not in the dump: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "✗ Restoring this backup may cut volumes off from their files:"
+has "id 7  \"Libro 7\"  stem libro-7  ($DTK_TEST_STATE/projects/libro-7)"
+has "--accept-lost-stems"
+hasnt "some of them may be safe"
+stems_untouched
+eq "$(stat -c %a "$DTK_TEST_STATE/$STEMS_FILE_REL" 2>/dev/null || stat -f %Lp "$DTK_TEST_STATE/$STEMS_FILE_REL")" 600 "the list file is mode 600"
+if grep -qxF "$(printf '7\tLibro 7\tlibro-7\t%s' "$DTK_TEST_STATE/projects/libro-7")" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file has the volume"; else fail "the list file lacks the volume"; fi
+if grep -qx "# accepted: no" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says not accepted"; else fail "the list file does not say not accepted"; fi
+if grep -qx "# dump: $(dump_name)" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file names the dump"; else fail "the list file does not name the dump"; fi
+
+CASE="stem not in the dump: accepted"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
+eq "$RC" 0 "exit status"
+has "--accept-lost-stems: rolling back anyway"
+db_is restored
+if grep -qx "# accepted: yes (--accept-lost-stems)" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says accepted"; else fail "the list file does not say accepted"; fi
+active
+
+stem_case "stem not in the dump, accepted, killed after the DROP"
+CASE="stem not in the dump, accepted, killed after the DROP: the rollback"
+FAKE_STEMMED="$STEMMED_7" FAKE_KILL_ON_DROP=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
+marker_has "kind: restore-failed"
+marker_has "lost-stems-accepted: $DTK_TEST_STATE/$STEMS_FILE_REL"
+
+stem_case "stem directory absent"
+rm -rf "$DTK_TEST_STATE/projects/libro-7"
+CASE="stem directory absent: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "may cut volumes off"
+db_is restored
+
+FAKE_DUMP_COLLECTIONS='7\tLibro 7\t\\N\tlibro-7\t2026-10-01 00:00:00' run_case "stem already in the dump" --yes
+mkdir -p "$DTK_TEST_STATE/projects/libro-7"
+CASE="stem already in the dump: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "may cut volumes off"
+db_is restored
+
+FAKE_DUMP_COLLECTIONS='7\tLibro 7\t\\N\t\\N\t2026-10-01 00:00:00' run_case "volume in the dump without its stem" --yes
+mkdir -p "$DTK_TEST_STATE/projects/libro-7"
+DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+CASE="volume in the dump without its stem: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "stem libro-7"
+stems_untouched
+
+FAKE_DUMP_NO_COLLECTIONS=1 run_case "dump without a collections table" --yes
+mkdir -p "$DTK_TEST_STATE/projects/libro-7"
+DB_BEFORE="$(cat "$CASE_DIR/db_state")"
+CASE="dump without a collections table: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "some of them may be safe"
+if grep -qx "# dump-check: not possible; every volume with a stem directory is listed" "$DTK_TEST_STATE/$STEMS_FILE_REL"; then ok "the list file says the dump could not be checked"; else fail "the list file does not say so"; fi
+stems_untouched
+
+stem_case "stem directory under the storage override"
+rm -rf "$DTK_TEST_STATE/projects/libro-7"
+mkdir -p "$CASE_DIR/drive/libro-7"
+printf '{\n  "projects_root": "%s"\n}\n' "$CASE_DIR/drive" > "$DTK_TEST_STATE/storage-override.json"
+CASE="stem directory under the storage override: the rollback"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "($CASE_DIR/drive/libro-7)"
+stems_untouched
+
+stem_case "database unreachable"
+CASE="database unreachable: the rollback"
+FAKE_DB_UNREACHABLE=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "✗ Could not check the current database for volumes with a stem directory"
+has "A check that cannot answer is not a clean result"
+stems_untouched
+
+stem_case "no collections table in the current database"
+CASE="no collections table in the current database: the rollback"
+FAKE_STEMMED="$STEMMED_7" FAKE_NO_COLLECTIONS_TABLE=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+has "no volumes table, so no volume can lose its files"
+db_is restored
+
+stem_case "db container not running"
+rm -f "$CASE_DIR/docker/db_running" "$CASE_DIR/sys/active"
+CASE="db container not running: refused"
+FAKE_STEMMED="$STEMMED_7" run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+logged "up -d --no-recreate db"
+if [ -f "$CASE_DIR/docker/db_running" ]; then fail "the db container was left running"; else ok "the db container is stopped again"; fi
+CASE="db container not running: nothing at risk"
+run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+logged "up -d --no-recreate db"
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below

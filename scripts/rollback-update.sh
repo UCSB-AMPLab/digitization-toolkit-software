@@ -55,6 +55,8 @@
 #   sudo ./scripts/rollback-update.sh                       # newest dump
 #   sudo ./scripts/rollback-update.sh <dump-file.sql.gz>    # a specific dump
 #   sudo ./scripts/rollback-update.sh --yes                 # skip confirmation
+#   sudo ./scripts/rollback-update.sh --accept-lost-stems   # roll back although
+#                                     # volumes may lose their files (1d)
 #   sudo /var/lib/dtk/rollback-update.sh --project-root=/home/pi/dtk ...
 #                                     # the kept copy, after the checkout moved
 #
@@ -99,13 +101,15 @@ ROLLBACK_MARKER="$STATE_DIR/rollback-in-progress"
 # "run this again" below names the copy.
 ROLLBACK_SCRIPT_COPY="$STATE_DIR/rollback-update.sh"
 
-USAGE="Usage: sudo ./scripts/rollback-update.sh [--yes] [--project-root=PATH] [<dump-file.sql.gz>]"
+USAGE="Usage: sudo ./scripts/rollback-update.sh [--yes] [--accept-lost-stems] [--project-root=PATH] [<dump-file.sql.gz>]"
 ASSUME_YES=0
+ACCEPT_LOST_STEMS=0
 DUMP_ARG=""
 PROJECT_ROOT_ARG=""
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
+        --accept-lost-stems) ACCEPT_LOST_STEMS=1 ;;
         --project-root=*) PROJECT_ROOT_ARG="${arg#*=}" ;;
         -h|--help)
             echo "$USAGE"
@@ -692,31 +696,6 @@ if [ -e "$UNRESOLVED_FILE" ]; then
     fi
 fi
 
-echo "This will:"
-echo "  • RESTORE the database from:"
-echo "      $DUMP_FILE   (${DUMP_BYTES} bytes)"
-echo "    ⚠  This DISCARDS anything saved since that backup was taken."
-if [ -n "$TARGET_SHA" ]; then
-    echo "  • Return the code to commit: $TARGET_SHA"
-else
-    echo "  • (No pre-update commit recorded — code will be left as-is.)"
-fi
-echo "  • Restart the appliance."
-echo ""
-
-if [ "$ASSUME_YES" -ne 1 ]; then
-    if [ ! -t 0 ]; then
-        echo "✗ No terminal to confirm on, and --yes was not given. Aborting."
-        exit 1
-    fi
-    printf "Proceed with rollback? [y/N] "
-    read -r reply
-    case "$reply" in
-        y|Y|yes|YES) echo "" ;;
-        *) echo ""; echo "Aborted by operator. Nothing changed."; exit 1 ;;
-    esac
-fi
-
 # ---------------------------------------------------------------------------
 # 1c. The backup directory, before anything is stopped. The record this
 #     script writes before its DROP lives there, and a unit that was never
@@ -743,6 +722,221 @@ if ! { mkdir -p "$BACKUP_DIR" && chown root:root "$BACKUP_DIR" && chmod 0700 "$B
     echo "✗ Could not create $BACKUP_DIR as root, mode 0700."
     echo "  Aborting with nothing changed — the database is untouched."
     exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 1d. Volumes the restore would cut off from their files, asked while the
+#     unit still runs and before anything is stopped or written.
+#
+#     A volume with a file name stem keeps its files in <projects root>/<stem>/
+#     (backend capture/project_manager.volume_root), where the backend moves
+#     them once the stem is set. A dump taken before that describes the
+#     volume without the stem, or not at all, so after the restore its rows
+#     point at paths that do not hold its files, or it is gone from the
+#     catalogue with its files left in the directory.
+#
+#     At risk: every volume with a stem in the current database whose stem
+#     directory exists, unless the dump's own collections table has that
+#     volume with that same stem (the dump is plain pg_dump SQL, as this
+#     script loads it with psql, so its COPY block can be read). The model
+#     records no time a stem was set, so the dump itself is the evidence. If
+#     the dump's table cannot be read, every such volume is listed, and the
+#     message says some may be safe.
+#
+#     The projects root is checked where the backend may have it (backend
+#     app/core/config.py, storage_override.py): the root named in
+#     /var/lib/dtk/storage-override.json if it can be read, and the default,
+#     PROJECTS_ROOT or <DTK_DATA_DIR>/projects, from .env. A stem directory
+#     under either counts.
+#
+#     The list goes to STEMS_AT_RISK_FILE, beside the unresolved record,
+#     root's and 0600. Refused unless --accept-lost-stems, which records the
+#     acceptance there and in the restore record. A database that cannot be
+#     asked is a refusal: a check that cannot answer is not a negative answer.
+# ---------------------------------------------------------------------------
+STEMS_AT_RISK_FILE="$BACKUP_DIR/rollback-stems-at-risk"
+STORAGE_OVERRIDE_FILE="$STATE_DIR/storage-override.json"
+
+# The projects roots to look under, one per line, no duplicates.
+stem_roots() {
+    local override="" default
+    if [ -f "$STORAGE_OVERRIDE_FILE" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            override="$(python3 -c 'import json,sys
+try:
+    v = json.load(open(sys.argv[1], encoding="utf-8")).get("projects_root") or ""
+except Exception:
+    v = ""
+print(v)' "$STORAGE_OVERRIDE_FILE" 2>/dev/null)"
+        else
+            override="$(sed -n 's/.*"projects_root"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$STORAGE_OVERRIDE_FILE" 2>/dev/null | head -n 1)"
+        fi
+    fi
+    default="${PROJECTS_ROOT:-${DTK_DATA_DIR:-/var/lib/dtk}/projects}"
+    printf '%s\n%s\n' "$override" "$default" | awk 'NF && !seen[$0]++'
+}
+
+# The dump's collections as "<id>\t<stem>" lines ("\N" for no stem); exit 1
+# when the dump has no readable COPY block for the table.
+dump_collection_stems() {
+    gunzip -c "$DUMP_FILE" 2>/dev/null | awk -F'\t' '
+        /^COPY public\.collections \(/ {
+            cols = $0
+            sub(/^COPY public\.collections \(/, "", cols); sub(/\) FROM stdin;$/, "", cols)
+            n = split(cols, names, /, /)
+            for (i = 1; i <= n; i++) { if (names[i] == "id") ci = i; if (names[i] == "filename_stem") cs = i }
+            if (ci && cs) { inblock = 1; found = 1 }
+            next
+        }
+        inblock && $0 == "\\." { inblock = 0; next }
+        inblock { print $ci "\t" $cs }
+        END { exit found ? 0 : 1 }'
+}
+
+STEM_DB_STARTED=0
+stem_guard_db_down() {
+    if [ "$STEM_DB_STARTED" -eq 1 ]; then
+        $COMPOSE stop db >/dev/null 2>&1 || true
+    fi
+}
+stem_guard_refuse_unanswered() {
+    echo "✗ Could not check the current database for volumes with a stem directory"
+    echo "  ($1). A check that cannot answer is not a clean result, so the"
+    echo "  rollback is refused with nothing changed. Make the database reachable"
+    echo "  (sudo systemctl start dtk, or start its container alone) and run this"
+    echo "  again."
+    stem_guard_db_down
+    exit 1
+}
+
+echo "→ Checking for volumes the restore would cut off from their files..."
+if ! RUNNING_DB="$($COMPOSE ps --services --status running 2>/dev/null)"; then
+    stem_guard_refuse_unanswered "docker compose ps failed"
+fi
+if ! printf '%s\n' "$RUNNING_DB" | grep -qx db; then
+    # Only the db container, as update.sh does for its backup; stopped again
+    # below if the rollback is refused.
+    STEM_DB_STARTED=1
+    $COMPOSE up -d --no-recreate db >/dev/null 2>&1 || stem_guard_refuse_unanswered "the db container could not be started"
+fi
+for i in $(seq 1 30); do
+    if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
+        break
+    fi
+    [ "$i" -lt 30 ] || stem_guard_refuse_unanswered "the database did not become ready in 60s"
+    sleep 2
+done
+if ! HAS_COLLECTIONS="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At \
+        -c "SELECT to_regclass('public.collections')" 2>/dev/null)"; then
+    stem_guard_refuse_unanswered "the query failed"
+fi
+STEMS_AT_RISK=""
+DUMP_CHECKED=1
+if [ -z "$HAS_COLLECTIONS" ]; then
+    # Dropped, or never created: a restore that failed part-way leaves this.
+    echo "  The current database has no volumes table, so no volume can lose its files."
+else
+    if ! STEMMED="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At -F "$(printf '\t')" \
+            -c "SELECT id, translate(name, E'\t\n\r', '   '), filename_stem FROM collections WHERE filename_stem IS NOT NULL ORDER BY id" 2>/dev/null)"; then
+        stem_guard_refuse_unanswered "the query failed"
+    fi
+    if [ -n "$STEMMED" ]; then
+        DUMP_STEMS="$(dump_collection_stems)" || DUMP_CHECKED=0
+        ROOTS="$(stem_roots)"
+        while IFS="$(printf '\t')" read -r vid vname vstem; do
+            [ -n "$vid" ] || continue
+            vdir=""
+            while IFS= read -r root; do
+                [ -n "$root" ] || continue
+                if [ -d "$root/$vstem" ]; then vdir="$root/$vstem"; break; fi
+            done <<< "$ROOTS"
+            [ -n "$vdir" ] || continue
+            if [ "$DUMP_CHECKED" -eq 1 ] && printf '%s\n' "$DUMP_STEMS" | grep -qxF "$(printf '%s\t%s' "$vid" "$vstem")"; then
+                continue
+            fi
+            STEMS_AT_RISK="${STEMS_AT_RISK}$(printf '%s\t%s\t%s\t%s' "$vid" "$vname" "$vstem" "$vdir")"$'\n'
+        done <<< "$STEMMED"
+    fi
+fi
+
+if [ -n "$STEMS_AT_RISK" ]; then
+    if ! ( umask 077
+           {
+               echo "# rollback-update.sh, $(date +%Y-%m-%dT%H:%M:%S%z): volumes whose files are in their"
+               echo "# stem directory and that the backup being restored does not have with that stem."
+               echo "# dump: $DUMP_FILE"
+               if [ "$ACCEPT_LOST_STEMS" -eq 1 ]; then
+                   echo "# accepted: yes (--accept-lost-stems)"
+               else
+                   echo "# accepted: no"
+               fi
+               if [ "$DUMP_CHECKED" -eq 1 ]; then
+                   echo "# dump-check: per volume"
+               else
+                   echo "# dump-check: not possible; every volume with a stem directory is listed"
+               fi
+               printf 'id\tname\tfilename_stem\tdirectory\n'
+               printf '%s' "$STEMS_AT_RISK"
+           } > "$STEMS_AT_RISK_FILE.tmp" ) || ! mv -f "$STEMS_AT_RISK_FILE.tmp" "$STEMS_AT_RISK_FILE"; then
+        rm -f "$STEMS_AT_RISK_FILE.tmp" 2>/dev/null || true
+        echo "✗ Could not write the list of volumes at risk to $STEMS_AT_RISK_FILE."
+        echo "  Aborting with nothing changed — the database is untouched."
+        stem_guard_db_down
+        exit 1
+    fi
+    if [ "$ACCEPT_LOST_STEMS" -ne 1 ]; then
+        echo "✗ Restoring this backup may cut volumes off from their files:"
+        while IFS="$(printf '\t')" read -r vid vname vstem vdir; do
+            [ -n "$vid" ] || continue
+            echo "    id $vid  \"$vname\"  stem $vstem  ($vdir)"
+        done <<< "$STEMS_AT_RISK"
+        echo "  Each of these volumes keeps its files in its stem directory, and the"
+        echo "  backup $DUMP_FILE"
+        echo "  does not have the volume with that stem: it was taken before the stem"
+        echo "  was set, or before the volume existed. After the rollback the catalogue"
+        echo "  would be as it was in the backup: the volume's records would point at"
+        echo "  paths that do not hold its files, or a volume the backup does not have"
+        echo "  would be gone from it, its files left in the directory."
+        if [ "$DUMP_CHECKED" -ne 1 ]; then
+            echo "  The backup's own list of volumes could not be read, so every volume"
+            echo "  with a stem directory is listed; some of them may be safe."
+        fi
+        echo "  The list is in $STEMS_AT_RISK_FILE."
+        echo "  Nothing has been changed. To roll back anyway, accepting this, run the"
+        echo "  same command again with --accept-lost-stems."
+        stem_guard_db_down
+        exit 1
+    fi
+    echo "  --accept-lost-stems: rolling back anyway. The volumes at risk are listed"
+    echo "  in $STEMS_AT_RISK_FILE."
+else
+    echo "  None."
+fi
+echo ""
+
+echo "This will:"
+echo "  • RESTORE the database from:"
+echo "      $DUMP_FILE   (${DUMP_BYTES} bytes)"
+echo "    ⚠  This DISCARDS anything saved since that backup was taken."
+if [ -n "$TARGET_SHA" ]; then
+    echo "  • Return the code to commit: $TARGET_SHA"
+else
+    echo "  • (No pre-update commit recorded — code will be left as-is.)"
+fi
+echo "  • Restart the appliance."
+echo ""
+
+if [ "$ASSUME_YES" -ne 1 ]; then
+    if [ ! -t 0 ]; then
+        echo "✗ No terminal to confirm on, and --yes was not given. Aborting."
+        exit 1
+    fi
+    printf "Proceed with rollback? [y/N] "
+    read -r reply
+    case "$reply" in
+        y|Y|yes|YES) echo "" ;;
+        *) echo ""; echo "Aborted by operator. Nothing changed."; exit 1 ;;
+    esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -1072,6 +1266,9 @@ write_restore_record() {
           echo "dump: $DUMP_FILE"
           echo "rollback-command: sudo $RESUME_CMD"
           echo "recorded-by: rollback-update.sh"
+          if [ "$ACCEPT_LOST_STEMS" -eq 1 ] && [ -n "$STEMS_AT_RISK" ]; then
+              echo "lost-stems-accepted: $STEMS_AT_RISK_FILE"
+          fi
           echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
       } > "$UNRESOLVED_FILE.tmp" ) || ! mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE"; then
         [ "$had_flag" -eq 1 ] || rm -f "$UNRESOLVED_FLAG"
