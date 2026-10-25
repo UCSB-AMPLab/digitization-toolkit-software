@@ -326,21 +326,21 @@ READ_APP_KEY=...
 | Key | What it is |
 |---|---|
 | `KEY_ID`, `APP_KEY` | The unit's write key, `captua-<unit>-write`: `listBuckets`, `listFiles` and `writeFiles`. No `readFiles` and no `deleteFiles`, so a stolen unit can neither download nor erase the archive. |
-| `BUCKET` | The unit's bucket, `<federation>-masters`. |
+| `BUCKET` | The unit's bucket (table below). |
 | `READ_KEY_ID`, `READ_APP_KEY` | Optional. The unit's read key, `captua-<unit>-read`: `listBuckets`, `listFiles` and `readFiles`. It must differ from the write key. Without it, restoring a freed volume is unavailable. |
 
-Both keys are scoped to the unit's bucket and its tenant prefix. `provision-rclone.sh` asks only for `writeFiles` and `listFiles` on the write key and `listFiles` and `readFiles` on the read key; the keys issued for 0.1.0 also carry `listBuckets`, as the interim Rionegro key did. Whether rclone needs `listBuckets` (verify on the bench). The file's mode is 0600 and its owner root.
+Both keys are scoped to the unit's bucket and its tenant prefix. `provision-rclone.sh` asks only for `writeFiles` and `listFiles` on the write key and `listFiles` and `readFiles` on the read key; the keys issued for 0.1.0 also carry `listBuckets`, as the interim Rionegro key did. Each 0.1.0 key was tested from a workstation with the `b2` command-line tool: it authorised, listed its tenant prefix, and was refused outside it. rclone on a unit has not used them yet, and no key without `listBuckets` has been tried, so whether rclone needs `listBuckets` is untested (verify). The file's mode is 0600 and its owner root.
 
 `FISQUA_TOKEN` in the same file, for the link to Fisqua (lands with the Fisqua link).
 
 #### Units and tenants
 
-| Former name | Unit and tenant (`--tenant`) | Keys |
-|---|---|---|
-| rionegro | `ahr` | `captua-ahr-write`, `captua-ahr-read` |
-| lab | `ampl` | `captua-ampl-write`, `captua-ampl-read` |
-| sbmal | `sbmal` | `captua-sbmal-write`, `captua-sbmal-read` |
-| cobos | `cobos` (staging only) | `captua-cobos-write`, `captua-cobos-read` |
+| Former name | Unit and tenant (`--tenant`) | Bucket (`BUCKET`) | Keys |
+|---|---|---|---|
+| rionegro | `ahr` | `neogranadina-masters` | `captua-ahr-write`, `captua-ahr-read` |
+| lab | `ampl` | `ampl-masters` | `captua-ampl-write`, `captua-ampl-read` |
+| sbmal | `sbmal` | `ampl-masters` | `captua-sbmal-write`, `captua-sbmal-read` |
+| cobos | `cobos` (staging only) | `ampl-masters` | `captua-cobos-write`, `captua-cobos-read` |
 
 Never print a key id or an application key in a log, a ticket or this guide.
 
