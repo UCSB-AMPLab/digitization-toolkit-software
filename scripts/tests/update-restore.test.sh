@@ -945,14 +945,17 @@ run_no_pull() {
 }
 for rec in "" "unknown"; do
     setup_no_pull_case "no-pull-record-${rec:-absent}" "$rec"
-    CASE="--no-pull, deploy record '${rec:-absent}', migration fails"
+    CASE="--no-pull, deploy record '${rec:-absent}': refused before any change"
     FAKE_MIGRATE_FAIL=1 run_no_pull
     eq "$RC" 1 "exit status"
-    head_is "$SHA_B" "B (no restore target)"
-    has "there is no record of the version that was running"
-    hasnt "code: $SHA_B"
-    marker_has "kind: migrated-not-restored"
-    db_is migrated
+    head_is "$SHA_B" "B (as put in place)"
+    has "There is no record of which version this unit is running"
+    has "sudo tee $DTK_TEST_STATE/backups/last-deployed-SHA"
+    unlogged "build frontend"
+    unlogged "systemctl stop"
+    unlogged "docker tag"
+    db_is schema-A
+    no_marker
 done
 setup_no_pull_case "no-pull-record-full" "$SHA_A"
 CASE="--no-pull, a deploy record as older update.sh writes it (full SHA)"
@@ -976,7 +979,7 @@ eq "$RC" 1 "exit status"
 unlogged "psql DROP"
 db_is migrated
 has "a backend was running; nothing was dropped"
-marker_has "kind: restore-failed"
+marker_has "kind: restore-refused"
 inactive
 
 # ── 6. Partial code restore: superproject back, a submodule not ─────────────
@@ -1122,6 +1125,60 @@ eq "$RC" 1 "exit status"
 has "exists without its record"
 has "sudo rm $DTK_TEST_STATE/etc-dtk/unresolved-deployment"
 unlogged "git"
+
+# ── 5. The pull path with no deploy record: the rollback target is recorded ─
+CASE_DIR="$WORK/cases/pull-no-record"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
+PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT; cp -R "$TEMPLATE" "$PROJECT_ROOT"
+export DTK_TEST_STATE="$CASE_DIR/state"; mkdir -p "$DTK_TEST_STATE/backups"
+touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"; echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+echo A > "$CASE_DIR/sys/started"; echo schema-A > "$CASE_DIR/db_state"
+CASE="pull path, no deploy record, migration and restore fail"
+FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+eq "$(cat "$DTK_TEST_STATE/backups/pre-update-SHA" 2>/dev/null)" "$SHA_A" "pre-update-SHA names the commit restored to"
+marker_has "kind: restore-failed"
+CASE="pull path, no deploy record: the rollback completes"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+head_is "$SHA_A" A
+db_is restored
+no_marker
+active
+
+# ── 6. A refused restore has its own kind ───────────────────────────────────
+FAKE_MIGRATE_FAIL=1 FAKE_PGREP_STUCK_AFTER_MIGRATE=1 run_case "restore refused, its record" --yes
+marker_has "kind: restore-refused"
+marker_has "code-commit: $SHA_A"
+CASE="restore refused, its record: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+has "the database restore was"
+has "nothing was dropped"
+hasnt "may be empty or partly restored"
+CASE="restore refused, its record: --resolve-forward refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+has "kind: restore-refused"
+
+# ── 7. --resolve-forward --no-start ─────────────────────────────────────────
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward without starting" --yes
+CASE="resolve forward without starting: resolve"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward --no-start
+eq "$RC" 0 "exit status"
+no_marker
+inactive
+unlogged "systemctl start"
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
+if [ -e "$DTK_TEST_STATE/backups/last-deployed-frontend" ]; then fail "a frontend record remains"; else ok "no frontend record for an unstarted version"; fi
+has "Deploy the fixed version"
+CASE="resolve forward without starting: an ordinary update then runs"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 0 "exit status"
+has "Update complete!"
+active
+CASE="--no-start alone"
+run_again "$PROJECT_ROOT/scripts/update.sh" --no-start
+eq "$RC" 2 "exit status"
 
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below

@@ -43,11 +43,13 @@
 #               (for scripted / unattended use).
 #   --no-pull   Do not fetch; update to whatever is already checked out.
 #               For offline updates, and for testing a specific commit.
-#   --resolve-forward
+#   --resolve-forward [--no-start]
 #               After an update that failed once its new version had started
 #               (see UNRESOLVED_FILE below), accept that version as deployed
 #               instead of rolling back: checked only, then recorded, then
-#               started. It changes no code and no data.
+#               started. It changes no code and no data. With --no-start it
+#               records the version and leaves the unit stopped, so that a
+#               fixed commit can then be deployed with an ordinary update.
 #
 # Test only: DTK_UPDATE_FAIL_AT=<point> makes the script fail on purpose at
 # one point, so the restore path can be exercised on a bench unit without a
@@ -74,14 +76,21 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 ASSUME_YES=0
 DO_PULL=1
 RESOLVE_FORWARD=0
+RESOLVE_NO_START=0
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
         --no-pull) DO_PULL=0 ;;
         --resolve-forward) RESOLVE_FORWARD=1 ;;
+        --no-start) RESOLVE_NO_START=1 ;;
         *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull] | --resolve-forward"; exit 2 ;;
     esac
 done
+
+if [ "$RESOLVE_NO_START" -eq 1 ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
+    echo "✗ --no-start goes with --resolve-forward only."
+    exit 2
+fi
 
 FAIL_AT="${DTK_UPDATE_FAIL_AT:-}"
 case "$FAIL_AT" in
@@ -301,7 +310,13 @@ fi
 if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
     echo "✗ An earlier update was left unresolved, so this update will not run."
     echo ""
-    if [ "$UNRESOLVED_KIND" = restore-failed ]; then
+    if [ "$UNRESOLVED_KIND" = restore-refused ]; then
+        echo "  That update failed after its migration, and the database restore was"
+        echo "  refused because a backend was running: nothing was dropped, and the"
+        echo "  database is as the migration left it, while the code is back on"
+        echo "  code-commit below. The unit was left stopped. It recorded, in"
+        echo "  $UNRESOLVED_FILE:"
+    elif [ "$UNRESOLVED_KIND" = restore-failed ]; then
         echo "  That update failed, and restoring the database from its backup then"
         echo "  failed too: the database may be empty or partly restored. The unit"
         echo "  was left stopped. It recorded, in $UNRESOLVED_FILE:"
@@ -340,7 +355,7 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         fi
     fi
     echo ""
-    if [ "$UNRESOLVED_KIND" = restore-failed ]; then
+    if [ "$UNRESOLVED_KIND" = restore-failed ] || [ "$UNRESOLVED_KIND" = restore-refused ]; then
         echo "  The way forward is to restore the database from that backup, with:"
         echo "       $(record_field rollback-command)"
         echo "  It removes this record when it succeeds."
@@ -355,7 +370,9 @@ if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
         echo "  2. Keep the failed version, once whatever stopped it is fixed:"
         echo "       sudo $SCRIPT_DIR/update.sh --resolve-forward"
         echo "     It checks that the code is that version and that the database is at"
-        echo "     its migration head, records it as deployed and starts it."
+        echo "     its migration head, records it as deployed and starts it. To deploy"
+        echo "     a fixed commit instead of starting this one, add --no-start, then"
+        echo "     run update.sh as usual."
     fi
     exit 1
 fi
@@ -364,7 +381,7 @@ if [ "$RESOLVE_FORWARD" -eq 1 ] && [ -z "$UNRESOLVED_KIND" ]; then
     echo "  ($UNRESOLVED_FILE does not exist)."
     exit 2
 fi
-if [ "$RESOLVE_FORWARD" -eq 1 ] && [ "$UNRESOLVED_KIND" = restore-failed ]; then
+if [ "$RESOLVE_FORWARD" -eq 1 ] && { [ "$UNRESOLVED_KIND" = restore-failed ] || [ "$UNRESOLVED_KIND" = restore-refused ]; }; then
     echo "✗ --resolve-forward cannot resolve this record (kind: $UNRESOLVED_KIND)."
     echo "  The database restore failed, so there is no version to keep. Restore"
     echo "  the database with:"
@@ -820,7 +837,7 @@ write_unresolved_marker() {
          {
              echo "kind: $kind"
              echo "code-commit: $head"
-             if [ "$kind" = restore-failed ]; then
+             if [ "$kind" = restore-failed ] || [ "$kind" = restore-refused ]; then
                  echo "dump-to-restore: $RESTORE_DUMP"
              else
                  echo "failed-commit: $CURRENT_SHA"
@@ -995,7 +1012,7 @@ restore_after_stop() {
         echo "  ✗ The appliance has NOT been started: the database is not in a known"
         echo "    state. The backup is intact. To restore code and database by hand:"
         echo "      $ROLLBACK_CMD"
-        if write_unresolved_marker restore-failed; then
+        if write_unresolved_marker "$( [ "$RESTORE_DB_BACKEND_RUNNING" -eq 1 ] && echo restore-refused || echo restore-failed )"; then
             echo "  Until that succeeds, update.sh refuses to run; the record is"
             echo "  $UNRESOLVED_FILE, and the rollback removes it."
         else
@@ -1305,6 +1322,15 @@ resolve_forward() {
         return 1
     fi
     echo "  ✓ Recorded $want as the deployed version; $UNRESOLVED_FILE removed."
+    if [ "$RESOLVE_NO_START" -eq 1 ]; then
+        # No container serves this version's frontend yet, so there is no
+        # image to record against it.
+        rm -f "$LAST_DEPLOYED_FRONTEND_FILE" 2>/dev/null || true
+        echo "  --no-start: the unit is left stopped. Deploy the fixed version with an"
+        echo "  ordinary update now:"
+        echo "      sudo $SCRIPT_DIR/update.sh"
+        return 0
+    fi
     echo "→ Starting the service..."
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
@@ -1393,6 +1419,26 @@ elif [ -n "$PRE_HEAD" ] && [ "$DO_PULL" -eq 1 ]; then
     # with no usable record there is none, and a failure leaves the checkout.
     RESTORE_SHA="$PRE_HEAD"
     RESTORE_SHA_SOURCE="the commit checked out before this update; there was no usable record of the last deployed version"
+fi
+
+# Without a version to return to, a failure after the stop could be put back
+# by nothing, and the unit would be left in a state no script can resolve.
+# Refused here, before anything has changed.
+if [ -z "$RESTORE_SHA" ]; then
+    echo "✗ There is no record of which version this unit is running, so a failed"
+    echo "  update could not be undone. Nothing has been changed."
+    case "$PREV_RECORD_STATE" in
+        present) echo "  $LAST_DEPLOYED_SHA_FILE names '$PREV_DEPLOYED_SHA', which is not a commit in this checkout." ;;
+        *) echo "  $LAST_DEPLOYED_SHA_FILE is $PREV_RECORD_STATE." ;;
+    esac
+    if [ "$DO_PULL" -eq 0 ]; then
+        echo "  With --no-pull the checkout is already the new code, so it cannot stand"
+        echo "  in for that record. Write the commit this unit runs (the one checked"
+        echo "  out before the new code was put in place) into the record, then run"
+        echo "  this again:"
+        echo "      echo <commit> | sudo tee $LAST_DEPLOYED_SHA_FILE"
+    fi
+    exit 1
 fi
 
 FRONTEND_IMAGE="$(frontend_image_name || true)"
@@ -2001,9 +2047,11 @@ echo "  ✓ Backup written (${DUMP_BYTES} bytes)."
 # out the new code (see header), so HEAD ($CURRENT_SHA) is the NEW version.
 # The rollback target is the commit that was RUNNING before this update — the
 # one the last successful update recorded in last-deployed-SHA — never HEAD.
-if [ -n "$PREV_DEPLOYED_SHA" ]; then
-    echo "$PREV_DEPLOYED_SHA" > "$SHA_FILE"
-    echo "  Rollback target recorded: $PREV_DEPLOYED_SHA"
+if [ -n "$RESTORE_SHA" ]; then
+    # The same commit a failure here restores to (0a), so that the rollback
+    # the failure output names returns the code to it too.
+    echo "$RESTORE_SHA" > "$SHA_FILE"
+    echo "  Rollback target recorded: $RESTORE_SHA"
 else
     # No record of the previously deployed version. Writing HEAD here would
     # make rollback-update.sh "roll back" to the very version being installed,
