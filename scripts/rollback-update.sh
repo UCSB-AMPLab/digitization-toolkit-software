@@ -718,6 +718,34 @@ if [ "$ASSUME_YES" -ne 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1c. The backup directory, before anything is stopped. The record this
+#     script writes before its DROP lives there, and a unit that was never
+#     updated by a script that creates it may not have one: restoring a dump
+#     from elsewhere (a USB stick) is a supported case. Created and secured as
+#     update.sh's secure_backup_dir does (root:root, 0700, never through a
+#     symbolic link or over a non-directory); if that fails, nothing has been
+#     stopped and nothing is written.
+# ---------------------------------------------------------------------------
+if [ -L "$BACKUP_DIR" ]; then
+    echo "✗ $BACKUP_DIR is a symbolic link. The backups and the record of an"
+    echo "  unresolved restore must be in a directory of their own. Move the link"
+    echo "  aside and run this again."
+    echo "  Aborting with nothing changed — the database is untouched."
+    exit 1
+fi
+if [ -e "$BACKUP_DIR" ] && [ ! -d "$BACKUP_DIR" ]; then
+    echo "✗ $BACKUP_DIR exists and is not a directory. Move it aside and run"
+    echo "  this again."
+    echo "  Aborting with nothing changed — the database is untouched."
+    exit 1
+fi
+if ! { mkdir -p "$BACKUP_DIR" && chown root:root "$BACKUP_DIR" && chmod 0700 "$BACKUP_DIR"; }; then
+    echo "✗ Could not create $BACKUP_DIR as root, mode 0700."
+    echo "  Aborting with nothing changed — the database is untouched."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # 2. Stop the appliance.
 # ---------------------------------------------------------------------------
 echo "→ Stopping the appliance..."
@@ -1024,12 +1052,19 @@ fi
 # starting until a later run completes the restore.
 trap '' HUP INT TERM PIPE
 write_restore_record() {
-    local head
+    local head had_flag=0
     head="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    [ -e "$UNRESOLVED_FLAG" ] && had_flag=1
     mkdir -p "$UNRESOLVED_FLAG_DIR" && chmod 0700 "$UNRESOLVED_FLAG_DIR" \
         && ( umask 077; : > "$UNRESOLVED_FLAG" ) || return 1
-    ensure_unresolved_dropin || return 1
-    ( umask 077
+    # Nothing has been dropped yet: a flag this call created goes again if
+    # the rest cannot be written, or it would block a unit with nothing to
+    # resolve.
+    if ! ensure_unresolved_dropin; then
+        [ "$had_flag" -eq 1 ] || rm -f "$UNRESOLVED_FLAG"
+        return 1
+    fi
+    if ! ( umask 077
       {
           echo "kind: restore-failed"
           echo "code-commit: $head"
@@ -1038,7 +1073,10 @@ write_restore_record() {
           echo "rollback-command: sudo $RESUME_CMD"
           echo "recorded-by: rollback-update.sh"
           echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
-      } > "$UNRESOLVED_FILE.tmp" ) && mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE"
+      } > "$UNRESOLVED_FILE.tmp" ) || ! mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE"; then
+        [ "$had_flag" -eq 1 ] || rm -f "$UNRESOLVED_FLAG"
+        return 1
+    fi
 }
 if ! write_restore_record; then
     rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true

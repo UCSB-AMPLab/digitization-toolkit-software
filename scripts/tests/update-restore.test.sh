@@ -1301,6 +1301,43 @@ has "has local changes"
 unlogged "psql DROP"
 if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
 
+# ── A rollback from an external dump on a unit with no backups directory ───
+# setup_bare_unit <dir-name>: a unit at A, running, whose state directory has
+# no backups/ at all (never updated by a script that creates it).
+setup_bare_unit() {
+    CASE_DIR="$WORK/cases/$1"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
+    PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT; cp -R "$TEMPLATE" "$PROJECT_ROOT"
+    export DTK_TEST_STATE="$CASE_DIR/state"; mkdir -p "$DTK_TEST_STATE"
+    touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+    echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"; echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+    echo A > "$CASE_DIR/sys/started"; echo schema-A > "$CASE_DIR/db_state"
+    { echo "-- an external dump of the database at schema A"; seq 1 300; } | gzip > "$CASE_DIR/external.sql.gz"
+    : > "$CASE_DIR/log"
+}
+setup_bare_unit external-dump-no-backups
+CASE="external dump, no backups directory"
+run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$CASE_DIR/external.sql.gz"
+eq "$RC" 0 "exit status"
+db_is restored
+if grep -q "an external dump" "$CASE_DIR/restored.sql" 2>/dev/null; then ok "the external dump was loaded"; else fail "the external dump was not loaded"; fi
+if [ -d "$DTK_TEST_STATE/backups" ]; then ok "backups directory created"; else fail "no backups directory"; fi
+eq "$(stat -c %a "$DTK_TEST_STATE/backups" 2>/dev/null || stat -f %Lp "$DTK_TEST_STATE/backups")" 700 "backups directory is mode 700, as update.sh makes it"
+no_marker
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
+active
+
+setup_bare_unit external-dump-backups-blocked
+: > "$DTK_TEST_STATE/backups"        # a file where the directory must go
+CASE="external dump, backups directory cannot be created"
+run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$CASE_DIR/external.sql.gz"
+eq "$RC" 1 "exit status"
+has "is not a directory"
+unlogged "systemctl stop"
+unlogged "psql DROP"
+db_is schema-A
+active
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag was created"; else ok "no start flag"; fi
+
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
 rm -rf "$CASE_DIR"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"
