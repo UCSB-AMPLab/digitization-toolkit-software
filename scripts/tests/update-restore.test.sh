@@ -169,7 +169,13 @@ if [ "$1" = compose ]; then
     sub="$1"; shift
     case "$sub" in
         config)
-            if [ "${1:-}" = "--images" ]; then echo "dtk-frontend"; else echo "name: dtk"; fi ;;
+            # FAKE_NO_CONFIG_IMAGES: a Compose that gives no implicit name for
+            # the build-only frontend; FAKE_NO_PROJECT_NAME: no name: line.
+            if [ "${1:-}" = "--images" ]; then
+                [ -n "${FAKE_NO_CONFIG_IMAGES:-}" ] || echo "dtk-frontend"
+            else
+                [ -n "${FAKE_NO_PROJECT_NAME:-}" ] || echo "name: dtk"
+            fi ;;
         ps)
             case "$*" in
                 *"--services --status running"*) [ -f "$D/db_running" ] && echo db; [ -f "$D/frontend_container" ] && echo frontend ;;
@@ -219,7 +225,12 @@ case "$1" in
             ls) for f in "$D"/tag_dtk-frontend_*; do [ -e "$f" ] && echo "${f##*/tag_dtk-frontend_}"; done ;;
             rm) rm -f "$D/$(norm "$3")" ;;
         esac ;;
-    container) cat "$D/frontend_container" 2>/dev/null || exit 1 ;;
+    container)
+        [ -f "$D/frontend_container" ] || exit 1
+        case "$*" in
+            *Config.Image*) [ -z "${FAKE_NO_CONTAINER_NAME:-}" ] || exit 1; echo "dtk-frontend" ;;
+            *) cat "$D/frontend_container" ;;
+        esac ;;
     ps) exit 0 ;;
     network) exit 1 ;;
 esac
@@ -387,6 +398,35 @@ started "A "
 active
 unlogged "systemctl stop"
 has "frontend image: dtk-frontend is $OLD_IMG again"
+
+# ── The frontend image name, when Compose does not report it ────────────────
+FAKE_NO_CONFIG_IMAGES=1 DTK_UPDATE_FAIL_AT=build run_case "name from the running container" --yes
+tag_is "$OLD_IMG" "the old image again"
+logged "docker tag $OLD_IMG dtk-frontend"
+logged "--format {{.Config.Image}}"
+hasnt "COULD NOT BE KEPT"
+
+FAKE_NO_CONFIG_IMAGES=1 FAKE_NO_CONTAINER_NAME=1 DTK_UPDATE_FAIL_AT=build run_case "name from the project" --yes
+tag_is "$OLD_IMG" "the old image again"
+has "kept as dtk-frontend:pre-update-"
+hasnt "COULD NOT BE KEPT"
+
+FAKE_NO_CONFIG_IMAGES=1 FAKE_NO_CONTAINER_NAME=1 FAKE_NO_PROJECT_NAME=1 DTK_UPDATE_FAIL_AT=build run_case "no name at all" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+tag_is "$NEW_IMG" "the new build (could not be put back)"
+has "THE FRONTEND IMAGE COULD NOT BE KEPT: Compose did not give its name"
+has "frontend image: no image was recorded before the rebuild"
+
+FAKE_HEALTHY_VERSIONS="A" run_case "rollback with no frontend name" --yes
+CASE="rollback with no frontend name: the rollback"
+FAKE_NO_CONFIG_IMAGES=1 FAKE_NO_CONTAINER_NAME=1 FAKE_NO_PROJECT_NAME=1 \
+    run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+head_is "$SHA_A" A
+has "THE FRONTEND IMAGE WAS NOT PUT BACK: Compose did not give the frontend image's name"
+tag_is "$NEW_IMG" "the new build (not put back)"
+no_marker
 
 # ── Failure after pixi reinstalled (before the stop) ────────────────────────
 DTK_UPDATE_FAIL_AT=pixi run_case "fail after pixi" --yes

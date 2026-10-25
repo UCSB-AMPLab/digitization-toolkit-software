@@ -342,6 +342,29 @@ lock_digest_at() {
     fi
 }
 
+# The name Compose tags the frontend build with. The frontend service has no
+# image: key, so the name is implicit (<project>-frontend), and not every
+# Compose version reports an implicit name from `config --images`: the bench
+# unit's v5.3.1 does. Asked three ways, in order: `config --images frontend`;
+# the image reference the running frontend container was created from
+# (.Config.Image, which Compose sets to that same name); and <project>-frontend
+# from the project name Compose itself resolved (`config`'s name: line, already
+# normalised from COMPOSE_PROJECT_NAME or the directory). Empty if none answers.
+frontend_image_name() {
+    local name cid project
+    name="$($COMPOSE config --images frontend 2>/dev/null | head -n 1)"
+    if [ -z "$name" ]; then
+        cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)"
+        [ -n "$cid" ] && name="$(docker container inspect --format '{{.Config.Image}}' "$cid" 2>/dev/null)"
+    fi
+    case "$name" in sha256:*) name="" ;; esac
+    if [ -z "$name" ]; then
+        project="$($COMPOSE config 2>/dev/null | sed -n 's/^name: *//p' | head -n 1)"
+        [ -n "$project" ] && name="$project-frontend"
+    fi
+    printf '%s' "$name"
+}
+
 # Immutable image id of the running frontend container; empty on any error.
 frontend_image_id() {
     local cid
@@ -995,7 +1018,7 @@ elif [ -n "$PRE_HEAD" ]; then
     RESTORE_SHA_SOURCE="the commit checked out before this update; there was no usable record of the last deployed version"
 fi
 
-FRONTEND_IMAGE="$($COMPOSE config --images frontend 2>/dev/null | head -n 1 || true)"
+FRONTEND_IMAGE="$(frontend_image_name || true)"
 SAVED_FRONTEND_IMAGE="$(frontend_image_id || true)"
 if [ -z "$SAVED_FRONTEND_IMAGE" ] && [ -n "$FRONTEND_IMAGE" ]; then
     SAVED_FRONTEND_IMAGE="$(docker image inspect --format '{{.Id}}' "$FRONTEND_IMAGE" 2>/dev/null || true)"
@@ -1027,7 +1050,13 @@ if [ -n "$SAVED_FRONTEND_TAG" ]; then
 elif [ -n "$SAVED_FRONTEND_IMAGE" ]; then
     echo "    frontend: $SAVED_FRONTEND_IMAGE (could not be tagged; it may be pruned)"
 else
-    echo "    frontend: (unknown — a failure after the rebuild cannot put it back)"
+    echo "    frontend: (unknown)"
+fi
+if [ -z "$SAVED_FRONTEND_TAG" ]; then
+    echo ""
+    echo "  ⚠⚠ THE FRONTEND IMAGE COULD NOT BE KEPT: $( [ -z "$FRONTEND_IMAGE" ] && echo "Compose did not give its name" || echo "no image for $FRONTEND_IMAGE could be found or tagged")."
+    echo "     If this update fails after the rebuild, the frontend will NOT be put"
+    echo "     back, and the restored version will run with the new build's frontend."
 fi
 echo ""
 

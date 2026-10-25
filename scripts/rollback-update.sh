@@ -946,6 +946,29 @@ frontend_image_id() {
     [ -n "$cid" ] || return 1
     docker container inspect --format '{{.Image}}' "$cid" 2>/dev/null
 }
+# The name Compose tags the frontend build with. The frontend service has no
+# image: key, so the name is implicit (<project>-frontend), and not every
+# Compose version reports an implicit name from `config --images`: the bench
+# unit's v5.3.1 does. Asked three ways, in order: `config --images frontend`;
+# the image reference the running frontend container was created from
+# (.Config.Image, which Compose sets to that same name); and <project>-frontend
+# from the project name Compose itself resolved (`config`'s name: line, already
+# normalised from COMPOSE_PROJECT_NAME or the directory). Empty if none answers.
+frontend_image_name() {
+    local name cid project
+    name="$($COMPOSE config --images frontend 2>/dev/null | head -n 1)"
+    if [ -z "$name" ]; then
+        cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)"
+        [ -n "$cid" ] && name="$(docker container inspect --format '{{.Config.Image}}' "$cid" 2>/dev/null)"
+    fi
+    case "$name" in sha256:*) name="" ;; esac
+    if [ -z "$name" ]; then
+        project="$($COMPOSE config 2>/dev/null | sed -n 's/^name: *//p' | head -n 1)"
+        [ -n "$project" ] && name="$project-frontend"
+    fi
+    printf '%s' "$name"
+}
+
 # state_field <key> <file>: value of "key: value", empty if absent/unreadable.
 state_field() {
     sed -n "s/^$1: //p" "$2" 2>/dev/null | head -n 1
@@ -1005,15 +1028,26 @@ fi
 
 if [ -n "$STATE_RECORD" ]; then
     REC_IMG_PRE="$(state_field previously-deployed-frontend-image "$STATE_RECORD")"
-    FRONTEND_NAME="$($COMPOSE config --images frontend 2>/dev/null | head -n 1 || true)"
-    if [ -n "$REC_IMG_PRE" ] && [ -n "$FRONTEND_NAME" ] \
-            && docker image inspect "$REC_IMG_PRE" >/dev/null 2>&1; then
-        if docker tag "$REC_IMG_PRE" "$FRONTEND_NAME" >/dev/null 2>&1; then
-            echo "→ Frontend image put back: $FRONTEND_NAME is $REC_IMG_PRE, the image"
-            echo "  recorded when $TARGET_SHA was deployed."
-            echo ""
-        fi
+    FRONTEND_NAME="$(frontend_image_name || true)"
+    FRONTEND_WHY=""
+    if [ -z "$REC_IMG_PRE" ]; then
+        FRONTEND_WHY="no image was recorded when $TARGET_SHA was deployed"
+    elif [ -z "$FRONTEND_NAME" ]; then
+        FRONTEND_WHY="Compose did not give the frontend image's name"
+    elif ! docker image inspect "$REC_IMG_PRE" >/dev/null 2>&1; then
+        FRONTEND_WHY="the recorded image $REC_IMG_PRE is no longer on this unit"
+    elif ! docker tag "$REC_IMG_PRE" "$FRONTEND_NAME" >/dev/null 2>&1; then
+        FRONTEND_WHY="docker tag $REC_IMG_PRE $FRONTEND_NAME failed"
     fi
+    if [ -z "$FRONTEND_WHY" ]; then
+        echo "→ Frontend image put back: $FRONTEND_NAME is $REC_IMG_PRE, the image"
+        echo "  recorded when $TARGET_SHA was deployed."
+    else
+        echo "⚠⚠ THE FRONTEND IMAGE WAS NOT PUT BACK: $FRONTEND_WHY."
+        echo "   The restored version will run with the frontend image that is tagged"
+        echo "   now; the summary below says whether that corresponds."
+    fi
+    echo ""
 fi
 
 # ---------------------------------------------------------------------------
