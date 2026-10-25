@@ -7,16 +7,22 @@
 #   • All network / compile work (frontend build, pixi install) happens BEFORE
 #     the running service is stopped, so a failure there leaves the old, working
 #     stack untouched and still serving.
-#   • Before any migration a timestamped pg_dump is taken and verified non-empty;
+#   • Before any migration a timestamped pg_dump is taken with the backend
+#     stopped, so nothing written before the stop is missing from it, and
+#     verified non-empty (a trial dump while still serving checks pg_dump and
+#     free space before any downtime, and is deleted once that one verifies);
 #     the pre-update superproject commit is recorded so a botched update can be
 #     rolled back with scripts/rollback-update.sh.
 #   • Before anything changes, it records what is running: the deployed commit,
 #     the frontend image (kept under a pre-update-<timestamp> tag) and the
 #     backend lock. If anything fails after the code has moved, an EXIT trap
 #     restores the previous version: the checkout and submodules, the frontend
-#     image, the pixi environment, and the database from this run's dump if a
-#     migration had begun. It starts the service only once those are back, and
-#     says the unit is online only when the backend answers /health.
+#     image, the pixi environment, and the database from that stopped-backend
+#     dump if a migration had begun. It starts the service only once those are
+#     back, and says the unit is online only when the backend answers /health.
+#     Once the new version has served (answered /health, or logged a write),
+#     nothing is restored automatically: it may hold new data, and the script
+#     prints the rollback command with its data-loss warning instead.
 #   • Before starting, it checks whether the update changed dependency manifests
 #     (which need the npm / conda registries) and, if so, warns the operator that
 #     internet is required and lets them abort.
@@ -43,8 +49,10 @@
 #   build     after the frontend image is rebuilt
 #   pixi      after the pixi environment is reinstalled
 #   stopped   after the service is stopped
+#   dumped    after the backup taken with the backend stopped
 #   migrate   after the migrations have run
 #   started   after the new version is started, before its health check
+#   served    after the new version has answered /health
 # Never set it on an appliance in service.
 #
 # Also tunable: DTK_UPDATE_HEALTH_TIMEOUT (seconds to wait for /health after a
@@ -68,9 +76,9 @@ done
 
 FAIL_AT="${DTK_UPDATE_FAIL_AT:-}"
 case "$FAIL_AT" in
-    ""|fetched|build|pixi|stopped|migrate|started) ;;
+    ""|fetched|build|pixi|stopped|dumped|migrate|started|served) ;;
     *) echo "✗ DTK_UPDATE_FAIL_AT='$FAIL_AT' is not a failure point this script knows."
-       echo "  Known: fetched build pixi stopped migrate started (test only)."
+       echo "  Known: fetched build pixi stopped dumped migrate started served (test only)."
        exit 2 ;;
 esac
 HEALTH_TIMEOUT="${DTK_UPDATE_HEALTH_TIMEOUT:-300}"
@@ -249,6 +257,12 @@ RESTORE_ARMED=0
 BUILD_STARTED=0
 PIXI_INSTALL_STARTED=0
 MIGRATION_STARTED=0
+# The dump a failed update restores (step 7, backend stopped), and whether the
+# new version has served since step 8 started it.
+RESTORE_DUMP=""
+RESTORE_DUMP_VERIFIED=0
+NEW_STARTED_AT=""
+NEW_SERVED=0
 # Filled in by step 0a.
 RESTORE_SHA=""
 RESTORE_SHA_SOURCE=""
@@ -475,12 +489,14 @@ restore_pixi() {
     return 1
 }
 
-# Restore this run's dump, as rollback-update.sh step 4 does: db container up,
+# Restore the dump taken in step 7 with the backend stopped (RESTORE_DUMP),
+# never step 5's trial dump, as rollback-update.sh step 4 does: db container up,
 # other sessions ended, the database dropped and recreated, the dump loaded
 # with ON_ERROR_STOP, the container stopped again.
 restore_database() {
     local i
-    echo "→ Restoring the database from $DUMP_FILE ..."
+    [ -n "$RESTORE_DUMP" ] && [ "$RESTORE_DUMP_VERIFIED" -eq 1 ] || return 1
+    echo "→ Restoring the database from $RESTORE_DUMP ..."
     $COMPOSE up -d db || return 1
     for i in $(seq 1 30); do
         if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
@@ -497,7 +513,7 @@ restore_database() {
         -c "CREATE DATABASE \"$DATABASE_NAME\" OWNER \"$DATABASE_USER\";" \
         >/dev/null || return 1
     ( set -o pipefail
-      gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -v ON_ERROR_STOP=1 >/dev/null ) || return 1
+      gunzip -c "$RESTORE_DUMP" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -v ON_ERROR_STOP=1 >/dev/null ) || return 1
     $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
     return 0
 }
@@ -510,10 +526,10 @@ keep_rollback_copy() {
     if cp "$SCRIPT_DIR/rollback-update.sh" "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null \
             && chmod 755 "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null \
             && mv -f "$ROLLBACK_SCRIPT_COPY.tmp" "$ROLLBACK_SCRIPT_COPY" 2>/dev/null; then
-        ROLLBACK_CMD="sudo $ROLLBACK_SCRIPT_COPY --project-root=$PROJECT_ROOT --yes $DUMP_FILE"
+        ROLLBACK_CMD="sudo $ROLLBACK_SCRIPT_COPY --project-root=$PROJECT_ROOT --yes $RESTORE_DUMP"
     else
         rm -f "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null || true
-        ROLLBACK_CMD="sudo $SCRIPT_DIR/rollback-update.sh --yes $DUMP_FILE"
+        ROLLBACK_CMD="sudo $SCRIPT_DIR/rollback-update.sh --yes $RESTORE_DUMP"
     fi
 }
 
@@ -542,8 +558,56 @@ print_restore_summary() {
 # if a migration began, the database too: starting the new code after a failed
 # migration is what left units looping on a backend that refuses an unmigrated
 # schema while this script said they were online.
+# Did the new version serve? It did if it answered /health in step 8. Between
+# two polls it could also have answered a request and then died, so the
+# backend's access log since the start is asked as well, for any request that
+# writes; GETs, from the kiosk or the health check, change nothing.
+new_version_served() {
+    [ "$NEW_SERVED" -eq 1 ] && return 0
+    [ -n "$NEW_STARTED_AT" ] || return 1
+    command -v journalctl >/dev/null 2>&1 || return 1
+    journalctl -u dtk --since "@$NEW_STARTED_AT" -o cat --no-pager 2>/dev/null \
+        | grep -Eq '"(POST|PUT|PATCH|DELETE) [^"]* HTTP/[0-9.]+" [0-9]{3}'
+}
+
+# The new version served and then the update failed. It may have accepted
+# writes since the backup, so nothing is restored automatically and nothing is
+# stopped: restoring the database would discard those writes, and restoring the
+# code alone would put old code over a migrated database.
+report_served_failure() {
+    echo ""
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "  UPDATE FAILED after the new version had started serving"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo ""
+    echo "  The new version ($CURRENT_SHA) is running and has served requests,"
+    echo "  so it may already hold new data. Nothing has been restored and the"
+    echo "  service has been left as it is:"
+    if backend_healthy; then
+        echo "    • dtk service: active, the backend answers /health"
+    else
+        echo "    • dtk service: NOT answering /health (systemctl status dtk)"
+    fi
+    echo "    • database: migrated for the new version, NOT restored"
+    echo ""
+    echo "  To return to the previous version, code and database, run:"
+    echo "      $ROLLBACK_CMD"
+    echo "  ⚠ That restores the backup taken at $(date -r "$RESTORE_DUMP" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo 'the start of the downtime')"
+    echo "    and DISCARDS everything saved since, including work done on the new"
+    echo "    version. Export or note that work first."
+    echo ""
+}
+
 restore_after_stop() {
     local db_ok=1
+    if [ -n "$RESTORE_DUMP" ] && [ "$RESTORE_DUMP_VERIFIED" -eq 0 ]; then
+        rm -f "$RESTORE_DUMP"
+    fi
+    if new_version_served; then
+        keep_rollback_copy
+        report_served_failure
+        return
+    fi
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo "  UPDATE FAILED — restoring the previous version"
@@ -566,7 +630,7 @@ restore_after_stop() {
         echo "    new version."
         if [ "$MIGRATION_STARTED" -eq 1 ]; then
             echo "    The database may be partly or fully migrated and has NOT been"
-            echo "    restored. This run's backup is $DUMP_FILE. Once the reason the"
+            echo "    restored. This run's backup is $RESTORE_DUMP. Once the reason the"
             echo "    code could not move is cleared, this restores code and database:"
             echo "      $ROLLBACK_CMD"
         else
@@ -583,11 +647,11 @@ restore_after_stop() {
     restore_pixi || true
     if [ "$MIGRATION_STARTED" -eq 1 ]; then
         if restore_database; then
-            note_restored "database: restored from this run's backup $DUMP_FILE (taken before the migration)"
+            note_restored "database: restored from this run's backup $RESTORE_DUMP (taken with the backend stopped, before the migration)"
         else
             db_ok=0
             $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
-            note_not_restored "database: the restore from $DUMP_FILE FAILED; the database may be partly migrated or partly restored"
+            note_not_restored "database: the restore from $RESTORE_DUMP FAILED; the database may be partly migrated or partly restored"
         fi
     else
         note_restored "database: untouched (the failure came before any migration ran)"
@@ -618,7 +682,7 @@ restore_after_stop() {
         echo "    answer /health within ${HEALTH_TIMEOUT}s."
         echo "    Check logs:  journalctl -u dtk -n 50"
         if [ "$MIGRATION_STARTED" -eq 1 ]; then
-            echo "    This run's backup is $DUMP_FILE. To restore code and database again:"
+            echo "    This run's backup is $RESTORE_DUMP. To restore code and database again:"
             echo "      $ROLLBACK_CMD"
         fi
     fi
@@ -1367,11 +1431,15 @@ fail_point pixi
 "$SCRIPT_DIR/provision-rclone.sh" --advisory
 
 # ---------------------------------------------------------------------------
-# 5. Pre-migration backup. The old stack is STILL RUNNING and serving, so this
-#    dump is a consistent snapshot of live data before we change anything.
-#    (pg_dump takes a single transactional snapshot, so it is safe to run while
-#    the app is live.) We take and verify the dump BEFORE stopping anything, so
-#    a backup failure aborts the update with the appliance untouched.
+# 5. Trial backup, while the old stack is STILL RUNNING. pg_dump takes one
+#    transactional snapshot, so this is safe on a live database, and a backup
+#    that cannot be written (no space, a broken pg_dump) then aborts the update
+#    with the appliance untouched, before any downtime.
+#
+#    This dump is NOT what a failed update restores: the unit keeps serving
+#    until step 6, and anything written after the snapshot would be lost by
+#    restoring it. The dump the restore uses is taken in step 7, with the
+#    backend stopped, and replaces this one once it is verified.
 # ---------------------------------------------------------------------------
 echo "→ Making sure the database is up so we can back it up..."
 # Probe container state WITHOUT mutating anything. The old unconditional
@@ -1410,7 +1478,8 @@ done
 
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 DUMP_FILE="$BACKUP_DIR/pre-update-$TIMESTAMP.sql.gz"
-echo "→ Backing up the database to:"
+echo "→ Trial backup while the unit still serves (checks pg_dump and free space;"
+echo "  replaced by the backup taken with the backend stopped in step 7):"
 echo "    $DUMP_FILE"
 # Through write_dump: created 0600, and a pg_dump failure fails the line even
 # though gzip exits 0.
@@ -1510,6 +1579,39 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
+# The backup a failed update restores, taken now that nothing writes: the
+# backend is stopped and only the db container runs. Same write_dump (0600
+# from the start) and the same size check as the trial dump in step 5.
+RESTORE_DUMP="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S).sql.gz"
+if [ "$RESTORE_DUMP" = "$DUMP_FILE" ]; then
+    RESTORE_DUMP="$BACKUP_DIR/pre-update-$(date +%Y%m%d-%H%M%S)-stopped.sql.gz"
+fi
+echo "→ Backing up the database with the backend stopped, to:"
+echo "    $RESTORE_DUMP"
+DUMP_STARTED_AT="$(date +%s)"
+write_dump "$RESTORE_DUMP" $COMPOSE exec -T db pg_dump -U "$DATABASE_USER" -d "$DATABASE_NAME"
+RESTORE_DUMP_BYTES="$(wc -c < "$RESTORE_DUMP" | tr -d ' ')"
+if [ "${RESTORE_DUMP_BYTES:-0}" -lt 100 ]; then
+    echo "✗ Backup looks empty (${RESTORE_DUMP_BYTES} bytes) — pg_dump likely failed."
+    echo "  Refusing to migrate without a real backup."
+    exit 1   # EXIT trap removes it; no migration ran, so the database is untouched
+fi
+RESTORE_DUMP_VERIFIED=1
+echo "  ✓ Backup written (${RESTORE_DUMP_BYTES} bytes, $(( $(date +%s) - DUMP_STARTED_AT ))s)."
+# It replaces the trial dump: rollback-update.sh takes the newest dump and the
+# one pre-update-ref names, and both must now be this one.
+if [ -f "$STATE_FILE" ]; then
+    if ! {
+        echo "state: $(basename "$STATE_FILE")"
+        echo "dump: $(basename "$RESTORE_DUMP")"
+    } > "$REF_FILE" 2>/dev/null; then
+        rm -f "$REF_FILE" || true
+    fi
+fi
+rm -f "$DUMP_FILE"
+DUMP_FILE="$RESTORE_DUMP"
+fail_point dumped
+
 echo "→ Applying migrations..."
 cd "$PROJECT_ROOT/backend"
 # Set before the call: a migration that fails part-way can leave the database
@@ -1529,11 +1631,16 @@ echo ""
 # 8. Restart the service on the new version.
 # ---------------------------------------------------------------------------
 echo "→ Starting service..."
+NEW_STARTED_AT="$(date +%s)"
 systemctl start dtk
 fail_point started
 echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
 if wait_for_health "$HEALTH_TIMEOUT"; then
+    # From here the new version has served, and may have accepted writes: a
+    # failure no longer restores the database automatically.
+    NEW_SERVED=1
     echo "  Service running and the backend answers /health ✓"
+    fail_point served
 else
     echo "✗ The new version did not come up: the backend did not answer /health"
     echo "  within ${HEALTH_TIMEOUT}s."

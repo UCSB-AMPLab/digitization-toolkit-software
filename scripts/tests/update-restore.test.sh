@@ -90,7 +90,14 @@ echo "systemctl $*" >> "$CASE_DIR/log"
 S="$CASE_DIR/sys"
 case "$1" in
     is-active) [ -f "$S/active" ] ;;
-    stop) rm -f "$S/active"; exit 0 ;;
+    stop)
+        # The old version serves until here: a write it accepted after the
+        # trial dump must survive a restore.
+        if [ -f "$S/active" ] && [ -n "${FAKE_WRITE_BEFORE_STOP:-}" ] && [ ! -f "$S/wrote" ]; then
+            echo "row written at $(date +%s) before the stop" >> "$CASE_DIR/db_rows"
+            touch "$S/wrote"
+        fi
+        rm -f "$S/active"; exit 0 ;;
     start)
         cat "$PROJECT_ROOT/VERSION" >> "$S/started"
         touch "$S/active" "$CASE_DIR/docker/db_running"
@@ -173,7 +180,14 @@ if [ "$1" = compose ]; then
             shift   # service
             case "$1" in
                 pg_isready) exit 0 ;;
-                pg_dump) echo "-- dump of the database at schema A"; seq 1 300 ;;
+                pg_dump)
+                    n=$(( $(cat "$CASE_DIR/dumps" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CASE_DIR/dumps"
+                    if [ -n "${FAKE_DUMP_FAIL_AT:-}" ] && [ "$n" = "$FAKE_DUMP_FAIL_AT" ]; then
+                        echo "pg_dump: error" >&2; exit 1
+                    fi
+                    echo "-- dump $n of the database at schema A"
+                    cat "$CASE_DIR/db_rows" 2>/dev/null
+                    seq 1 300 ;;
                 psql)
                     if [ -t 0 ]; then :; else
                         input="$(cat)"
@@ -203,6 +217,12 @@ case "$1" in
 esac
 exit 0
 EOF
+cat > "$FAKEBIN/journalctl" <<'EOF2'
+#!/bin/sh
+echo "journalctl $*" >> "$CASE_DIR/log"
+[ -n "${FAKE_JOURNAL:-}" ] && printf '%s\n' "$FAKE_JOURNAL"
+exit 0
+EOF2
 chmod +x "$FAKEBIN"/*
 export FAKEBIN OLD_IMG NEW_IMG
 
@@ -311,6 +331,10 @@ hasnt "Restored to the previous version"
 eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
 eq "$(sed -n 's/^image: //p' "$DTK_TEST_STATE/backups/last-deployed-frontend")" "$NEW_IMG" "last-deployed-frontend names the new image"
 eq "$(cat "$CASE_DIR/docker/tag_dtk-frontend_pre-update-"* 2>/dev/null)" "$OLD_IMG" "the old image is kept under a pre-update tag"
+eq "$(cat "$CASE_DIR/dumps")" 2 "two dumps taken: the trial and the one with the backend stopped"
+eq "$(ls "$DTK_TEST_STATE/backups"/pre-update-*.sql.gz | wc -l | tr -d ' ')" 1 "only the stopped-backend dump is kept"
+eq "$(sed -n 's/^dump: //p' "$DTK_TEST_STATE/backups/pre-update-ref")" "$(basename "$(dump_name)")" "pre-update-ref names it"
+if gunzip -c "$(dump_name)" | grep -q "^-- dump 2 "; then ok "the kept dump is the second"; else fail "the kept dump is not the second"; fi
 
 # ── Failure in the frontend build (before the stop) ─────────────────────────
 FAKE_BUILD_FAIL=1 run_case "build fails" --yes
@@ -366,17 +390,22 @@ has "code: $SHA_A"
 hasnt "Nothing changed."
 
 # ── Failure in the migration ────────────────────────────────────────────────
-FAKE_MIGRATE_FAIL=1 run_case "migration fails" --yes
+FAKE_MIGRATE_FAIL=1 FAKE_WRITE_BEFORE_STOP=1 run_case "migration fails" --yes
 eq "$RC" 1 "exit status"
 head_is "$SHA_A" A
 backend_is "$BACKEND_A" A
 tag_is "$OLD_IMG" "the old image"
 eq "$(cat "$CASE_DIR/pixi_env")" "lock-A" "pixi environment is A's again"
 db_is restored
-if grep -q "dump of the database at schema A" "$CASE_DIR/restored.sql" 2>/dev/null; then
-    ok "the database was loaded from this run's dump"
+if grep -q "^-- dump 2 of the database at schema A" "$CASE_DIR/restored.sql" 2>/dev/null; then
+    ok "the database was loaded from the dump taken with the backend stopped"
 else
-    fail "the database was not loaded from this run's dump"
+    fail "the database was not loaded from the dump taken with the backend stopped"
+fi
+if grep -q "before the stop" "$CASE_DIR/restored.sql" 2>/dev/null; then
+    ok "a write accepted after the trial dump, before the stop, survives the restore"
+else
+    fail "a write accepted after the trial dump, before the stop, was lost"
 fi
 logged "DROP DATABASE IF EXISTS"
 started "A A "
@@ -406,6 +435,48 @@ started "A B A "
 hasnt "back online"
 has "The previous version did NOT come back up"
 has "--yes $(dump_name)"
+
+# ── The dump with the backend stopped fails: no migration, database untouched ─
+FAKE_DUMP_FAIL_AT=2 run_case "stopped-backend dump fails" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+db_is schema-A
+unlogged "DROP DATABASE"
+unlogged "pixi run db-upgrade"
+started "A A "
+active
+has "database: untouched"
+has "back online on the previous version"
+
+# ── The new version served, then the update failed ──────────────────────────
+DTK_UPDATE_FAIL_AT=served run_case "fails after serving" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_B" "B (left running)"
+db_is migrated
+unlogged "DROP DATABASE"
+started "A B "
+active
+has "after the new version had started serving"
+has "database: migrated for the new version, NOT restored"
+has "--yes $(dump_name)"
+has "DISCARDS everything saved since"
+hasnt "back online"
+
+# ── /health never answered, but the access log shows a write ────────────────
+FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL='INFO:     172.30.0.4:5000 - "POST /projects/ HTTP/1.1" 201 Created' \
+    run_case "write in the log without /health" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_B" "B (left running)"
+db_is migrated
+unlogged "DROP DATABASE"
+has "after the new version had started serving"
+
+FAKE_HEALTHY_VERSIONS="A" FAKE_JOURNAL='INFO:     172.30.0.4:5000 - "GET /projects/ HTTP/1.1" 200 OK' \
+    run_case "only reads in the log" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+db_is restored
+has "back online on the previous version"
 
 # ── Restore fails: the code cannot be moved back ────────────────────────────
 FAKE_MIGRATE_FAIL=1 FAKE_DIRTY_ON_MIGRATE=1 run_case "code restore refused" --yes
