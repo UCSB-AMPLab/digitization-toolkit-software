@@ -57,6 +57,21 @@ systemctl enable dtk-secrets.service >/dev/null
 # next boot could spread identical secrets that every clone then adopts.
 systemctl start dtk-secrets.service
 
+echo "→ Installing the unresolved-update start condition..."
+# While /etc/dtk/unresolved-deployment exists (update.sh writes it with its
+# unresolved-deployment record), systemd does not start dtk, on a boot or a
+# restart. update.sh and rollback-update.sh write the same drop-in; installing
+# it here means a unit is covered before its first update.
+mkdir -p "$SYSTEMD_DIR/dtk.service.d"
+install -m 0644 "$SCRIPT_DIR/dtk-unresolved.conf" "$SYSTEMD_DIR/dtk.service.d/unresolved.conf"
+mkdir -p /etc/dtk
+chown root:root /etc/dtk
+chmod 0700 /etc/dtk
+if [ -e /etc/dtk/unresolved-deployment ]; then
+    echo "  ⚠ /etc/dtk/unresolved-deployment exists: an update was left unresolved, and"
+    echo "    dtk will not start until it is. See /var/lib/dtk/backups/unresolved-deployment."
+fi
+
 echo "→ Configuring storage mount permissions..."
 # install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);
 # it must NOT be chowned to pi — see the ownership invariant in that script.

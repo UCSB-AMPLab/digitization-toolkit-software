@@ -788,6 +788,14 @@ stop_before_restore() {
     if code_never_moved; then
         echo "  The code never moved: the unit is still on $PREV_SUPER."
         rm -f "$ROLLBACK_MARKER"
+        if [ -e "$UNRESOLVED_FLAG" ]; then
+            echo "  The appliance is NOT started: $UNRESOLVED_FLAG exists (an update"
+            echo "  was left unresolved, $UNRESOLVED_FILE), and systemd does not start"
+            echo "  dtk while it does."
+            echo ""
+            echo "  Clear what is named above and run this script again."
+            exit 1
+        fi
         echo "→ Starting the appliance..."
         systemctl start dtk || true
         sleep 5

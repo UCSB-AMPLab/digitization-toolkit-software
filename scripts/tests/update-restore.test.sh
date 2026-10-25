@@ -914,6 +914,18 @@ eq "$RC" 0 "exit status"
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the start flag remains"; else ok "the start flag is removed"; fi
 active
 
+CASE="the drop-in update.sh writes is the one install-service.sh installs"
+eq "$(cat "$DTK_TEST_STATE/systemd/dtk.service.d/unresolved.conf")" \
+   "$(sed "$TESTPATHS" "$SCRIPTS/dtk-unresolved.conf" | sed "s#\$DTK_TEST_STATE#$DTK_TEST_STATE#g")" "same content"
+for f in install-service.sh; do
+    if grep -q 'dtk-unresolved.conf' "$SCRIPTS/$f"; then ok "$f installs it"; else fail "$f does not install it"; fi
+done
+if grep -q 'dtk.service.d/unresolved.conf' "$SCRIPTS/uninstall-service.sh" && grep -q 'rm -rf /etc/dtk' "$SCRIPTS/uninstall-service.sh"; then
+    ok "uninstall-service.sh removes it and /etc/dtk"
+else
+    fail "uninstall-service.sh does not remove it and /etc/dtk"
+fi
+
 run_case "success leaves no flag" --yes
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
 no_marker
