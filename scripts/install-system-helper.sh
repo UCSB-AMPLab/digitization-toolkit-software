@@ -2,9 +2,10 @@
 # install-system-helper.sh — install the scoped privileged helper and its
 # single sudoers entry. Idempotent: safe to re-run.
 #
-# It replaces the old open-ended sudoers rule (mount/umount/mkdir/chown with
-# NOPASSWD) with exactly one allowed command: /usr/local/bin/dtk-system-helper,
-# which validates its arguments and confines all effects to /var/lib/dtk/mounts.
+# The sudoers entry allows exactly one command, /usr/local/bin/dtk-system-helper,
+# which validates its arguments and confines all effects to /var/lib/dtk/mounts,
+# rather than open-ended NOPASSWD mount/umount/mkdir/chown, each of which is a
+# root escalation primitive (see the threat model in dtk-system-helper).
 #
 # Called by setup.sh and install-service.sh; can also be run standalone:
 #   sudo ./scripts/install-system-helper.sh

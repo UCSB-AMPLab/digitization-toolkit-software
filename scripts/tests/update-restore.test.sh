@@ -923,7 +923,7 @@ FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 run_case "restored update.sh has the gua
 marker_has "kind: restore-failed"
 hasnt "DO NOT RUN scripts/update.sh"
 
-# ── 1. Signals, and records before irreversible steps ───────────────────────
+# ── Signals, and records before irreversible steps ───────────────────────
 FAKE_HUP_ON_MIGRATE=1 run_case "SIGHUP during the migration" --yes
 eq "$RC" 129 "exit status (129, never 0)"
 head_is "$SHA_A" A
@@ -949,7 +949,7 @@ run_again "$PROJECT_ROOT/scripts/update.sh" --yes
 eq "$RC" 1 "exit status"
 has "An earlier update was left unresolved"
 
-# ── 2. The start flag and drop-in ───────────────────────────────────────────
+# ── The start flag and drop-in ───────────────────────────────────────────
 FAKE_HEALTHY_VERSIONS="A" run_case "the flag keeps dtk from starting" --yes
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag exists"; else fail "no start flag"; fi
 eq "$(cat "$DTK_TEST_STATE/systemd/dtk.service.d/unresolved.conf" 2>/dev/null | grep ConditionPathExists)" \
@@ -994,7 +994,7 @@ run_case "success leaves no flag" --yes
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
 no_marker
 
-# ── 3. --no-pull with no usable deploy record: no restore target ────────────
+# ── --no-pull with no usable deploy record: no restore target ────────────
 setup_no_pull_case() {  # setup_no_pull_case <dir-name> [last-deployed-SHA content]
     CASE_DIR="$WORK/cases/$1"
     mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
@@ -1040,7 +1040,7 @@ DTK_UPDATE_FAIL_AT=build run_no_pull
 head_is "$SHA_A" A
 has "code: $SHA_A (the last deployed version)"
 
-# ── 4/5. rollback-update.sh refusals ────────────────────────────────────────
+# ── rollback-update.sh refusals ────────────────────────────────────────
 FAKE_HEALTHY_VERSIONS="A" run_case "rollback with a backend that will not stop" --yes
 CASE="rollback with a backend that will not stop: the rollback"
 FAKE_PGREP_STUCK=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
@@ -1059,7 +1059,7 @@ has "a backend was running; nothing was dropped"
 marker_has "kind: restore-refused"
 inactive
 
-# ── 6. Partial code restore: superproject back, a submodule not ─────────────
+# ── Partial code restore: superproject back, a submodule not ─────────────
 FAKE_MIGRATE_FAIL=1 FAKE_LOCK_SUBMODULE_ON_MIGRATE=1 run_case "partial code restore" --yes
 eq "$RC" 1 "exit status"
 head_is "$SHA_A" "A (superproject)"
@@ -1081,7 +1081,7 @@ db_is restored
 no_marker
 active
 
-# ── 8/10. --resolve-forward checks ──────────────────────────────────────────
+# ── --resolve-forward checks ──────────────────────────────────────────
 FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward with a backend process left" --yes
 CASE="resolve forward with a backend process left: resolve"
 FAKE_PGREP_STUCK=1 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
@@ -1147,7 +1147,7 @@ no_marker
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
 active
 
-# ── 3. After step 8 starts B: the record says so, flag or not ───────────────
+# ── After step 8 starts B: the record says so, flag or not ───────────────
 FAKE_KILL_ON_HEALTH=1 run_case "power cut while waiting for health" --yes
 marker_has "kind: started-failed"
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag exists"; else ok "no start flag (B was started)"; fi
@@ -1182,7 +1182,7 @@ else
     fail "no failure log with the trap's output"
 fi
 
-# ── 4. A flag without a record ──────────────────────────────────────────────
+# ── A flag without a record ──────────────────────────────────────────────
 CASE_DIR="$WORK/cases/record_cannot_be_written_before_the_migration"; mkdir -p "$CASE_DIR"
 export DTK_TEST_STATE="$CASE_DIR/state"
 mkdir -p "$DTK_TEST_STATE/backups/unresolved-deployment.tmp"   # blocks the record's write
@@ -1205,7 +1205,7 @@ has "exists without its record"
 has "sudo rm $DTK_TEST_STATE/etc-dtk/unresolved-deployment"
 unlogged "git"
 
-# ── 5. The pull path with no deploy record: the rollback target is recorded ─
+# ── The pull path with no deploy record: the rollback target is recorded ─
 CASE_DIR="$WORK/cases/pull-no-record"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
 PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT; cp -R "$TEMPLATE" "$PROJECT_ROOT"
 export DTK_TEST_STATE="$CASE_DIR/state"; mkdir -p "$DTK_TEST_STATE/backups"
@@ -1225,7 +1225,7 @@ db_is restored
 no_marker
 active
 
-# ── 6. A refused restore has its own kind ───────────────────────────────────
+# ── A refused restore has its own kind ───────────────────────────────────
 FAKE_MIGRATE_FAIL=1 FAKE_PGREP_STUCK_AFTER_MIGRATE=1 run_case "restore refused, its record" --yes
 marker_has "kind: restore-refused"
 marker_has "code-commit: $SHA_A"
@@ -1239,7 +1239,7 @@ run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
 eq "$RC" 1 "exit status"
 has "kind: restore-refused"
 
-# ── 7. --resolve-forward --no-start ─────────────────────────────────────────
+# ── --resolve-forward --no-start ─────────────────────────────────────────
 FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward without starting" --yes
 CASE="resolve forward without starting: resolve"
 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward --no-start
@@ -1481,7 +1481,7 @@ eq "$RC" 0 "exit status"
 head_is "$SHA_B" B
 hasnt "✗ --no-pull"
 
-# The pull path is unchanged: a local modification is set aside, not refused.
+# On the pull path a local modification is set aside, not refused.
 run_case "pull path with a modified tracked file" --yes   # builds the case
 echo "hand edit" >> "$PROJECT_ROOT/README"
 CASE="pull path with a modified tracked file: run"
@@ -1660,7 +1660,7 @@ if grep -qx "# dump-check: not possible; every volume with a stem directory is l
 list_has "7\tLibro 7\tlibro-7\tunknown\t-\t$DTK_TEST_STATE/projects/libro-7"
 stems_untouched
 
-# P2: a current database from before the stem migration, no filename_stem.
+# A current database from before the stem migration, no filename_stem.
 FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
 FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N" \
     stem_case "current database without filename_stem, paths present"

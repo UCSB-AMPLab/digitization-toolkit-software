@@ -26,7 +26,6 @@ WorkingDirectory=/home/pi/dtk
 # Ensure pixi and docker are on PATH (systemd uses a stripped environment)
 Environment="PATH=/home/pi/.pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-# Start the application
 ExecStart=/home/pi/dtk/scripts/start.sh
 ExecStop=/home/pi/dtk/scripts/stop.sh
 
@@ -40,11 +39,9 @@ ExecStop=/home/pi/dtk/scripts/stop.sh
 # later is handled by the compose restart policy.
 ExecStartPost=/home/pi/dtk/scripts/check-stack-health.sh
 
-# Restart policy
 Restart=on-failure
 RestartSec=10s
 
-# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=dtk

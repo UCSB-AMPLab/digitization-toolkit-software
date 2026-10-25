@@ -14,7 +14,6 @@ echo "Installing Digitization Toolkit Service"
 echo "=========================================="
 echo ""
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "⚠ This script must be run with sudo"
     echo "Usage: sudo ./scripts/install-service.sh"
@@ -36,7 +35,6 @@ if ! docker image inspect dtk-frontend >/dev/null 2>&1; then
     exit 1
 fi
 
-# Check if service file exists
 if [ ! -f "$SERVICE_FILE" ]; then
     echo "✗ Service file not found: $SERVICE_FILE"
     exit 1

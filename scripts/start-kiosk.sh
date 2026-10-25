@@ -8,7 +8,6 @@ echo ""
 echo "To exit: Press Ctrl+Alt+F2, then run 'pkill cage'"
 echo ""
 
-# Wait for frontend to be ready
 echo -n "Waiting for frontend at http://localhost:3000..."
 until curl -sSf http://localhost:3000 >/dev/null 2>&1; do
   echo -n "."
@@ -20,7 +19,6 @@ echo ""
 echo "Launching Chromium kiosk..."
 echo ""
 
-# Launch Cage with Chromium in kiosk mode
 # Cage automatically makes the app fullscreen
 exec cage -- chromium-browser \
   --kiosk \
