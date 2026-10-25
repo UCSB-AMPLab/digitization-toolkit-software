@@ -149,15 +149,18 @@ set +x
 # ── THE FISQUA LINK ─────────────────────────────────────────────────────────
 #
 # Two more keys, for the unit's calls to Fisqua, whose base URL is
-# https://<tenant>.fisqua.org:
+# https://<tenant>.fisqua.org in production and
+# https://<tenant>.staging.fisqua.org in staging:
 #
 #   DTK_FISQUA_TOKEN  this unit's token, from a FISQUA_TOKEN= line in the key
 #                     file named by DTK_OFFSITE_KEY_FILE, and from nowhere
 #                     else. Handled as the B2 application keys are: never
 #                     printed, never in a diagnostic, never on an argument
 #                     list, and refused unprinted when it is outside
-#                     FISQUA_TOKEN_RULE. Refused when no tenant is given or
-#                     recorded, since the base URL is built from the tenant.
+#                     FISQUA_TOKEN_RULE. Refused when no tenant or no Fisqua
+#                     environment is given or recorded, since the base URL is
+#                     built from both; without either the backend would hold
+#                     a token and stay unconfigured without saying so.
 #                     Not taken under --advisory, for the read key's reason
 #                     (see 2.2b).
 #   DTK_FISQUA_ENV    --fisqua-env production|staging.
@@ -682,24 +685,20 @@ valid_age_recipient() {
 }
 RECIPIENT_RULE="an age X25519 public key: age1 and 58 more bech32 characters (62 in all), one case throughout, with a valid checksum"
 
-# DTK_FISQUA_TOKEN. Fisqua's token format has not been agreed (backend
-# app/core/fisqua_outbox.py), so the class is not Fisqua's rule: it is the
-# conservative one this file can hold. The value goes into offsite.env,
-# which python-dotenv reads, and every character outside this class means
-# something to some parser on the way: whitespace ends or pads a value, a
-# quote starts a quoted one, '#' after whitespace starts a comment, '$'
-# starts an interpolation, '\' an escape, and '=' is refused because it is
-# the separator. What is left covers hex, base64url and dotted tokens. The
-# length floor turns away a placeholder left in the key file ('...', 'TODO').
-# It is the offsite.env value class, so the backstop in write_offsite_env and
-# the whole-file reader apply to it unchanged.
-# The length is checked apart from the class: a regex bound above 255
-# (RE_DUP_MAX) does not compile on every platform's regex library.
+# DTK_FISQUA_TOKEN, by Fisqua's rule: contract 1.2, section 9, issues each
+# unit a token of 32 random bytes written as 64 lowercase hex characters.
+# Exactly that, so a token with a character lost or gained in the paste, or
+# one changed to upper case, is refused here rather than becoming a 401 in the
+# backend's log. Hex lies inside the offsite.env value class, so the backstop
+# in write_offsite_env and the whole-file reader apply to it unchanged.
+#
+# The digits and letters are spelled out rather than written as ranges, for
+# the reason valid_tenant gives: a bracket range follows the locale's
+# collation, and under some locales [a-f] admits upper case.
 valid_fisqua_token() {
-    holds_age_secret_key "$1" && return 1
-    [ "${#1}" -ge 16 ] && [ "${#1}" -le 4096 ] && [[ "$1" =~ ^[A-Za-z0-9._:/+-]+$ ]]
+    [[ "$1" =~ ^[0123456789abcdef]{64}$ ]]
 }
-FISQUA_TOKEN_RULE="16 to 4096 characters of letters, digits, and . _ : / + - only (no whitespace, quotes, = \$ # or \\)"
+FISQUA_TOKEN_RULE="exactly 64 lowercase hexadecimal characters (0-9, a-f), as Fisqua issues it"
 # DTK_FISQUA_ENV: one of two words, spelled exactly.
 valid_fisqua_env() { [ "$1" = production ] || [ "$1" = staging ]; }
 FISQUA_ENV_RULE="production or staging"
@@ -2671,12 +2670,12 @@ print_key_instructions() {
     echo ""
     echo "  Sending capture manifests to Fisqua needs this unit's Fisqua token,"
     echo "  also optional:"
-    echo "    FISQUA_TOKEN  the token Fisqua issued for this unit; letters,"
-    echo "                  digits and . _ : / + - only"
-    echo "  It is written to offsite.env as DTK_FISQUA_TOKEN, needs a tenant"
-    echo "  (the calls go to https://<tenant>.fisqua.org), and is read from the"
-    echo "  key file only. --fisqua-env production or --fisqua-env staging"
-    echo "  says which Fisqua the unit calls."
+    echo "    FISQUA_TOKEN  the token Fisqua issued for this unit: exactly 64"
+    echo "                  lowercase hexadecimal characters"
+    echo "  It is written to offsite.env as DTK_FISQUA_TOKEN and is read from"
+    echo "  the key file only. It needs a tenant and a Fisqua environment:"
+    echo "  --fisqua-env production calls https://<tenant>.fisqua.org, and"
+    echo "  --fisqua-env staging calls https://<tenant>.staging.fisqua.org."
     echo ""
     echo "  Put them in a file only root can read, and point this script at it:"
     echo "    sudo install -m 0600 /dev/null /root/dtk-offsite-key"
@@ -2865,14 +2864,29 @@ if [ -n "$FISQUA_TOKEN_GIVEN" ]; then
     fi
     FISQUA_TOKEN_FINAL="$FISQUA_TOKEN_GIVEN"
 fi
-# The base URL is https://<tenant>.fisqua.org, so a token with no tenant is a
-# token for no site. Refused whether it was given now or recorded before.
+# The base URL is https://<tenant>.fisqua.org (staging:
+# https://<tenant>.staging.fisqua.org), so a token with no tenant is a token
+# for no site. Refused whether it was given now or recorded before.
 if [ -n "$FISQUA_TOKEN_FINAL" ] && [ -z "$TENANT_FINAL" ]; then
     echo "✗ rclone: refusing the Fisqua token: this unit has no tenant prefix,"
     echo "  given with --tenant or recorded in $OFFSITE_ENV_PATH, and the"
-    echo "  unit's calls to Fisqua go to https://<tenant>.fisqua.org. The token"
+    echo "  unit's calls to Fisqua go to https://<tenant>.fisqua.org, or"
+    echo "  https://<tenant>.staging.fisqua.org in staging. The token"
     echo "  is not printed. No credential was written and $OFFSITE_ENV_PATH"
     echo "  was not changed. Re-run with --tenant NAME beside the key file."
+    provision_failed
+fi
+# The same for the environment: the host is <tenant>.fisqua.org or
+# <tenant>.staging.fisqua.org, and with neither recorded the backend would
+# hold a token it has no URL for, and say nothing.
+if [ -n "$FISQUA_TOKEN_FINAL" ] && [ -z "$FISQUA_ENV_FINAL" ]; then
+    echo "✗ rclone: refusing the Fisqua token: no Fisqua environment is given"
+    echo "  with --fisqua-env or recorded in $OFFSITE_ENV_PATH, and the"
+    echo "  environment decides the host the unit calls:"
+    echo "  https://<tenant>.fisqua.org or https://<tenant>.staging.fisqua.org."
+    echo "  The token is not printed. No credential was written and"
+    echo "  $OFFSITE_ENV_PATH was not changed. Re-run with"
+    echo "  --fisqua-env production or --fisqua-env staging beside the key file."
     provision_failed
 fi
 
