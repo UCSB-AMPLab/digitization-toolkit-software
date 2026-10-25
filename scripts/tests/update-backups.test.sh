@@ -1,6 +1,7 @@
 #!/bin/bash
 # Tests for the permissions of the pre-update backups that scripts/update.sh
-# writes under /var/lib/dtk/backups.
+# writes under /var/lib/dtk/backups, and for one line of rollback-update.sh's
+# summary.
 #
 #   bash scripts/tests/update-backups.test.sh
 #
@@ -21,6 +22,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS="$(dirname "$HERE")"
 UPDATE="$SCRIPTS/update.sh"
+ROLLBACK="$SCRIPTS/rollback-update.sh"
 SETUP="$SCRIPTS/setup.sh"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/update-backups-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -84,6 +86,7 @@ fresh() {  # fresh <case name>: a new BACKUP_DIR under WORK, not yet created
 
 # ── Functions under test ────────────────────────────────────────────────────
 load "$UPDATE" secure_backup_dir tighten_existing_dumps write_dump || exit 1
+load "$ROLLBACK" frontend_rebuilt_detail || exit 1
 
 # The shell's umask is the one a root shell normally has, so a file the
 # script does not protect comes out 0644 as it did on the bench unit.
@@ -221,6 +224,34 @@ if grep -E '^install -d .*-o root .*-m 0700 .*/var/lib/dtk/backups' "$SETUP" >/d
     ok "creates /var/lib/dtk/backups as root, 0700"
 else
     fail "setup.sh does not create /var/lib/dtk/backups as root 0700: $(grep -n 'var/lib/dtk/backups' "$SETUP" | head -n 1)"
+fi
+
+# ── Rollback summary ────────────────────────────────────────────────────────
+CASE="rollback frontend line"
+A=1111111111111111111111111111111111111111
+B=2222222222222222222222222222222222222222
+d="$(frontend_rebuilt_detail "$A" "$A")"
+case "$d" in
+    *"same commit"*) ok "same commit: '$d'" ;;
+    *) fail "same commit gave '$d'" ;;
+esac
+case "$d" in *newer*) fail "same commit still says newer: '$d'" ;; esac
+d="$(frontend_rebuilt_detail "$B" "$A")"
+case "$d" in
+    *"newer code"*) ok "different commit: '$d'" ;;
+    *) fail "different commit gave '$d'" ;;
+esac
+for unknown in "" unknown; do
+    d="$(frontend_rebuilt_detail "$unknown" "$A")"
+    case "$d" in
+        *newer*|*"same commit"*) fail "unrecorded install ('$unknown') claimed: '$d'" ;;
+        *) ok "unrecorded install ('$unknown'): '$d'" ;;
+    esac
+done
+if grep -n 'IMG_DETAIL="the frontend image was rebuilt from the newer code"' "$ROLLBACK" >/dev/null; then
+    fail "the summary still hard-codes 'rebuilt from the newer code'"
+else
+    ok "the summary takes its wording from frontend_rebuilt_detail"
 fi
 
 echo ""
