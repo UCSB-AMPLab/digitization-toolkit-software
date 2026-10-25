@@ -1582,6 +1582,68 @@ db_is restored
 no_marker
 active
 
+# ── The db container the guard started is stopped on every abort ──────────
+# run_tty <reply|EOF> <command...>: run the command on a pseudo-terminal, as
+# an operator at the unit would, and answer its confirmation prompt with
+# <reply>, or close the input (EOF) so that the read fails. OUT and RC as
+# run_again.
+run_tty() {
+    local answer="$1"; shift
+    : > "$CASE_DIR/log"
+    OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 python3 -I -c '
+import os, pty, sys, select, time
+answer = sys.argv[1]; argv = sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+out = b""; sent = False; deadline = time.time() + 120
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if r:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out += chunk
+    if not sent and b"Proceed with rollback?" in out:
+        os.write(fd, b"\x04" if answer == "EOF" else (answer + "\n").encode())
+        sent = True
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(out.decode("utf-8", "replace"))
+sys.exit(os.waitstatus_to_exitcode(status))
+' "$answer" bash "$@" 2>&1)"
+    RC=$?
+    echo "$OUT" >> "$CASE_DIR/out"
+}
+guard_db_stopped() {
+    logged "up -d --no-recreate db"
+    if [ -f "$CASE_DIR/docker/db_running" ]; then fail "the db container the guard started is still running"; else ok "the db container the guard started is stopped"; fi
+}
+for abort in no-terminal declined read-fails; do
+    stem_case "guard-started db, rollback aborted: $abort"
+    rm -f "$CASE_DIR/docker/db_running" "$CASE_DIR/sys/active"
+    CASE="guard-started db, rollback aborted: $abort"
+    case "$abort" in
+        no-terminal) run_again "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)"
+                     has "No terminal to confirm on" ;;
+        declined)    run_tty n "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)"
+                     has "Aborted by operator" ;;
+        read-fails)  run_tty EOF "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)" ;;
+    esac
+    eq "$RC" 1 "exit status"
+    guard_db_stopped
+    unlogged "psql DROP"
+done
+stem_case "guard-started db, rollback confirmed"
+rm -f "$CASE_DIR/docker/db_running" "$CASE_DIR/sys/active"
+CASE="guard-started db, rollback confirmed"
+run_tty y "$PROJECT_ROOT/scripts/rollback-update.sh" "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+active
+
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
 rm -rf "$CASE_DIR"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"

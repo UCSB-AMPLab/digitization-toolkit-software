@@ -817,6 +817,11 @@ if ! printf '%s\n' "$RUNNING_DB" | grep -qx db; then
     # Only the db container, as update.sh does for its backup; stopped again
     # below if the rollback is refused.
     STEM_DB_STARTED=1
+    # Until the rollback is confirmed and step 2 takes over the containers,
+    # every exit stops it again: a refusal, a declined confirmation, no
+    # terminal, a failed read. Cleared before step 2; no other EXIT trap
+    # is set in this script.
+    trap 'stem_guard_db_down' EXIT
     $COMPOSE up -d --no-recreate db >/dev/null 2>&1 || stem_guard_refuse_unanswered "the db container could not be started"
 fi
 # The server is asked through the maintenance database, postgres: a restore
@@ -953,6 +958,9 @@ if [ "$ASSUME_YES" -ne 1 ]; then
         *) echo ""; echo "Aborted by operator. Nothing changed."; exit 1 ;;
     esac
 fi
+
+# Confirmed: step 2 below takes the containers down itself.
+trap - EXIT
 
 # ---------------------------------------------------------------------------
 # 2. Stop the appliance.
