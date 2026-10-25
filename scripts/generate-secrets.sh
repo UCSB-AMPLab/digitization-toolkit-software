@@ -129,9 +129,16 @@ BOOTSTRAP_TOKEN="$(get_env BOOTSTRAP_TOKEN || true)"
 DB_USER="$(get_env DATABASE_USER || true)"; DB_USER="${DB_USER:-user}"
 DB_NAME="$(get_env DATABASE_NAME || true)"; DB_NAME="${DB_NAME:-digitization_toolkit}"
 
+# Every value the repo ships or has shipped, so a card set up from any of them
+# gets its own secrets instead of keeping one known to every unit. SECRET_KEY:
+# .env.example now and before 2026-07-25, the backend's built-in default, and
+# the example in docs/developers/API_REFERENCE.md. DATABASE_PASSWORD:
+# .env.example now and before 2026-01-10, which is also the compose default.
+# The backend's _INSECURE_SECRET_KEYS and _INSECURE_DB_PASSWORDS
+# (app/core/config.py) are the other half of this and should hold the same set.
 is_placeholder_secret() {
     case "$1" in
-        ""|"your-secret-key-here-change-in-production"|"dev-secret-change-me") return 0 ;;
+        ""|"secret-key-here-change-in-production"|"your-secret-key-here-change-in-production"|"dev-secret-change-me"|"change-this-to-a-random-string") return 0 ;;
         *) return 1 ;;
     esac
 }
