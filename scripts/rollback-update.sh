@@ -83,6 +83,12 @@ LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
 # removes them; nothing else here does.
 UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
 UNRESOLVED_FLAG="/etc/dtk/unresolved-deployment"
+UNRESOLVED_FLAG_DIR="/etc/dtk"
+UNRESOLVED_DROPIN="/etc/systemd/system/dtk.service.d/unresolved.conf"
+# Set when this run found a record before it began. A record this run writes
+# itself (before its DROP) is cleared when its own load is verified.
+HAD_RECORD=0
+[ -e "$UNRESOLVED_FILE" ] && HAD_RECORD=1
 # Written just before the code moves and removed once the move is verified. On
 # a later run its presence means a move to the commit it names was
 # interrupted, so a tree that is part-way there is the expected state and not
@@ -214,6 +220,22 @@ backend_fully_stopped() {
     pid="$(systemctl show dtk -p MainPID --value 2>/dev/null)"
     [ -z "$pid" ] || [ "$pid" = 0 ] || return 1
     ! pgrep -f '[u]vicorn app[.]main:app' >/dev/null 2>&1
+}
+# The drop-in update.sh installs (UNRESOLVED_DROPIN there): written when
+# missing or different, always followed by a daemon-reload.
+ensure_unresolved_dropin() {
+    local want
+    want="$(printf '%s\n' \
+        "# Written by scripts/update.sh. While $UNRESOLVED_FLAG exists an update" \
+        "# was left unresolved (see $UNRESOLVED_FILE) and dtk must not start." \
+        "[Unit]" \
+        "ConditionPathExists=!$UNRESOLVED_FLAG")"
+    if [ "$(cat "$UNRESOLVED_DROPIN" 2>/dev/null)" != "$want" ]; then
+        mkdir -p "$(dirname "$UNRESOLVED_DROPIN")" \
+            && printf '%s\n' "$want" > "$UNRESOLVED_DROPIN.tmp" \
+            && mv -f "$UNRESOLVED_DROPIN.tmp" "$UNRESOLVED_DROPIN" || return 1
+    fi
+    systemctl daemon-reload
 }
 wait_backend_stopped() {
     local i
@@ -640,7 +662,7 @@ fi
 # so it is refused here, with nothing changed.
 if [ -e "$UNRESOLVED_FILE" ]; then
     REC_KIND="$(sed -n 's/^kind: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
-    if [ "$REC_KIND" = restore-failed ]; then
+    if [ "$REC_KIND" = restore-failed ] || [ "$REC_KIND" = restore-refused ]; then
         REC_TARGET="$(sed -n 's/^code-commit: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
         REC_DUMP="$(sed -n 's/^dump-to-restore: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
     else
@@ -648,7 +670,12 @@ if [ -e "$UNRESOLVED_FILE" ]; then
         REC_DUMP="$(sed -n 's/^dump: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
     fi
     REC_TARGET_FULL="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse --verify --quiet "${REC_TARGET:-none}^{commit}" 2>/dev/null || true)"
-    if [ -z "$TARGET_SHA" ] || [ -z "$REC_TARGET_FULL" ] || [ "$TARGET_SHA" != "$REC_TARGET_FULL" ]; then
+    REC_HEAD_NOW="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+    # With no commit to move to, the code must already be where the record
+    # says: a database-only rollback cut off after its DROP resumes that way.
+    if [ -z "$TARGET_SHA" ] && [ -n "$REC_TARGET_FULL" ] && [ "$REC_HEAD_NOW" = "$REC_TARGET_FULL" ]; then
+        :
+    elif [ -z "$TARGET_SHA" ] || [ -z "$REC_TARGET_FULL" ] || [ "$TARGET_SHA" != "$REC_TARGET_FULL" ]; then
         echo "✗ $UNRESOLVED_FILE records an unresolved update whose code has to"
         echo "  return to ${REC_TARGET:-(not recorded)}, but this rollback would return it to"
         echo "  ${TARGET_SHA:-nothing (no commit is recorded in $SHA_FILE)}."
@@ -982,6 +1009,37 @@ if ! backend_fully_stopped; then
     $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
     exit 1
 fi
+# From here to the verified load the database may be empty or partial, so
+# nothing may cut the run short (a closed SSH session, a closed pipe), and a
+# record goes down first, as update.sh does before its own DROP: a run killed
+# anyway (a power cut) leaves the record, and the flag keeps dtk from
+# starting until a later run completes the restore.
+trap '' HUP INT TERM PIPE
+write_restore_record() {
+    local head
+    head="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    mkdir -p "$UNRESOLVED_FLAG_DIR" && chmod 0700 "$UNRESOLVED_FLAG_DIR" \
+        && ( umask 077; : > "$UNRESOLVED_FLAG" ) || return 1
+    ensure_unresolved_dropin || return 1
+    ( umask 077
+      {
+          echo "kind: restore-failed"
+          echo "code-commit: $head"
+          echo "dump-to-restore: $DUMP_FILE"
+          echo "dump: $DUMP_FILE"
+          echo "rollback-command: sudo $RESUME_CMD"
+          echo "recorded-by: rollback-update.sh"
+          echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
+      } > "$UNRESOLVED_FILE.tmp" ) && mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE"
+}
+if ! write_restore_record; then
+    rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true
+    echo "✗ Could not write $UNRESOLVED_FILE and its start flag, so the database"
+    echo "  was NOT dropped: without them a run cut off part-way would leave a"
+    echo "  broken database that nothing refuses to start on."
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    exit 1
+fi
 echo "→ Restoring the database (dropping and recreating '$DATABASE_NAME')..."
 # Terminate other sessions, then drop/recreate via the maintenance 'postgres'
 # database so we are not connected to the DB we are dropping.
@@ -1008,6 +1066,8 @@ if ! gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$
     fi
     echo "      sudo $RESUME_CMD"
     echo "  Do NOT start the service until this is resolved. Get technical help."
+    echo "  $UNRESOLVED_FILE records this: update.sh refuses to run and dtk will"
+    echo "  not start until a rollback completes."
     $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
     exit 1
 fi
@@ -1156,7 +1216,11 @@ fi
 # dump it names: checked before anything changed). The record and the flag
 # go before the start, which the flag would otherwise block.
 RECORD_NOTE=""
-if [ "$CODE_ROLLED_BACK" -eq 1 ]; then
+if [ "$HAD_RECORD" -eq 0 ]; then
+    # Only the record this run wrote before its DROP: the load is verified,
+    # so the database is whole again.
+    rm -f "$UNRESOLVED_FILE" "$UNRESOLVED_FLAG" 2>/dev/null || true
+elif [ "$CODE_ROLLED_BACK" -eq 1 ] || [ -z "$TARGET_SHA" ]; then
     if [ -e "$UNRESOLVED_FILE" ]; then
         if rm -f "$UNRESOLVED_FILE"; then
             RECORD_NOTE="$UNRESOLVED_FILE removed; update.sh will run again"

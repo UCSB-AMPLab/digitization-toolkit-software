@@ -779,9 +779,10 @@ ensure_unresolved_dropin() {
     if [ "$(cat "$UNRESOLVED_DROPIN" 2>/dev/null)" != "$want" ]; then
         mkdir -p "$(dirname "$UNRESOLVED_DROPIN")" \
             && printf '%s\n' "$want" > "$UNRESOLVED_DROPIN.tmp" \
-            && mv -f "$UNRESOLVED_DROPIN.tmp" "$UNRESOLVED_DROPIN" \
-            && systemctl daemon-reload || return 1
+            && mv -f "$UNRESOLVED_DROPIN.tmp" "$UNRESOLVED_DROPIN" || return 1
     fi
+    # Always: a drop-in already on disk but never loaded does nothing.
+    systemctl daemon-reload
 }
 
 clear_unresolved_marker() {

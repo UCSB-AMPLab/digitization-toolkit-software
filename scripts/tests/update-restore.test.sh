@@ -1014,6 +1014,54 @@ run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
 eq "$RC" 1 "exit status"
 has "modified tracked files"
 
+# ── rollback-update.sh writes the record before its own DROP ───────────────
+run_case "rollback killed after its DROP" --yes
+CASE="rollback killed after its DROP: the rollback"
+FAKE_KILL_ON_DROP=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+marker_has "kind: restore-failed"
+marker_has "code-commit: $SHA_A"
+marker_has "dump-to-restore: $(dump_name)"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag exists"; else fail "no start flag"; fi
+CASE="rollback killed after its DROP: a reboot's start"
+rm -f "$CASE_DIR/sys/active"; : > "$CASE_DIR/log"
+PATH="$FAKEBIN:$PATH" systemctl start dtk
+inactive
+CASE="rollback killed after its DROP: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "An earlier update was left unresolved"
+CASE="rollback killed after its DROP: a second rollback completes"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+no_marker
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the start flag remains"; else ok "the start flag is removed"; fi
+active
+
+run_case "rollback whose load fails" --yes
+CASE="rollback whose load fails: the rollback"
+FAKE_RESTORE_FAIL=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+marker_has "kind: restore-failed"
+has "update.sh refuses to run and dtk will"
+inactive
+CASE="rollback whose load fails: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+CASE="rollback whose load fails: the retry"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+no_marker
+active
+
+run_case "rollback that succeeds leaves nothing" --yes
+CASE="rollback that succeeds leaves nothing: the rollback"
+run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+no_marker
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
+active
+
 # ── One update or rollback at a time ────────────────────────────────────────
 run_case "two runs at once" --yes   # builds the case; reset to A below
 rm -rf "$CASE_DIR"; mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"
