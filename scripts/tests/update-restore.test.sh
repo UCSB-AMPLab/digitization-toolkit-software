@@ -138,6 +138,9 @@ case "$1" in
         fi
         echo "$lock" > "$CASE_DIR/pixi_env" ;;
     run)
+        if [ "$2" = alembic ] && [ "$3" = heads ]; then
+            echo "${FAKE_ALEMBIC_HEAD:-rev-B} (head)"
+        fi
         if [ "$2" = db-upgrade ]; then
             echo migrated > "$CASE_DIR/db_state"
             if [ -n "${FAKE_DIRTY_ON_MIGRATE:-}" ]; then
@@ -202,7 +205,7 @@ if [ "$1" = compose ]; then
                     cat "$CASE_DIR/db_rows" 2>/dev/null
                     seq 1 300 ;;
                 psql)
-                    case "$*" in *alembic_version*) echo "rev-B"; exit 0 ;; esac
+                    case "$*" in *alembic_version*) echo "${FAKE_DB_REV:-rev-B}"; exit 0 ;; esac
                     if [ -t 0 ]; then :; else
                         input="$(cat)"
                         if [ -n "$input" ]; then
@@ -399,6 +402,76 @@ active
 unlogged "systemctl stop"
 has "frontend image: dtk-frontend is $OLD_IMG again"
 
+# ── Resolving forward after a started-then-failed update ────────────────────
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward" --yes
+marker_has "kind: started-failed"
+CASE="resolve forward: database not at head"
+FAKE_ALEMBIC_HEAD=rev-C run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+has "Database revision: rev-B; backend head: rev-C"
+has "not at the migration head"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_A" "last-deployed-SHA still names A"
+inactive
+
+CASE="resolve forward: checkout not on the failed commit"
+g -C "$PROJECT_ROOT" checkout -q "$SHA_A"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+has "not on the recorded version"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+g -C "$PROJECT_ROOT" checkout -q dev
+
+CASE="resolve forward: accepted"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 0 "exit status"
+has "Recorded $SHA_B as the deployed version"
+has "online on $SHA_B"
+no_marker
+eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
+head_is "$SHA_B" B
+active
+unlogged "DROP DATABASE"
+
+CASE="resolve forward: a later failed update restores to B"
+DTK_UPDATE_FAIL_AT=build run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_B" B
+has "code: still on $SHA_B"
+hasnt "code: $SHA_A"
+
+CASE="resolve forward with nothing to resolve"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 2 "exit status"
+has "there is no unresolved update"
+
+# ── The automatic database restore fails: a restore-failed record ───────────
+FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 run_case "restore-failed record" --yes
+eq "$RC" 1 "exit status"
+marker_has "kind: restore-failed"
+marker_has "code-commit: $SHA_A"
+marker_has "dump-to-restore: $(dump_name)"
+has "update.sh refuses to run"
+CASE="restore-failed record: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "restoring the database from its backup then"
+has "--yes $(dump_name)"
+hasnt "--resolve-forward"
+unlogged "git"
+CASE="restore-failed record: --resolve-forward refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+has "cannot resolve this record (kind: restore-failed)"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+CASE="restore-failed record: the rollback clears it"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+head_is "$SHA_A" A
+no_marker
+active
+
 # ── The frontend image name, when Compose does not report it ────────────────
 FAKE_NO_CONFIG_IMAGES=1 DTK_UPDATE_FAIL_AT=build run_case "name from the running container" --yes
 tag_is "$OLD_IMG" "the old image again"
@@ -512,7 +585,8 @@ run_again "$PROJECT_ROOT/scripts/update.sh" --yes
 eq "$RC" 1 "exit status"
 has "An earlier update was left unresolved"
 has "failed-commit: $SHA_B"
-has "sudo rm $DTK_TEST_STATE/$MARKER_REL"
+has "update.sh --resolve-forward"
+hasnt "sudo rm"
 has "rollback-update.sh --project-root="
 head_is "$SHA_B" "B (untouched)"
 unlogged "git"

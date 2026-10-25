@@ -38,10 +38,16 @@
 # remote.
 #
 # Usage: sudo ./scripts/update.sh [--yes] [--no-pull]
+#        sudo ./scripts/update.sh --resolve-forward
 #   --yes       Skip the "this update needs internet" confirmation prompt
 #               (for scripted / unattended use).
 #   --no-pull   Do not fetch; update to whatever is already checked out.
 #               For offline updates, and for testing a specific commit.
+#   --resolve-forward
+#               After an update that failed once its new version had started
+#               (see UNRESOLVED_FILE below), accept that version as deployed
+#               instead of rolling back: checked only, then recorded, then
+#               started. It changes no code and no data.
 #
 # Test only: DTK_UPDATE_FAIL_AT=<point> makes the script fail on purpose at
 # one point, so the restore path can be exercised on a bench unit without a
@@ -67,11 +73,13 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 ASSUME_YES=0
 DO_PULL=1
+RESOLVE_FORWARD=0
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
         --no-pull) DO_PULL=0 ;;
-        *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull]"; exit 2 ;;
+        --resolve-forward) RESOLVE_FORWARD=1 ;;
+        *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull] | --resolve-forward"; exit 2 ;;
     esac
 done
 
@@ -232,24 +240,61 @@ write_dump() {
 cd "$PROJECT_ROOT"
 
 # An earlier update was left unresolved (see UNRESOLVED_FILE). Refuse before
-# anything is fetched, built, stopped or written.
+# anything is fetched, built, stopped or written. The record has two kinds:
+#   started-failed  the new version was started and the update then failed;
+#                   the database is migrated for it (the default for records
+#                   written before the field existed)
+#   restore-failed  the automatic database restore failed after the database
+#                   had been dropped; only the rollback can repair it
+record_field() {
+    sed -n "s/^$1: //p" "$UNRESOLVED_FILE" 2>/dev/null | head -n 1
+}
+UNRESOLVED_KIND=""
 if [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; then
+    UNRESOLVED_KIND="$(record_field kind)"
+    [ -n "$UNRESOLVED_KIND" ] || UNRESOLVED_KIND=started-failed
+fi
+if [ -n "$UNRESOLVED_KIND" ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
     echo "✗ An earlier update was left unresolved, so this update will not run."
     echo ""
-    echo "  That update started the new version and then failed. The unit was"
-    echo "  left stopped, on the new code, with the database migrated for it. It"
-    echo "  recorded, in $UNRESOLVED_FILE:"
+    if [ "$UNRESOLVED_KIND" = restore-failed ]; then
+        echo "  That update failed, and restoring the database from its backup then"
+        echo "  failed too: the database may be empty or partly restored. The unit"
+        echo "  was left stopped. It recorded, in $UNRESOLVED_FILE:"
+    else
+        echo "  That update started the new version and then failed. The unit was"
+        echo "  left stopped, on the new code, with the database migrated for it. It"
+        echo "  recorded, in $UNRESOLVED_FILE:"
+    fi
     sed 's/^/      /' "$UNRESOLVED_FILE" 2>/dev/null || echo "      (the record could not be read)"
     echo ""
-    echo "  Two ways forward:"
-    echo "  1. Return to the previous version, code and database:"
-    echo "       $(sed -n 's/^rollback-command: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
-    echo "     It discards everything written since that backup. It removes this"
-    echo "     record when it succeeds."
-    echo "  2. Stay on the failed version and fix it forward: once its code is"
-    echo "     checked out and the database is at its migrated revision (above),"
-    echo "     remove the record by hand and run this script again:"
-    echo "       sudo rm $UNRESOLVED_FILE"
+    if [ "$UNRESOLVED_KIND" = restore-failed ]; then
+        echo "  The way forward is to restore the database from that backup, with:"
+        echo "       $(record_field rollback-command)"
+        echo "  It removes this record when it succeeds."
+    else
+        echo "  Two ways forward:"
+        echo "  1. Return to the previous version, code and database:"
+        echo "       $(record_field rollback-command)"
+        echo "     It discards everything written since that backup. It removes this"
+        echo "     record when it succeeds."
+        echo "  2. Keep the failed version, once whatever stopped it is fixed:"
+        echo "       sudo $SCRIPT_DIR/update.sh --resolve-forward"
+        echo "     It checks that the code is that version and that the database is at"
+        echo "     its migration head, records it as deployed and starts it."
+    fi
+    exit 1
+fi
+if [ "$RESOLVE_FORWARD" -eq 1 ] && [ -z "$UNRESOLVED_KIND" ]; then
+    echo "✗ --resolve-forward: there is no unresolved update to resolve"
+    echo "  ($UNRESOLVED_FILE does not exist)."
+    exit 2
+fi
+if [ "$RESOLVE_FORWARD" -eq 1 ] && [ "$UNRESOLVED_KIND" != started-failed ]; then
+    echo "✗ --resolve-forward cannot resolve this record (kind: $UNRESOLVED_KIND)."
+    echo "  The database restore failed, so there is no version to keep. Restore"
+    echo "  the database with:"
+    echo "       $(record_field rollback-command)"
     exit 1
 fi
 
@@ -640,12 +685,20 @@ wait_backend_stopped() {
 # database. The new version is stopped, fully, and the unit left stopped.
 # Record the unresolved state (see UNRESOLVED_FILE): root's alone, 0600 from
 # the start, written to a temporary name and renamed.
+# write_unresolved_marker [started-failed|restore-failed]
 write_unresolved_marker() {
+    local kind="${1:-started-failed}"
     if ( umask 077
          {
-             echo "failed-commit: $CURRENT_SHA"
-             echo "restore-target: ${PREV_DEPLOYED_SHA:-$RESTORE_SHA}"
-             echo "migrated-revision: ${MIGRATED_REVISION:-(unknown)}"
+             echo "kind: $kind"
+             if [ "$kind" = restore-failed ]; then
+                 echo "code-commit: $(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+                 echo "dump-to-restore: $RESTORE_DUMP"
+             else
+                 echo "failed-commit: $CURRENT_SHA"
+                 echo "restore-target: ${PREV_DEPLOYED_SHA:-$RESTORE_SHA}"
+                 echo "migrated-revision: ${MIGRATED_REVISION:-(unknown)}"
+             fi
              echo "dump: $RESTORE_DUMP"
              echo "rollback-command: $ROLLBACK_CMD"
              echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
@@ -777,6 +830,13 @@ restore_after_stop() {
         echo "  ✗ The appliance has NOT been started: the database is not in a known"
         echo "    state. The backup is intact. To restore code and database by hand:"
         echo "      $ROLLBACK_CMD"
+        if write_unresolved_marker restore-failed; then
+            echo "  Until that succeeds, update.sh refuses to run; the record is"
+            echo "  $UNRESOLVED_FILE, and the rollback removes it."
+        else
+            echo "  ⚠ Could not write $UNRESOLVED_FILE. Do NOT run update.sh again"
+            echo "    before the rollback."
+        fi
         echo ""
         return
     fi
@@ -969,6 +1029,89 @@ on_exit() {
     fi
     exit "$rc"
 }
+# ---------------------------------------------------------------------------
+# --resolve-forward: accept the version a started-then-failed update left in
+# place, instead of rolling back. Nothing is changed until everything checks:
+#   • HEAD is exactly the record's failed commit, every submodule is on its
+#     pin and no tracked file is modified (a different commit would need its
+#     own update, with its own backup and migration);
+#   • the database's alembic_version equals the migration head of the backend
+#     checked out, read with only the db container running, as in step 7.
+# Then last-deployed-SHA names that commit, so the next update restores to it
+# and not to the version before, the record is removed, and the unit is
+# started and checked against /health: it was left stopped, and resolving
+# forward is the decision to run this version.
+# ---------------------------------------------------------------------------
+resolve_forward() {
+    local want now sub_status db_rev heads i
+    want="$(record_field failed-commit)"
+    now="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null)"
+    echo "→ Resolving forward to the failed update's version: ${want:-(not recorded)}"
+    if [ -z "$want" ] || [ "$now" != "$want" ]; then
+        echo "✗ The checkout is on ${now:-(unreadable)}, not on the recorded version"
+        echo "  ${want:-(none recorded)}. Check that version out, then run this again."
+        return 1
+    fi
+    if ! tracked_files_modified; then
+        echo "✗ The checkout has modified tracked files. Resolve them first:"
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT status"
+        return 1
+    fi
+    if ! sub_status="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)" \
+            || printf '%s\n' "$sub_status" | grep -qv '^ '; then
+        echo "✗ A submodule is not on the commit $want pins (or could not be read):"
+        printf '%s\n' "$sub_status" | sed 's/^/      /'
+        echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+        return 1
+    fi
+    if systemctl is-active --quiet dtk 2>/dev/null; then
+        echo "✗ dtk is running. Stop it first: sudo systemctl stop dtk"
+        return 1
+    fi
+    heads="$(cd "$PROJECT_ROOT/backend" && run_as_user "$PIXI_BIN" run alembic heads 2>/dev/null \
+        | awk '/\(head\)/ {print $1}' | sort | tr '\n' ' ' | sed 's/ *$//')"
+    if [ -z "$heads" ]; then
+        echo "✗ Could not read the backend's migration head (pixi run alembic heads)."
+        return 1
+    fi
+    $COMPOSE up -d db >/dev/null 2>&1 || { echo "✗ Could not start the db container."; return 1; }
+    for i in $(seq 1 30); do
+        $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1 && break
+        [ "$i" -lt 30 ] || { echo "✗ The database did not become ready."; $COMPOSE down --remove-orphans >/dev/null 2>&1; return 1; }
+        sleep 2
+    done
+    db_rev="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -Atc 'SELECT version_num FROM alembic_version' 2>/dev/null \
+        | sort | tr '\n' ' ' | sed 's/ *$//')"
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    echo "  Database revision: ${db_rev:-(unreadable)}; backend head: $heads"
+    if [ -z "$db_rev" ] || [ "$db_rev" != "$heads" ]; then
+        echo "✗ The database is not at the migration head of the checked-out backend,"
+        echo "  so this version cannot be accepted as deployed. Nothing was changed."
+        echo "  The record stays; the rollback is: $(record_field rollback-command)"
+        return 1
+    fi
+    if ! printf '%s\n' "$want" > "$LAST_DEPLOYED_SHA_FILE"; then
+        echo "✗ Could not write $LAST_DEPLOYED_SHA_FILE. Nothing else was changed."
+        return 1
+    fi
+    rm -f "$UNRESOLVED_FILE"
+    echo "  ✓ Recorded $want as the deployed version; $UNRESOLVED_FILE removed."
+    echo "→ Starting the service..."
+    systemctl start dtk 2>/dev/null || true
+    echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
+    if wait_for_health "$HEALTH_TIMEOUT"; then
+        echo "  ✓ The appliance is online on $want: the backend answers /health."
+        return 0
+    fi
+    echo "  ✗ The service did not answer /health within ${HEALTH_TIMEOUT}s. The code"
+    echo "    and the database agree and are recorded as deployed, so update.sh"
+    echo "    can be run again once the cause is found: journalctl -u dtk -n 50"
+    return 1
+}
+if [ "$RESOLVE_FORWARD" -eq 1 ]; then
+    if resolve_forward; then exit 0; else exit 1; fi
+fi
+
 trap on_exit EXIT
 
 if [ -n "$FAIL_AT" ]; then
