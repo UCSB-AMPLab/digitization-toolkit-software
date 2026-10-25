@@ -106,6 +106,78 @@ LAST_DEPLOYED_FRONTEND_FILE="$BACKUP_DIR/last-deployed-frontend"
 LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
 KEEP_DUMPS=5
 
+# The dumps hold every account's password hash (users.hashed_password), so
+# the directory and the dumps in it are root's alone. Until October 2026 the
+# dumps were written under root's default umask, 0644 in a 0755 directory,
+# readable by any local user; found on the bench unit. Nothing that runs as
+# another user reads this directory: update.sh and rollback-update.sh both run
+# as root, setup.sh writes last-deployed-SHA as root, and the backend writes
+# its own catalogue dumps to /var/lib/dtk/tmp (backend
+# app/core/catalogue_backup.py, _dump_dir), not here. So the state files
+# beside the dumps (pre-update-SHA, pre-update-ref, pre-update-state-*,
+# last-deployed-*) keep their 0644 and are private through the directory.
+#
+# secure_backup_dir: create the directory, or find it, and make it root:root
+# 0700. A symlink or a non-directory at the path is refused: chown and chmod
+# follow a symlink and would act on whatever it names.
+secure_backup_dir() {
+    if [ -L "$BACKUP_DIR" ]; then
+        echo "✗ $BACKUP_DIR is a symbolic link. The pre-update backups hold"
+        echo "  password hashes and must be in a directory of their own. Move the"
+        echo "  link aside and run this again."
+        return 1
+    fi
+    if [ -e "$BACKUP_DIR" ] && [ ! -d "$BACKUP_DIR" ]; then
+        echo "✗ $BACKUP_DIR exists and is not a directory. Move it aside and run"
+        echo "  this again."
+        return 1
+    fi
+    local was_open=0
+    if [ -d "$BACKUP_DIR" ] && [ -z "$(find "$BACKUP_DIR" -maxdepth 0 -perm 0700 2>/dev/null)" ]; then
+        was_open=1
+    fi
+    if ! { mkdir -p "$BACKUP_DIR" && chown root:root "$BACKUP_DIR" && chmod 0700 "$BACKUP_DIR"; }; then
+        echo "✗ Could not make $BACKUP_DIR private (root:root, mode 0700)."
+        echo "  Aborting before a new backup is written into it."
+        return 1
+    fi
+    if [ "$was_open" -eq 1 ]; then
+        echo "  Backup directory $BACKUP_DIR set to owner root, mode 0700:"
+        echo "  it was readable by other local users."
+    fi
+}
+
+# tighten_existing_dumps: set every dump already in the directory to 0600.
+# Dumps from earlier updates were written 0644. Symlinks are skipped (find
+# does not follow them), so nothing outside the directory is changed.
+tighten_existing_dumps() {
+    local open count=0 f
+    open="$(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'pre-update-*.sql.gz' ! -perm 0600 2>/dev/null)"
+    [ -n "$open" ] || return 0
+    while IFS= read -r f; do
+        if chmod 0600 "$f"; then
+            count=$((count + 1))
+        else
+            echo "  ⚠ Could not set $f to mode 0600."
+        fi
+    done <<< "$open"
+    if [ "$count" -gt 0 ]; then
+        echo "  Tightened $count earlier pre-update backups to mode 0600: they hold"
+        echo "  every account's password hash and were readable by other local users."
+    fi
+}
+
+# write_dump <file> <command...>: run the command and write its output,
+# gzipped, to <file>, created 0600 from the start. The umask is set in a
+# subshell for this pipeline only, so the file is never readable by others,
+# not even while it is being written; chmod after the write would leave that
+# window. pipefail so a failing command fails the call although gzip exits 0.
+write_dump() {
+    local file="$1"
+    shift
+    ( umask 077; set -o pipefail; "$@" | gzip > "$file" )
+}
+
 cd "$PROJECT_ROOT"
 
 echo "=========================================="
@@ -480,7 +552,8 @@ fi
 #    said the new code is in place), so HEAD is the NEW version; the rollback
 #    target is the previously deployed commit, handled in step 5.
 # ---------------------------------------------------------------------------
-mkdir -p "$BACKUP_DIR"
+secure_backup_dir || exit 1
+tighten_existing_dumps || true
 # git runs as the repo owner: root-run git can fail dubious-ownership on the
 # user-cloned repo, and "unknown" here would poison both the snapshot and
 # (on success) last-deployed-SHA.
@@ -811,11 +884,9 @@ TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 DUMP_FILE="$BACKUP_DIR/pre-update-$TIMESTAMP.sql.gz"
 echo "→ Backing up the database to:"
 echo "    $DUMP_FILE"
-# Pipe pg_dump through gzip. set -o pipefail so a pg_dump failure fails the line
-# even though gzip exits 0.
-set -o pipefail
-$COMPOSE exec -T db pg_dump -U "$DATABASE_USER" -d "$DATABASE_NAME" | gzip > "$DUMP_FILE"
-set +o pipefail
+# Through write_dump: created 0600, and a pg_dump failure fails the line even
+# though gzip exits 0.
+write_dump "$DUMP_FILE" $COMPOSE exec -T db pg_dump -U "$DATABASE_USER" -d "$DATABASE_NAME"
 
 # A failed pg_dump can still leave a tiny valid gzip (an empty stream gzips to
 # ~20 bytes). Refuse to proceed if the dump looks empty — better to abort than
