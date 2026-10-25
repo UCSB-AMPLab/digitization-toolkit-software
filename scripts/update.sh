@@ -10,8 +10,13 @@
 #   • Before any migration a timestamped pg_dump is taken and verified non-empty;
 #     the pre-update superproject commit is recorded so a botched update can be
 #     rolled back with scripts/rollback-update.sh.
-#   • If anything fails after the service is stopped, an EXIT trap restarts the
-#     previous stack and tells the operator the unit is back on the old version.
+#   • Before anything changes, it records what is running: the deployed commit,
+#     the frontend image (kept under a pre-update-<timestamp> tag) and the
+#     backend lock. If anything fails after the code has moved, an EXIT trap
+#     restores the previous version: the checkout and submodules, the frontend
+#     image, the pixi environment, and the database from this run's dump if a
+#     migration had begun. It starts the service only once those are back, and
+#     says the unit is online only when the backend answers /health.
 #   • Before starting, it checks whether the update changed dependency manifests
 #     (which need the npm / conda registries) and, if so, warns the operator that
 #     internet is required and lets them abort.
@@ -30,6 +35,21 @@
 #               (for scripted / unattended use).
 #   --no-pull   Do not fetch; update to whatever is already checked out.
 #               For offline updates, and for testing a specific commit.
+#
+# Test only: DTK_UPDATE_FAIL_AT=<point> makes the script fail on purpose at
+# one point, so the restore path can be exercised on a bench unit without a
+# broken migration or a broken build. The points, in order:
+#   fetched   after the fast-forward and submodule sync (pull path only)
+#   build     after the frontend image is rebuilt
+#   pixi      after the pixi environment is reinstalled
+#   stopped   after the service is stopped
+#   migrate   after the migrations have run
+#   started   after the new version is started, before its health check
+# Never set it on an appliance in service.
+#
+# Also tunable: DTK_UPDATE_HEALTH_TIMEOUT (seconds to wait for /health after a
+# start, default 300) and DTK_UPDATE_HEALTH_POLL (seconds between tries,
+# default 5).
 
 set -e
 
@@ -45,6 +65,16 @@ for arg in "$@"; do
         *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull]"; exit 2 ;;
     esac
 done
+
+FAIL_AT="${DTK_UPDATE_FAIL_AT:-}"
+case "$FAIL_AT" in
+    ""|fetched|build|pixi|stopped|migrate|started) ;;
+    *) echo "✗ DTK_UPDATE_FAIL_AT='$FAIL_AT' is not a failure point this script knows."
+       echo "  Known: fetched build pixi stopped migrate started (test only)."
+       exit 2 ;;
+esac
+HEALTH_TIMEOUT="${DTK_UPDATE_HEALTH_TIMEOUT:-300}"
+HEALTH_POLL="${DTK_UPDATE_HEALTH_POLL:-5}"
 
 # Load DB credentials the same way docker compose does: from the project .env.
 # The bare ${VAR:-default} fallbacks below only apply if .env is absent, so the
@@ -105,6 +135,10 @@ REF_FILE="$BACKUP_DIR/pre-update-ref"
 LAST_DEPLOYED_FRONTEND_FILE="$BACKUP_DIR/last-deployed-frontend"
 LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
 KEEP_DUMPS=5
+# State kept outside the checkout. rollback-update.sh keeps its copy of itself
+# here; update.sh puts one there before a restore moves scripts/ (below).
+STATE_DIR="/var/lib/dtk"
+ROLLBACK_SCRIPT_COPY="$STATE_DIR/rollback-update.sh"
 
 # The dumps hold every account's password hash (users.hashed_password), so
 # the directory and the dumps in it are root's alone. Until October 2026 the
@@ -186,10 +220,14 @@ echo "=========================================="
 echo ""
 
 # ---------------------------------------------------------------------------
-# 0. Safety net: if we fail AFTER stopping the service, bring the old stack
-#    back up so the venue is never left with a dead appliance. Armed just
-#    before we stop the service (see step 6); until then failures are harmless
-#    because the running stack was never touched.
+# 0. Safety net. A failure after the code has moved puts the previous
+#    version back (step 0a records it). Before the service is stopped, the
+#    checkout, frontend image and pixi environment are put back under the
+#    version still running. After, the stopped unit also gets its database
+#    back from this run's dump if a migration began, and is started on the
+#    previous version and checked against /health. The restarted NEW version
+#    is never what the trap brings up: after a failed migration it refuses an
+#    unmigrated schema and loops under Restart=on-failure.
 # ---------------------------------------------------------------------------
 SERVICE_STOPPED=0
 UPDATE_OK=0
@@ -204,34 +242,409 @@ STACK_TOUCHED=0
 DUMP_FILE=""
 BACKUP_VERIFIED=0
 
-restore_service() {
-    echo ""
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo "  UPDATE FAILED — bringing the appliance back up"
-    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-    echo ""
-    echo "  Something went wrong during the update. Restarting the unit"
-    echo "  so it is not left dead..."
-    echo ""
-    # Make sure nothing is half-up before we restart cleanly. --remove-orphans:
-    # containers from services dropped between releases must go too, or they
-    # keep an endpoint on the project network and wedge the restart (NEH-214).
-    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
-    systemctl start dtk 2>/dev/null || true
-    sleep 5
-    if systemctl is-active --quiet dtk; then
-        echo "  ✓ The appliance is back online."
+# What this run has changed, so a failure undoes exactly that (see 0a).
+# RESTORE_ARMED: the checkout may no longer be the version that is running —
+# set just before the fast-forward, and before the build on --no-pull.
+RESTORE_ARMED=0
+BUILD_STARTED=0
+PIXI_INSTALL_STARTED=0
+MIGRATION_STARTED=0
+# Filled in by step 0a.
+RESTORE_SHA=""
+RESTORE_SHA_SOURCE=""
+SAVED_FRONTEND_IMAGE=""
+SAVED_FRONTEND_TAG=""
+FRONTEND_IMAGE=""
+NEW_LOCK_DIGEST=""
+# What the restore did and did not do, printed together at the end.
+RESTORED_LINES=""
+NOT_RESTORED_LINES=""
+CODE_RESTORED=0
+ROLLBACK_CMD="sudo $SCRIPT_DIR/rollback-update.sh"
+
+note_restored()    { RESTORED_LINES="${RESTORED_LINES}    • $1"$'\n'; }
+note_not_restored() { NOT_RESTORED_LINES="${NOT_RESTORED_LINES}    • $1"$'\n'; }
+
+# Test only (see the header): fail here when DTK_UPDATE_FAIL_AT names this point.
+fail_point() {
+    if [ "$FAIL_AT" = "$1" ]; then
+        echo "✗ DTK_UPDATE_FAIL_AT=$1: failing here on purpose (test only)."
+        exit 1
+    fi
+}
+
+file_digest() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
     else
-        echo "  ✗ The appliance did NOT come back up automatically."
-        echo "    Check logs:  journalctl -u dtk -n 50"
+        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+    fi
+}
+
+# lock_digest_at <superproject commit>: digest of backend/pixi.lock as that
+# commit pins it, read from the backend submodule's objects; empty when the
+# pin or the file cannot be read.
+lock_digest_at() {
+    local pin
+    [ -n "$1" ] || return 1
+    pin="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$1:backend" 2>/dev/null)" || return 1
+    run_as_repo_owner git -C "$PROJECT_ROOT/backend" cat-file -e "$pin:pixi.lock" 2>/dev/null || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        run_as_repo_owner git -C "$PROJECT_ROOT/backend" show "$pin:pixi.lock" 2>/dev/null | sha256sum | cut -d' ' -f1
+    else
+        run_as_repo_owner git -C "$PROJECT_ROOT/backend" show "$pin:pixi.lock" 2>/dev/null | shasum -a 256 | cut -d' ' -f1
+    fi
+}
+
+# Immutable image id of the running frontend container; empty on any error.
+frontend_image_id() {
+    local cid
+    cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)" || return 1
+    [ -n "$cid" ] || return 1
+    docker container inspect --format '{{.Image}}' "$cid" 2>/dev/null
+}
+
+# Is the unit serving? The service active AND the backend answering /health.
+# is-active alone is not enough: a backend that refuses to start (a schema
+# not at head, assert_schema_at_head in backend app/main.py) exits and is
+# started again under Restart=on-failure, and the unit reads as active for
+# part of every attempt. ExecStartPost (check-stack-health.sh) keeps the unit
+# "activating" until the containers are up, so is-active covers the db and
+# frontend; /health covers the backend, which answers only once its startup
+# checks have passed.
+backend_healthy() {
+    systemctl is-active --quiet dtk 2>/dev/null || return 1
+    curl -fsS --max-time 5 http://127.0.0.1:8000/health 2>/dev/null | grep -q '"status": *"ok"'
+}
+
+# wait_for_health [timeout-seconds]: poll backend_healthy until it holds or
+# the timeout passes.
+wait_for_health() {
+    local timeout="${1:-$HEALTH_TIMEOUT}" start now
+    start="$(date +%s)"
+    while :; do
+        if backend_healthy; then
+            return 0
+        fi
+        now="$(date +%s)"
+        if [ $((now - start)) -ge "$timeout" ]; then
+            return 1
+        fi
+        sleep "$HEALTH_POLL"
+    done
+}
+
+# Tracked files modified anywhere in the checkout? 0 clean, 1 modified,
+# anything else a read that failed (treated as modified). Superproject files
+# with submodules ignored, then each submodule's own files: a submodule that is
+# merely on a different commit is what an interrupted update leaves, and the
+# restore moves it; a modified file inside it is someone's work, and the
+# restore will not discard it. The same refusal rollback-update.sh makes.
+tracked_files_modified() {
+    local rc=0 subs sub
+    run_as_repo_owner git -C "$PROJECT_ROOT" diff HEAD --quiet --ignore-submodules=all 2>/dev/null || rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    subs="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'printf "%s\n" "$displaypath"' 2>/dev/null)" || return 2
+    for sub in $subs; do
+        run_as_repo_owner git -C "$PROJECT_ROOT/$sub" diff HEAD --quiet 2>/dev/null || rc=$?
+        [ "$rc" -eq 0 ] || return "$rc"
+    done
+    return 0
+}
+
+# Return the checkout to RESTORE_SHA with its submodules on that commit's
+# pins, by the mechanism rollback-update.sh uses (step 3 there): git as the
+# checkout's owner, `checkout --no-overwrite-ignore -B <branch>` so the branch
+# moves and HEAD stays attached, `submodule update --init --recursive` with no
+# --remote, then HEAD and every submodule verified rather than inferred from
+# exit statuses. That script's functions are written against its own globals
+# and it runs from a copy of itself outside the checkout, so they are not
+# sourced from here.
+restore_code() {
+    local now branch sub_status rc keep
+    if [ -z "$RESTORE_SHA" ]; then
+        note_not_restored "code: there is no record of the version that was running, so the checkout was left where it is"
+        return 1
+    fi
+    now="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null)"
+    if [ -z "$now" ]; then
+        note_not_restored "code: git could not read the checkout at $PROJECT_ROOT"
+        return 1
+    fi
+    rc=0
+    tracked_files_modified || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        note_not_restored "code: the checkout has modified tracked files (or could not be read), and this script does not discard them; it is still on $now"
+        return 1
+    fi
+    if [ "$now" = "$RESTORE_SHA" ] \
+            && sub_status="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)" \
+            && ! printf '%s\n' "$sub_status" | grep -qv '^ '; then
+        CODE_RESTORED=1
+        note_restored "code: still on $RESTORE_SHA with submodules on its pins; the update had not moved it"
+        return 0
+    fi
+    if [ "$now" != "$RESTORE_SHA" ]; then
+        # The commit being left must stay reachable by name. On the pull path
+        # it is the remote's; on --no-pull it may exist only here.
+        if [ -z "$(run_as_repo_owner git -C "$PROJECT_ROOT" branch -r --contains "$now" 2>/dev/null)" ]; then
+            keep="failed-update/$(date +%Y%m%d-%H%M%S)"
+            if run_as_repo_owner git -C "$PROJECT_ROOT" branch "$keep" "$now" 2>/dev/null; then
+                echo "  The new version $now is kept as branch '$keep'."
+            else
+                echo "  ⚠ Could not keep $now as a branch; note it down."
+            fi
+        fi
+        branch="$(run_as_repo_owner git -C "$PROJECT_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+        if [ -n "$branch" ]; then
+            run_as_repo_owner git -C "$PROJECT_ROOT" checkout --quiet --no-overwrite-ignore -B "$branch" "$RESTORE_SHA" || {
+                note_not_restored "code: the checkout to $RESTORE_SHA failed (git says why above)"
+                return 1
+            }
+        else
+            run_as_repo_owner git -C "$PROJECT_ROOT" checkout --quiet --no-overwrite-ignore "$RESTORE_SHA" || {
+                note_not_restored "code: the checkout to $RESTORE_SHA failed (git says why above)"
+                return 1
+            }
+        fi
+    fi
+    run_as_repo_owner git -C "$PROJECT_ROOT" submodule update --init --recursive || {
+        note_not_restored "code: the superproject is on $RESTORE_SHA but the submodules could not be synced to its pins"
+        return 1
+    }
+    now="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null)"
+    if [ "$now" != "$RESTORE_SHA" ]; then
+        note_not_restored "code: HEAD is at '${now:-unreadable}', not at $RESTORE_SHA"
+        return 1
+    fi
+    if ! sub_status="$(run_as_repo_owner git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null)"; then
+        note_not_restored "code: on $RESTORE_SHA, but the submodule state could not be read"
+        return 1
+    fi
+    if [ -n "$sub_status" ] && printf '%s\n' "$sub_status" | grep -qv '^ '; then
+        note_not_restored "code: on $RESTORE_SHA, but a submodule is not at the commit it pins: $(printf '%s' "$sub_status" | grep -v '^ ' | tr '\n' ';')"
+        return 1
+    fi
+    CODE_RESTORED=1
+    note_restored "code: $RESTORE_SHA ($RESTORE_SHA_SOURCE), submodules on its pins:"$'\n'"$(printf '%s\n' "$sub_status" | sed 's/^ */        /')"
+    return 0
+}
+
+# Point the compose image name back at the image saved in 0a.
+restore_frontend_image() {
+    [ "$BUILD_STARTED" -eq 1 ] || return 0
+    if [ -z "$SAVED_FRONTEND_IMAGE" ] || [ -z "$FRONTEND_IMAGE" ]; then
+        note_not_restored "frontend image: no image was recorded before the rebuild, so '${FRONTEND_IMAGE:-the frontend image}' may be the new build. To rebuild it for the restored code: $COMPOSE build frontend (needs the npm registry)"
+        return 1
+    fi
+    if docker tag "$SAVED_FRONTEND_IMAGE" "$FRONTEND_IMAGE" >/dev/null 2>&1; then
+        note_restored "frontend image: $FRONTEND_IMAGE is $SAVED_FRONTEND_IMAGE again (also tagged $SAVED_FRONTEND_TAG)"
+        return 0
+    fi
+    note_not_restored "frontend image: could not retag $SAVED_FRONTEND_IMAGE as $FRONTEND_IMAGE. By hand: docker tag ${SAVED_FRONTEND_TAG:-$SAVED_FRONTEND_IMAGE} $FRONTEND_IMAGE"
+    return 1
+}
+
+# Reinstall the pixi environment for the restored lock, if this run
+# reinstalled it for a different one.
+restore_pixi() {
+    local now_lock
+    [ "$PIXI_INSTALL_STARTED" -eq 1 ] || return 0
+    if [ "$CODE_RESTORED" -ne 1 ]; then
+        note_not_restored "pixi environment: left as this update installed it, because the code was not restored"
+        return 1
+    fi
+    now_lock="$(file_digest "$PROJECT_ROOT/backend/pixi.lock" || true)"
+    if [ -n "$now_lock" ] && [ "$now_lock" = "$NEW_LOCK_DIGEST" ]; then
+        note_restored "pixi environment: backend/pixi.lock is the same in both versions, so the environment already matches"
+        return 0
+    fi
+    echo "→ Reinstalling the pixi environment for the restored backend/pixi.lock..."
+    if ( cd "$PROJECT_ROOT/backend" && run_as_user "$PIXI_BIN" install --locked ); then
+        note_restored "pixi environment: reinstalled for the restored backend/pixi.lock"
+        return 0
     fi
     echo ""
-    echo "  IMPORTANT: the failure happened after the service was stopped for"
-    echo "  migration, so the database MAY have been partially (or fully)"
-    echo "  migrated. A pre-update backup was saved in: $BACKUP_DIR"
-    echo "  To return fully to the previous version (database and code), run:"
-    echo "    sudo $SCRIPT_DIR/rollback-update.sh"
+    echo "  ⚠⚠ THE PIXI ENVIRONMENT COULD NOT BE REINSTALLED FOR THE RESTORED LOCK."
+    echo "     backend/pixi.lock changed in this update, and putting the old"
+    echo "     environment back needs the conda registry unless every package is"
+    echo "     still in pixi's cache. If this unit is offline, that is why. Until it"
+    echo "     is reinstalled the backend may not start."
     echo ""
+    note_not_restored "pixi environment: reinstall for the restored lock FAILED (offline?). With internet: cd $PROJECT_ROOT/backend && sudo -u $DTK_USER $PIXI_BIN install --locked"
+    return 1
+}
+
+# Restore this run's dump, as rollback-update.sh step 4 does: db container up,
+# other sessions ended, the database dropped and recreated, the dump loaded
+# with ON_ERROR_STOP, the container stopped again.
+restore_database() {
+    local i
+    echo "→ Restoring the database from $DUMP_FILE ..."
+    $COMPOSE up -d db || return 1
+    for i in $(seq 1 30); do
+        if $COMPOSE exec -T db pg_isready -U "$DATABASE_USER" -d "$DATABASE_NAME" >/dev/null 2>&1; then
+            break
+        fi
+        [ "$i" -lt 30 ] || return 1
+        sleep 2
+    done
+    $COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
+        -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DATABASE_NAME' AND pid <> pg_backend_pid();" \
+        >/dev/null || return 1
+    $COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -v ON_ERROR_STOP=1 \
+        -c "DROP DATABASE IF EXISTS \"$DATABASE_NAME\";" \
+        -c "CREATE DATABASE \"$DATABASE_NAME\" OWNER \"$DATABASE_USER\";" \
+        >/dev/null || return 1
+    ( set -o pipefail
+      gunzip -c "$DUMP_FILE" | $COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -v ON_ERROR_STOP=1 >/dev/null ) || return 1
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    return 0
+}
+
+# A copy of rollback-update.sh outside the checkout, taken while scripts/ is
+# still the new version's: the manual command printed on a failed restore has
+# to name a script the restore cannot have replaced. Same path and same
+# tmp-and-rename as rollback-update.sh's own copy.
+keep_rollback_copy() {
+    if cp "$SCRIPT_DIR/rollback-update.sh" "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null \
+            && chmod 755 "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null \
+            && mv -f "$ROLLBACK_SCRIPT_COPY.tmp" "$ROLLBACK_SCRIPT_COPY" 2>/dev/null; then
+        ROLLBACK_CMD="sudo $ROLLBACK_SCRIPT_COPY --project-root=$PROJECT_ROOT --yes $DUMP_FILE"
+    else
+        rm -f "$ROLLBACK_SCRIPT_COPY.tmp" 2>/dev/null || true
+        ROLLBACK_CMD="sudo $SCRIPT_DIR/rollback-update.sh --yes $DUMP_FILE"
+    fi
+}
+
+print_restore_summary() {
+    echo ""
+    if [ -n "$RESTORED_LINES" ]; then
+        echo "  Restored to the previous version:"
+        printf '%s' "$RESTORED_LINES"
+    fi
+    if [ -n "$NOT_RESTORED_LINES" ]; then
+        echo "  NOT restored:"
+        printf '%s' "$NOT_RESTORED_LINES"
+    fi
+    if [ "$PIXI_INSTALL_STARTED" -eq 1 ] || [ "$BUILD_STARTED" -eq 1 ]; then
+        echo "  Not undone: the CHDK USB rule and the rclone install (steps 4b and 4c)"
+        echo "  if they ran; both leave the running service alone."
+    fi
+    if [ -n "$MODS_DIR" ]; then
+        echo "  Not put back: the local modifications set aside before the update,"
+        echo "  saved in $MODS_DIR"
+    fi
+}
+
+# The failure came after the service was stopped. Put the previous version
+# back, component by component, and start it only when the code is back and,
+# if a migration began, the database too: starting the new code after a failed
+# migration is what left units looping on a backend that refuses an unmigrated
+# schema while this script said they were online.
+restore_after_stop() {
+    local db_ok=1
+    echo ""
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "  UPDATE FAILED — restoring the previous version"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo ""
+    [ "$MIGRATION_STARTED" -eq 1 ] && keep_rollback_copy
+    # The new version may be up (a failure after step 8's start) or looping
+    # under Restart=on-failure: stop it before anything moves under it.
+    # --remove-orphans: containers from services dropped between releases must
+    # go too, or they keep an endpoint on the project network and wedge the
+    # restart (NEH-214).
+    systemctl stop dtk 2>/dev/null || true
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+
+    if ! restore_code; then
+        print_restore_summary
+        echo ""
+        echo "  ✗ The appliance has NOT been started: the code is not back on the"
+        echo "    previous version, and starting what is checked out would run the"
+        echo "    new version."
+        if [ "$MIGRATION_STARTED" -eq 1 ]; then
+            echo "    The database may be partly or fully migrated and has NOT been"
+            echo "    restored. This run's backup is $DUMP_FILE. Once the reason the"
+            echo "    code could not move is cleared, this restores code and database:"
+            echo "      $ROLLBACK_CMD"
+        else
+            echo "    The database was not changed by this update. To move the code"
+            echo "    back by hand, then start the unit:"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT checkout -B <branch> ${RESTORE_SHA:-<previous commit>}"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+            echo "      sudo systemctl start dtk"
+        fi
+        echo ""
+        return
+    fi
+    restore_frontend_image || true
+    restore_pixi || true
+    if [ "$MIGRATION_STARTED" -eq 1 ]; then
+        if restore_database; then
+            note_restored "database: restored from this run's backup $DUMP_FILE (taken before the migration)"
+        else
+            db_ok=0
+            $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+            note_not_restored "database: the restore from $DUMP_FILE FAILED; the database may be partly migrated or partly restored"
+        fi
+    else
+        note_restored "database: untouched (the failure came before any migration ran)"
+    fi
+
+    if [ "$db_ok" -ne 1 ]; then
+        print_restore_summary
+        echo ""
+        echo "  ✗ The appliance has NOT been started: the database is not in a known"
+        echo "    state. The backup is intact. To restore code and database by hand:"
+        echo "      $ROLLBACK_CMD"
+        echo ""
+        return
+    fi
+
+    echo "→ Starting the previous version..."
+    systemctl start dtk 2>/dev/null || true
+    echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
+    if wait_for_health "$HEALTH_TIMEOUT"; then
+        print_restore_summary
+        echo ""
+        echo "  ✓ The appliance is back online on the previous version"
+        echo "    ($RESTORE_SHA): the service is active and the backend answers /health."
+    else
+        print_restore_summary
+        echo ""
+        echo "  ✗ The previous version did NOT come back up: the backend did not"
+        echo "    answer /health within ${HEALTH_TIMEOUT}s."
+        echo "    Check logs:  journalctl -u dtk -n 50"
+        if [ "$MIGRATION_STARTED" -eq 1 ]; then
+            echo "    This run's backup is $DUMP_FILE. To restore code and database again:"
+            echo "      $ROLLBACK_CMD"
+        fi
+    fi
+    echo ""
+}
+
+# The failure came before the service was stopped, after the code moved. The
+# previous version is still running from what it loaded at its last start;
+# put the checkout, image and environment back under it, so that its next
+# restart starts the same version against the same, unmigrated database.
+restore_before_stop() {
+    echo ""
+    echo "→ Update failed before the service was stopped. Putting back what it"
+    echo "  had changed, under the version that is still running..."
+    if restore_code; then
+        restore_frontend_image || true
+        restore_pixi || true
+    else
+        if [ "$BUILD_STARTED" -eq 1 ]; then
+            note_not_restored "frontend image: left as rebuilt, because the code was not restored (saved as ${SAVED_FRONTEND_TAG:-nothing})"
+        fi
+        if [ "$PIXI_INSTALL_STARTED" -eq 1 ]; then
+            note_not_restored "pixi environment: left as this update installed it, because the code was not restored"
+        fi
+    fi
+    note_restored "database: untouched (the service was never stopped and no migration ran)"
 }
 
 # Positive listen check on the db's published port (127.0.0.1:5432,
@@ -319,9 +732,17 @@ on_exit() {
     if [ "$UPDATE_OK" -eq 1 ]; then
         return 0
     fi
+    # Every step below handles its own failures; one failing must not abort
+    # the rest of the restore.
+    set +e
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
-        restore_service
-    elif [ "$STACK_TOUCHED" -eq 1 ]; then
+        restore_after_stop
+        exit "$rc"
+    fi
+    if [ "$RESTORE_ARMED" -eq 1 ]; then
+        restore_before_stop
+    fi
+    if [ "$STACK_TOUCHED" -eq 1 ]; then
         report_touched_abort
     else
         # Pre-stop failure with container state untouched: clean up only what
@@ -333,20 +754,127 @@ on_exit() {
         fi
         echo ""
         echo "✗ Update aborted before the running service was touched."
-        echo "  The appliance is still serving the current version."
-        if [ "$TREE_TOUCHED" -eq 1 ]; then
+        if [ "$RESTORE_ARMED" -ne 1 ]; then
+            echo "  The appliance is still serving the current version."
+            if [ "$TREE_TOUCHED" -eq 1 ]; then
+                echo ""
+                echo "  One thing DID change: this unit's local modifications were set"
+                echo "  aside before the failure. They are saved in:"
+                echo "    $MODS_DIR"
+            else
+                echo "  Nothing changed."
+            fi
             echo ""
-            echo "  One thing DID change: this unit's local modifications were set"
-            echo "  aside before the failure. They are saved in:"
-            echo "    $MODS_DIR"
+        fi
+    fi
+    if [ "$RESTORE_ARMED" -eq 1 ]; then
+        print_restore_summary
+        echo ""
+        if [ "$CODE_RESTORED" -ne 1 ]; then
+            echo "  ✗ The checkout is NOT on the version that is running. The service"
+            echo "    was not restarted, so it still serves what it loaded at its last"
+            echo "    start, but its next restart would start the code checked out"
+            echo "    now, against a database this update did not migrate."
+            echo "    To move the code back by hand:"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT checkout -B <branch> ${RESTORE_SHA:-<previous commit>}"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+        elif backend_healthy; then
+            echo "  ✓ The service was not restarted and is still serving the previous"
+            echo "    version ($RESTORE_SHA): it is active and the backend answers /health."
         else
-            echo "  Nothing changed."
+            echo "  ⚠ The checkout is back on the previous version ($RESTORE_SHA), but"
+            echo "    the service is not answering /health. It was not stopped by this"
+            echo "    update; it may already have been down. Check:"
+            echo "      systemctl status dtk;  journalctl -u dtk -n 50"
         fi
         echo ""
     fi
     exit "$rc"
 }
 trap on_exit EXIT
+
+if [ -n "$FAIL_AT" ]; then
+    echo "⚠ DTK_UPDATE_FAIL_AT=$FAIL_AT is set: this run will fail on purpose (test only)."
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
+# 0a. Record what is running, before anything changes, so that a failure
+#     later can put it back (the EXIT trap above).
+#
+#     The version to return to is the last successfully deployed commit
+#     (last-deployed-SHA, which only a successful update or a rollback
+#     writes), not HEAD: with --no-pull, or after an earlier failed update,
+#     HEAD can already be newer code than the processes running. The checkout's
+#     own HEAD is the fallback when there is no usable record.
+#
+#     The frontend image is the running container's, or the tag's when no
+#     container runs, kept under a pre-update-<timestamp> tag so that the
+#     rebuild in step 3 cannot leave it untagged and prunable.
+# ---------------------------------------------------------------------------
+RUN_TS="$(date +%Y%m%d-%H%M%S)"
+PRE_HEAD="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)"
+
+# A file that cannot be read is not a file that is not there, and step 2's
+# messages used to say the latter for both. PREV_RECORD_STATE carries which it
+# was so the diagnosis there can be true.
+PREV_DEPLOYED_SHA=""
+if [ ! -e "$LAST_DEPLOYED_SHA_FILE" ]; then
+    PREV_RECORD_STATE=absent
+elif ! PREV_DEPLOYED_SHA="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null)"; then
+    PREV_RECORD_STATE=unreadable
+    PREV_DEPLOYED_SHA=""
+elif [ -z "$PREV_DEPLOYED_SHA" ]; then
+    PREV_RECORD_STATE=empty
+else
+    PREV_RECORD_STATE=present
+fi
+
+if [ "$PREV_RECORD_STATE" = present ] \
+        && RESOLVED="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse --verify --quiet "$PREV_DEPLOYED_SHA^{commit}" 2>/dev/null)" \
+        && [ -n "$RESOLVED" ]; then
+    RESTORE_SHA="$RESOLVED"
+    RESTORE_SHA_SOURCE="the last deployed version"
+elif [ -n "$PRE_HEAD" ]; then
+    RESTORE_SHA="$PRE_HEAD"
+    RESTORE_SHA_SOURCE="the commit checked out before this update; there was no usable record of the last deployed version"
+fi
+
+FRONTEND_IMAGE="$($COMPOSE config --images frontend 2>/dev/null | head -n 1 || true)"
+SAVED_FRONTEND_IMAGE="$(frontend_image_id || true)"
+if [ -z "$SAVED_FRONTEND_IMAGE" ] && [ -n "$FRONTEND_IMAGE" ]; then
+    SAVED_FRONTEND_IMAGE="$(docker image inspect --format '{{.Id}}' "$FRONTEND_IMAGE" 2>/dev/null || true)"
+fi
+if [ -n "$SAVED_FRONTEND_IMAGE" ] && [ -n "$FRONTEND_IMAGE" ]; then
+    # The repository part of the name: no digest, and no tag after the last
+    # slash (a registry host may carry a port).
+    FRONTEND_REPO="${FRONTEND_IMAGE%%@*}"
+    case "${FRONTEND_REPO##*/}" in
+        *:*) FRONTEND_REPO="${FRONTEND_REPO%:*}" ;;
+    esac
+    SAVED_FRONTEND_TAG="$FRONTEND_REPO:pre-update-$RUN_TS"
+    if docker tag "$SAVED_FRONTEND_IMAGE" "$SAVED_FRONTEND_TAG" >/dev/null 2>&1; then
+        # The newest few, as with the dumps.
+        docker image ls "$FRONTEND_REPO" --format '{{.Tag}}' 2>/dev/null \
+            | grep '^pre-update-' | sort -r | tail -n +$((KEEP_DUMPS + 1)) \
+            | while read -r old_tag; do
+                docker image rm "$FRONTEND_REPO:$old_tag" >/dev/null 2>&1 || true
+            done
+    else
+        SAVED_FRONTEND_TAG=""
+    fi
+fi
+
+echo "→ Recorded what is running, to put back if the update fails:"
+echo "    code:     ${RESTORE_SHA:-(unknown — a failure will leave the checkout where it is)}"
+if [ -n "$SAVED_FRONTEND_TAG" ]; then
+    echo "    frontend: $SAVED_FRONTEND_IMAGE (kept as $SAVED_FRONTEND_TAG)"
+elif [ -n "$SAVED_FRONTEND_IMAGE" ]; then
+    echo "    frontend: $SAVED_FRONTEND_IMAGE (could not be tagged; it may be pruned)"
+else
+    echo "    frontend: (unknown — a failure after the rebuild cannot put it back)"
+fi
+echo ""
 
 # ---------------------------------------------------------------------------
 # 0b. Fetch the new code (NEH-270).
@@ -535,6 +1063,9 @@ if [ "$DO_PULL" -eq 1 ]; then
     fi
 
     echo ""
+    # From here the checkout may stop matching what is running: a failure
+    # anywhere below puts it back (0a, and the EXIT trap).
+    RESTORE_ARMED=1
     if ! run_as_repo_owner git -C "$PROJECT_ROOT" merge --ff-only "$PULL_UPSTREAM"; then
         echo ""
         echo "✗ Fast-forward to $PULL_UPSTREAM failed. The usual cause left at this"
@@ -545,6 +1076,7 @@ if [ "$DO_PULL" -eq 1 ]; then
     fi
     run_as_repo_owner git -C "$PROJECT_ROOT" submodule update --init --recursive
     echo ""
+    fail_point fetched
 fi
 
 # ---------------------------------------------------------------------------
@@ -587,13 +1119,6 @@ echo "→ Version being installed: $CURRENT_SHA"
 # aborts before step 5 writes a record but advances nothing), so a record is
 # identified by its own file name, which step 5 stores in pre-update-ref
 # together with the dump name.
-file_digest() {
-    if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" 2>/dev/null | cut -d' ' -f1
-    else
-        shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
-    fi
-}
 previous_frontend_image() {
     local want
     want="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null)" || return 1
@@ -609,13 +1134,6 @@ previous_frontend_image() {
         *) return 1 ;;
     esac
     printf '%s\n' "$img"
-}
-# Immutable image id of the running frontend container; empty on any error.
-frontend_image_id() {
-    local cid
-    cid="$($COMPOSE ps -q frontend 2>/dev/null | head -n 1)" || return 1
-    [ -n "$cid" ] || return 1
-    docker container inspect --format '{{.Image}}' "$cid" 2>/dev/null
 }
 STATE_FILE="$BACKUP_DIR/pre-update-state-$(date +%Y%m%d-%H%M%S)"
 if {
@@ -664,20 +1182,8 @@ echo ""
 #    governs CURRENT_SHA above and rollback-update.sh's checkout.
 # ---------------------------------------------------------------------------
 NEEDS_INTERNET=0
-# A file that cannot be read is not a file that is not there, and this block's
-# messages used to say the latter for both. PREV_RECORD_STATE carries which it
-# was so the diagnosis below can be true.
-PREV_DEPLOYED_SHA=""
-if [ ! -e "$LAST_DEPLOYED_SHA_FILE" ]; then
-    PREV_RECORD_STATE=absent
-elif ! PREV_DEPLOYED_SHA="$(cat "$LAST_DEPLOYED_SHA_FILE" 2>/dev/null)"; then
-    PREV_RECORD_STATE=unreadable
-    PREV_DEPLOYED_SHA=""
-elif [ -z "$PREV_DEPLOYED_SHA" ]; then
-    PREV_RECORD_STATE=empty
-else
-    PREV_RECORD_STATE=present
-fi
+# PREV_DEPLOYED_SHA and PREV_RECORD_STATE were read in step 0a, before the
+# fetch.
 
 # Likewise for the object check: cat-file -e exits 1 when the object is really
 # absent and 128 when it could not be run or read. Only the first justifies
@@ -784,7 +1290,13 @@ if [ "$NEEDS_INTERNET" -eq 1 ]; then
         read -r reply
         case "$reply" in
             y|Y|yes|YES) echo "" ;;
-            *) echo ""; echo "Aborted by operator. Nothing changed."; exit 1 ;;
+            *) echo ""
+               if [ "$RESTORE_ARMED" -eq 1 ]; then
+                   echo "Aborted by operator. Putting the code back..."
+               else
+                   echo "Aborted by operator. Nothing changed."
+               fi
+               exit 1 ;;
         esac
     fi
 fi
@@ -792,18 +1304,34 @@ fi
 # ---------------------------------------------------------------------------
 # 3. Rebuild frontend image (network/compile risk — done BEFORE stopping).
 # ---------------------------------------------------------------------------
+# On --no-pull the checkout was already new when this script started; from
+# here this script changes things under it, so a failure puts the code back
+# with them.
+RESTORE_ARMED=1
 echo "→ Rebuilding frontend image..."
+BUILD_STARTED=1
 $COMPOSE build frontend
 echo ""
+fail_point build
 
 # ---------------------------------------------------------------------------
 # 4. Update pixi environment (network risk — done BEFORE stopping).
 # ---------------------------------------------------------------------------
 echo "→ Updating backend dependencies (pixi)..."
+NEW_LOCK_DIGEST="$(file_digest "$PROJECT_ROOT/backend/pixi.lock" || true)"
+PREV_LOCK_DIGEST="$(lock_digest_at "$RESTORE_SHA" || true)"
+if [ -n "$PREV_LOCK_DIGEST" ] && [ "$PREV_LOCK_DIGEST" = "$NEW_LOCK_DIGEST" ]; then
+    echo "  backend/pixi.lock is unchanged by this update."
+else
+    echo "  backend/pixi.lock changes in this update (or could not be compared). If"
+    echo "  the update fails, putting the old environment back may need the network."
+fi
 cd "$PROJECT_ROOT/backend"
+PIXI_INSTALL_STARTED=1
 run_as_user "$PIXI_BIN" install --locked
 cd "$PROJECT_ROOT"
 echo ""
+fail_point pixi
 
 # ---------------------------------------------------------------------------
 # 4b. CHDK camera USB access (libusb + udev rule + group membership).
@@ -944,8 +1472,8 @@ done
 echo ""
 
 # ---------------------------------------------------------------------------
-# 6. Stop the service. From HERE the EXIT trap will restart the stack on any
-#    failure. (The db container — whether it was already up under the service
+# 6. Stop the service. From HERE the EXIT trap restores the previous version
+#    and starts it on any failure. (The db container — whether it was already up under the service
 #    or started by us for the backup — is stopped by systemd's stop path via
 #    docker compose; we bring it back for the migration below.)
 # ---------------------------------------------------------------------------
@@ -961,6 +1489,7 @@ systemctl stop dtk 2>/dev/null || true
 $COMPOSE down --remove-orphans
 assert_stack_gone
 echo ""
+fail_point stopped
 
 # ---------------------------------------------------------------------------
 # 7. Apply DB migrations.
@@ -976,16 +1505,20 @@ for i in $(seq 1 30); do
     fi
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s."
-        exit 1   # EXIT trap restores the previous stack
+        exit 1   # EXIT trap restores the previous version
     fi
     sleep 2
 done
 
 echo "→ Applying migrations..."
 cd "$PROJECT_ROOT/backend"
+# Set before the call: a migration that fails part-way can leave the database
+# changed, and the restore then loads this run's dump.
+MIGRATION_STARTED=1
 run_as_user "$PIXI_BIN" run db-upgrade
 cd "$PROJECT_ROOT"
 echo ""
+fail_point migrate
 
 echo "→ Stopping database..."
 $COMPOSE down --remove-orphans
@@ -997,12 +1530,14 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Starting service..."
 systemctl start dtk
-sleep 5
-if systemctl is-active --quiet dtk; then
-    echo "  Service running ✓"
+fail_point started
+echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
+if wait_for_health "$HEALTH_TIMEOUT"; then
+    echo "  Service running and the backend answers /health ✓"
 else
-    echo "✗ Service failed to start on the new version."
-    exit 1   # EXIT trap restores the previous stack
+    echo "✗ The new version did not come up: the backend did not answer /health"
+    echo "  within ${HEALTH_TIMEOUT}s."
+    exit 1   # EXIT trap restores the previous version
 fi
 echo ""
 
