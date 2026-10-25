@@ -77,6 +77,12 @@ REF_FILE="$BACKUP_DIR/pre-update-ref"
 # script has to correct it when it takes the code back, or the unit reports a
 # version it is no longer running (NEH-272).
 LAST_DEPLOYED_SHA_FILE="$BACKUP_DIR/last-deployed-SHA"
+# update.sh's record of an unresolved deployment, and the flag a systemd
+# drop-in turns into a start condition for dtk (update.sh, UNRESOLVED_FILE).
+# A rollback that restores both code and the database the record names
+# removes them; nothing else here does.
+UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
+UNRESOLVED_FLAG="/etc/dtk/unresolved-deployment"
 # Written just before the code moves and removed once the move is verified. On
 # a later run its presence means a move to the commit it names was
 # interrupted, so a tree that is part-way there is the expected state and not
@@ -170,6 +176,26 @@ tree_clean() {
     sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" \
         git -C "$PROJECT_ROOT" diff --quiet --ignore-submodules=untracked 2>/dev/null || rc=$?
     return "$rc"
+}
+
+# Is the backend fully stopped? The unit inactive or failed with no main PID,
+# and no uvicorn left (stop.sh, the unit's ExecStop, finds the backend by
+# "uvicorn app.main:app"). Same check as update.sh.
+backend_fully_stopped() {
+    local state pid
+    state="$(systemctl show dtk -p ActiveState --value 2>/dev/null)"
+    case "$state" in inactive|failed) ;; *) return 1 ;; esac
+    pid="$(systemctl show dtk -p MainPID --value 2>/dev/null)"
+    [ -z "$pid" ] || [ "$pid" = 0 ] || return 1
+    ! pgrep -f '[u]vicorn app[.]main:app' >/dev/null 2>&1
+}
+wait_backend_stopped() {
+    local i
+    for i in $(seq 1 30); do
+        backend_fully_stopped && return 0
+        sleep 2
+    done
+    return 1
 }
 
 cd "$PROJECT_ROOT"
@@ -443,6 +469,12 @@ if [ -n "$TARGET_SHA" ]; then
                 echo "  do. To see them:"
                 echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT status"
                 echo "  Commit them, or copy them aside and discard them, then run this again."
+                if sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" submodule status --recursive 2>/dev/null | grep -q '^+'; then
+                    echo "  A submodule is not on the commit the superproject pins, which is what"
+                    echo "  an update whose code restore stopped part-way leaves. That is not"
+                    echo "  someone's work: put the submodules on their pins and run this again:"
+                    echo "      sudo -u $DTK_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+                fi
                 echo "  (An update that pulled will have saved its own under"
                 echo "   $STATE_DIR/local-mods-<timestamp>/ before resetting; check there"
                 echo "   before discarding anything.)"
@@ -576,6 +608,37 @@ if [ -n "$TARGET_SHA" ]; then
     fi
 fi
 
+# A record of an unresolved deployment is resolved only by restoring the code
+# to the commit it names as the target and the database from the dump it
+# names. Anything else would leave it standing over a unit that then runs,
+# so it is refused here, with nothing changed.
+if [ -e "$UNRESOLVED_FILE" ]; then
+    REC_KIND="$(sed -n 's/^kind: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    if [ "$REC_KIND" = restore-failed ]; then
+        REC_TARGET="$(sed -n 's/^code-commit: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+        REC_DUMP="$(sed -n 's/^dump-to-restore: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    else
+        REC_TARGET="$(sed -n 's/^restore-target: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+        REC_DUMP="$(sed -n 's/^dump: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
+    fi
+    REC_TARGET_FULL="$(sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" git -C "$PROJECT_ROOT" rev-parse --verify --quiet "${REC_TARGET:-none}^{commit}" 2>/dev/null || true)"
+    if [ -z "$TARGET_SHA" ] || [ -z "$REC_TARGET_FULL" ] || [ "$TARGET_SHA" != "$REC_TARGET_FULL" ]; then
+        echo "✗ $UNRESOLVED_FILE records an unresolved update whose code has to"
+        echo "  return to ${REC_TARGET:-(not recorded)}, but this rollback would return it to"
+        echo "  ${TARGET_SHA:-nothing (no commit is recorded in $SHA_FILE)}."
+        echo "  Restoring the database without the matching code would leave the two"
+        echo "  disagreeing. Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+    if [ -z "$REC_DUMP" ] || ! [ "$DUMP_FILE" -ef "$REC_DUMP" ]; then
+        echo "✗ $UNRESOLVED_FILE names the backup to restore:"
+        echo "      ${REC_DUMP:-(not recorded)}"
+        echo "  and this run would restore $DUMP_FILE. Run this again with that one."
+        echo "  Aborting with nothing changed — the database is untouched."
+        exit 1
+    fi
+fi
+
 echo "This will:"
 echo "  • RESTORE the database from:"
 echo "      $DUMP_FILE   (${DUMP_BYTES} bytes)"
@@ -607,6 +670,12 @@ fi
 echo "→ Stopping the appliance..."
 systemctl stop dtk 2>/dev/null || true
 $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+# The database is about to be replaced: nothing may still be writing to it.
+if ! wait_backend_stopped; then
+    echo "✗ The backend did not stop (systemctl status dtk; pgrep -af uvicorn)."
+    echo "  Nothing has been restored; the code and the database are as they were."
+    exit 1
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -880,6 +949,13 @@ for i in $(seq 1 30); do
     sleep 2
 done
 
+if ! backend_fully_stopped; then
+    echo "✗ A backend is running again; the database was NOT dropped."
+    echo "  The dump at $DUMP_FILE is intact. Stop dtk and run this again:"
+    echo "      sudo $RESUME_CMD"
+    $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
+    exit 1
+fi
 echo "→ Restoring the database (dropping and recreating '$DATABASE_NAME')..."
 # Terminate other sessions, then drop/recreate via the maintenance 'postgres'
 # database so we are not connected to the DB we are dropping.
@@ -1050,6 +1126,28 @@ if [ -n "$STATE_RECORD" ]; then
     echo ""
 fi
 
+# Code and database are both back (with a record, on the commit and from the
+# dump it names: checked before anything changed). The record and the flag
+# go before the start, which the flag would otherwise block.
+RECORD_NOTE=""
+if [ "$CODE_ROLLED_BACK" -eq 1 ]; then
+    if [ -e "$UNRESOLVED_FILE" ]; then
+        if rm -f "$UNRESOLVED_FILE"; then
+            RECORD_NOTE="$UNRESOLVED_FILE removed; update.sh will run again"
+        else
+            RECORD_NOTE="⚠ could not remove $UNRESOLVED_FILE; update.sh still refuses"
+        fi
+    fi
+    rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
+elif [ -e "$UNRESOLVED_FILE" ]; then
+    RECORD_NOTE="$UNRESOLVED_FILE kept: the code was not rolled back"
+fi
+if [ -e "$UNRESOLVED_FILE" ] || [ -e "$UNRESOLVED_FLAG" ]; then
+    echo "✗ An unresolved-deployment record or flag remains, so the appliance is"
+    echo "  NOT started. ${RECORD_NOTE}"
+    exit 1
+fi
+
 # ---------------------------------------------------------------------------
 # 5. Restart the service.
 # ---------------------------------------------------------------------------
@@ -1145,30 +1243,8 @@ else
 fi
 report_component "Pixi env:" "$PIXI_STATUS" "$PIXI_DETAIL" "$PIXI_FIX"
 report_component "Frontend:" "$IMG_STATUS" "$IMG_DETAIL" "$IMG_FIX"
-# An update that failed after starting its new version leaves a record that
-# makes update.sh refuse to run (update.sh, UNRESOLVED_FILE). The database and
-# the code are now both back on the previous version, so it is resolved.
-UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
-# Cleared only when this run restored both: the code (CODE_ROLLED_BACK) and
-# the database from the very dump the record names. Any other dump may be
-# from another version's schema.
-UNRESOLVED_DUMP=""
-if [ -e "$UNRESOLVED_FILE" ]; then
-    UNRESOLVED_DUMP="$(sed -n 's/^dump-to-restore: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
-    [ -n "$UNRESOLVED_DUMP" ] || UNRESOLVED_DUMP="$(sed -n 's/^dump: //p' "$UNRESOLVED_FILE" 2>/dev/null | head -n 1)"
-fi
-if [ -e "$UNRESOLVED_FILE" ] && [ "$CODE_ROLLED_BACK" -eq 1 ] \
-        && [ -n "$UNRESOLVED_DUMP" ] && [ "$DUMP_FILE" -ef "$UNRESOLVED_DUMP" ]; then
-    if rm -f "$UNRESOLVED_FILE"; then
-        echo "  Record:    $UNRESOLVED_FILE removed; update.sh will run again"
-    else
-        echo "  Record:    ⚠ could not remove $UNRESOLVED_FILE; update.sh still refuses"
-    fi
-elif [ -e "$UNRESOLVED_FILE" ] && [ "$CODE_ROLLED_BACK" -ne 1 ]; then
-    echo "  Record:    $UNRESOLVED_FILE kept: the code was not rolled back"
-elif [ -e "$UNRESOLVED_FILE" ]; then
-    echo "  Record:    $UNRESOLVED_FILE kept: it names the backup"
-    echo "             ${UNRESOLVED_DUMP:-(unreadable)}, and this run restored another."
+if [ -n "$RECORD_NOTE" ]; then
+    echo "  Record:    $RECORD_NOTE"
 fi
 if [ "$SERVICE_OK" -eq 1 ]; then
     echo "  Service:   running ✓"

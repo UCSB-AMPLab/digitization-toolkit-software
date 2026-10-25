@@ -113,6 +113,13 @@ case "$1" in
         fi
         rm -f "$S/active"; exit 0 ;;
     start)
+        # The drop-in's ConditionPathExists=!<flag>: systemd skips the start.
+        if [ -f "$DTK_TEST_STATE/systemd/dtk.service.d/unresolved.conf" ] \
+           && [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then
+            echo "condition failed: start skipped" >> "$CASE_DIR/log"
+            exit 0
+        fi
+        echo "$(date +%s) Started dtk.service - Digitization Toolkit." >> "$CASE_DIR/journal"
         cat "$PROJECT_ROOT/VERSION" >> "$S/started"
         touch "$S/active" "$CASE_DIR/docker/db_running"
         cp "$CASE_DIR/docker/tag_dtk-frontend_latest" "$CASE_DIR/docker/frontend_container"
@@ -152,7 +159,12 @@ case "$1" in
             echo "${FAKE_ALEMBIC_HEAD:-rev-B} (head)"
         fi
         if [ "$2" = db-upgrade ]; then
+            [ -z "${FAKE_KILL_ON_MIGRATE:-}" ] || { kill-update KILL "$PPID"; sleep 1; }
             echo migrated > "$CASE_DIR/db_state"
+            [ -z "${FAKE_HUP_ON_MIGRATE:-}" ] || kill-update HUP "$PPID"
+            if [ -n "${FAKE_LOCK_SUBMODULE_ON_MIGRATE:-}" ]; then
+                touch "$PROJECT_ROOT/.git/modules/backend/index.lock"
+            fi
             if [ -n "${FAKE_DIRTY_ON_MIGRATE:-}" ]; then
                 echo "hand edit" >> "$PROJECT_ROOT/README"
             fi
@@ -216,9 +228,15 @@ if [ "$1" = compose ]; then
                     seq 1 300 ;;
                 psql)
                     case "$*" in *alembic_version*) echo "${FAKE_DB_REV:-rev-B}"; exit 0 ;; esac
+                    case "$*" in *"DROP DATABASE"*)
+                        echo "psql DROP" >> "$CASE_DIR/log"
+                        [ -z "${FAKE_KILL_ON_DROP:-}" ] || { kill-update KILL "$PPID"; sleep 1; } ;;
+                    esac
                     if [ -t 0 ]; then :; else
                         input="$(cat)"
                         if [ -n "$input" ]; then
+                            # The load runs in a subshell of update.sh.
+                            [ -z "${FAKE_HUP_DURING_RESTORE:-}" ] || kill-update HUP "$(ps -o ppid= -p "$PPID" | tr -d ' ')"
                             [ -z "${FAKE_RESTORE_FAIL:-}" ] || exit 3
                             printf '%s\n' "$input" > "$CASE_DIR/restored.sql"
                             echo restored > "$CASE_DIR/db_state"
@@ -250,11 +268,32 @@ case "$1" in
 esac
 exit 0
 EOF
+cat > "$FAKEBIN/journalctl" <<'EOF2'
+#!/bin/sh
+# Lines are "<epoch> <message>"; --since @<epoch> is honoured.
+since=0
+while [ $# -gt 0 ]; do
+    case "$1" in --since) since="${2#@}"; shift ;; esac
+    shift
+done
+awk -v s="$since" '$1 >= s' "$CASE_DIR/journal" 2>/dev/null
+exit 0
+EOF2
+# kill-update <signal> <pid>: signal the running update.sh, which the
+# caller names by its parent chain (pgrep is a fake).
+cat > "$FAKEBIN/kill-update" <<'EOF2'
+#!/bin/sh
+kill "-$1" "$2" 2>/dev/null
+EOF2
 cat > "$FAKEBIN/pgrep" <<'EOF2'
 #!/bin/sh
 # FAKE_PGREP_STUCK: a backend survives every stop. FAKE_PGREP_STUCK_AFTER_B:
-# only once B has been started.
+# only once B has been started. FAKE_PGREP_STUCK_AFTER_MIGRATE: once the
+# database is migrated.
 [ -n "${FAKE_PGREP_STUCK:-}" ] && { echo 4243; exit 0; }
+if [ -n "${FAKE_PGREP_STUCK_AFTER_MIGRATE:-}" ] && grep -qx migrated "$CASE_DIR/db_state" 2>/dev/null; then
+    echo 4243; exit 0
+fi
 if [ -n "${FAKE_PGREP_STUCK_AFTER_B:-}" ] && grep -qx B "$CASE_DIR/sys/started" 2>/dev/null; then
     echo 4243; exit 0
 fi
@@ -275,8 +314,11 @@ echo "fe-A" > "$UP/frontend/app";        g -C "$UP/frontend" add -A; g -C "$UP/f
 STATE_DIR_T="$WORK/STATE"   # stand-in for /var/lib/dtk, per case (see run_case)
 git init -q "$UP/super"
 mkdir -p "$UP/super/scripts"
-sed "s#/var/lib/dtk#\$DTK_TEST_STATE#g" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
-sed "s#/var/lib/dtk#\$DTK_TEST_STATE#g" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
+# /var/lib/dtk, /etc/dtk and /etc/systemd/system all point into the case's
+# state directory.
+TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g'
+sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
+sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-rclone.sh"
 chmod +x "$UP/super/scripts/"*.sh
@@ -432,10 +474,11 @@ FAKE_HEALTHY_VERSIONS="A" run_case "rollback without a recorded commit" --yes
 rm -f "$DTK_TEST_STATE/backups/pre-update-SHA"
 CASE="rollback without a recorded commit: the rollback"
 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
-eq "$RC" 0 "exit status"
+eq "$RC" 1 "exit status"
 head_is "$SHA_B" "B (no commit to return to)"
-db_is restored
-has "kept: the code was not rolled back"
+db_is migrated
+has "this rollback would return it to"
+inactive
 if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
 
 FAKE_HEALTHY_VERSIONS="A" run_case "rollback whose code move fails" --yes
@@ -726,7 +769,7 @@ marker_has "dump: $(dump_name)"
 CASE="code restore refused: update.sh refuses"
 run_again "$PROJECT_ROOT/scripts/update.sh" --yes
 eq "$RC" 1 "exit status"
-has "the code could not"
+has "the code was not moved back"
 has "--resolve-forward"
 unlogged "git"
 CASE="code restore refused: the rollback refuses the modified checkout and keeps the record"
@@ -740,8 +783,10 @@ OTHER_DUMP="$DTK_TEST_STATE/backups/pre-update-19990101-000000.sql.gz"
 cp "$(dump_name)" "$OTHER_DUMP"; touch -t 199901010000 "$OTHER_DUMP"
 REAL_DUMP="$(ls -t "$DTK_TEST_STATE/backups"/pre-update-*.sql.gz | head -n 1)"
 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$OTHER_DUMP"
-eq "$RC" 0 "exit status"
-has "kept: it names the backup"
+eq "$RC" 1 "exit status"
+has "names the backup to restore"
+db_is migrated
+inactive
 if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
 CASE="code restore refused: the rollback from the named dump clears it"
 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$REAL_DUMP"
@@ -798,6 +843,165 @@ CASE="restored update.sh has the guard: no warning"
 FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 run_case "restored update.sh has the guard" --yes
 marker_has "kind: restore-failed"
 hasnt "DO NOT RUN scripts/update.sh"
+
+# ── 1. Signals, and records before irreversible steps ───────────────────────
+FAKE_HUP_ON_MIGRATE=1 run_case "SIGHUP during the migration" --yes
+eq "$RC" 129 "exit status (129, never 0)"
+head_is "$SHA_A" A
+db_is restored
+hasnt "Update complete!"
+no_marker
+
+FAKE_MIGRATE_FAIL=1 FAKE_HUP_DURING_RESTORE=1 run_case "SIGHUP during the trap's restore" --yes
+eq "$RC" 1 "exit status"
+db_is restored
+has "back online on the previous version"
+no_marker
+
+FAKE_MIGRATE_FAIL=1 FAKE_KILL_ON_DROP=1 run_case "killed right after the DROP" --yes
+marker_has "kind: restore-failed"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag exists"; else fail "no start flag"; fi
+
+FAKE_KILL_ON_MIGRATE=1 run_case "killed during the migration" --yes
+marker_has "kind: migrated-not-restored"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag exists"; else fail "no start flag"; fi
+CASE="killed during the migration: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "An earlier update was left unresolved"
+
+# ── 2. The start flag and drop-in ───────────────────────────────────────────
+FAKE_HEALTHY_VERSIONS="A" run_case "the flag keeps dtk from starting" --yes
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag exists"; else fail "no start flag"; fi
+eq "$(cat "$DTK_TEST_STATE/systemd/dtk.service.d/unresolved.conf" 2>/dev/null | grep ConditionPathExists)" \
+   "ConditionPathExists=!$DTK_TEST_STATE/etc-dtk/unresolved-deployment" "drop-in names the flag"
+logged "systemctl daemon-reload"
+CASE="the flag keeps dtk from starting: a reboot's start"
+: > "$CASE_DIR/log"
+PATH="$FAKEBIN:$PATH" systemctl start dtk
+inactive
+logged "condition failed: start skipped"
+CASE="the flag keeps dtk from starting: refusal says whether dtk started since"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+has "old."
+has "dtk has not been started since it was written"
+CASE="the flag keeps dtk from starting: the rollback clears it"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the start flag remains"; else ok "the start flag is removed"; fi
+active
+no_marker
+
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward clears the flag" --yes
+CASE="resolve forward clears the flag: resolve"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 0 "exit status"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the start flag remains"; else ok "the start flag is removed"; fi
+active
+
+run_case "success leaves no flag" --yes
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
+no_marker
+
+# ── 3. --no-pull with no usable deploy record: no restore target ────────────
+setup_no_pull_case() {  # setup_no_pull_case <dir-name> [last-deployed-SHA content]
+    CASE_DIR="$WORK/cases/$1"
+    mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
+    PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT
+    cp -R "$TEMPLATE" "$PROJECT_ROOT"
+    g -C "$PROJECT_ROOT" fetch origin
+    g -C "$PROJECT_ROOT" merge --ff-only origin/dev
+    g -C "$PROJECT_ROOT" submodule update --init --recursive
+    export DTK_TEST_STATE="$CASE_DIR/state"
+    mkdir -p "$DTK_TEST_STATE/backups"
+    [ -z "${2:-}" ] || echo "$2" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+    touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+    echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"
+    echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+    echo "A" > "$CASE_DIR/sys/started"
+    echo "schema-A" > "$CASE_DIR/db_state"
+    : > "$CASE_DIR/log"
+}
+run_no_pull() {
+    OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 \
+        bash "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes 2>&1 </dev/null)"
+    RC=$?
+    echo "$OUT" > "$CASE_DIR/out"
+}
+for rec in "" "unknown"; do
+    setup_no_pull_case "no-pull-record-${rec:-absent}" "$rec"
+    CASE="--no-pull, deploy record '${rec:-absent}', migration fails"
+    FAKE_MIGRATE_FAIL=1 run_no_pull
+    eq "$RC" 1 "exit status"
+    head_is "$SHA_B" "B (no restore target)"
+    has "there is no record of the version that was running"
+    hasnt "code: $SHA_B"
+    marker_has "kind: migrated-not-restored"
+    db_is migrated
+done
+setup_no_pull_case "no-pull-record-full" "$SHA_A"
+CASE="--no-pull, a deploy record as older update.sh writes it (full SHA)"
+DTK_UPDATE_FAIL_AT=build run_no_pull
+head_is "$SHA_A" A
+has "code: $SHA_A (the last deployed version)"
+
+# ── 4/5. rollback-update.sh refusals ────────────────────────────────────────
+FAKE_HEALTHY_VERSIONS="A" run_case "rollback with a backend that will not stop" --yes
+CASE="rollback with a backend that will not stop: the rollback"
+FAKE_PGREP_STUCK=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "The backend did not stop"
+unlogged "psql DROP"
+db_is migrated
+head_is "$SHA_B" "B (nothing moved)"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+
+FAKE_MIGRATE_FAIL=1 FAKE_PGREP_STUCK_AFTER_MIGRATE=1 run_case "update.sh restore with a backend running" --yes
+eq "$RC" 1 "exit status"
+unlogged "psql DROP"
+db_is migrated
+has "a backend was running; nothing was dropped"
+marker_has "kind: restore-failed"
+inactive
+
+# ── 6. Partial code restore: superproject back, a submodule not ─────────────
+FAKE_MIGRATE_FAIL=1 FAKE_LOCK_SUBMODULE_ON_MIGRATE=1 run_case "partial code restore" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" "A (superproject)"
+marker_has "kind: migrated-not-restored"
+marker_has "code-commit: $SHA_A"
+CASE="partial code restore: update.sh refuses"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+has "only part-way"
+CASE="partial code restore: the rollback names the off-pin submodule"
+rm -f "$PROJECT_ROOT/.git/modules/backend/index.lock"
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+has "A submodule is not on the commit the superproject pins"
+CASE="partial code restore: after the submodules are put on their pins"
+g -C "$PROJECT_ROOT" submodule update --init --recursive
+run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+no_marker
+active
+
+# ── 8/10. --resolve-forward checks ──────────────────────────────────────────
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward with a backend process left" --yes
+CASE="resolve forward with a backend process left: resolve"
+FAKE_PGREP_STUCK=1 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+has "a backend process is running"
+if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
+
+FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward with a staged change" --yes
+echo "staged edit" >> "$PROJECT_ROOT/README"
+g -C "$PROJECT_ROOT" add README
+git -C "$PROJECT_ROOT" show HEAD:README > "$PROJECT_ROOT/README"
+CASE="resolve forward with a staged change: resolve"
+run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+eq "$RC" 1 "exit status"
+has "modified tracked files"
 
 # ── The fetch fails: nothing has moved ──────────────────────────────────────
 FAKE_BREAK_ORIGIN=1 run_case "fetch fails" --yes
