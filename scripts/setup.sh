@@ -339,7 +339,16 @@ echo ""
 # offline-safe" warning (NEH-216). Path kept in sync with update.sh's
 # BACKUP_DIR / LAST_DEPLOYED_SHA_FILE.
 echo "→ Recording the provisioned version..."
-install -d -o "$DTK_USER" -g "$DTK_USER" /var/lib/dtk/backups
+# root:root 0700: update.sh writes its pre-update database dumps here, and
+# they hold every account's password hash. Nothing that runs as $DTK_USER
+# reads this directory (see update.sh, secure_backup_dir). On a re-run of
+# this script the blanket chown -R in step 2 has just given the directory and
+# every dump in it to $DTK_USER, so ownership is returned to root recursively
+# and the directory's mode set explicitly, whatever install -d does with a
+# directory that already exists.
+install -d -o root -g root -m 0700 /var/lib/dtk/backups
+chown -R root:root /var/lib/dtk/backups
+chmod 0700 /var/lib/dtk/backups
 # git must run as the repo owner: root-run git hits dubious-ownership on a
 # user-cloned repo and would silently poison the record.
 PROVISIONED_SHA="$(run_as_user git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "")"

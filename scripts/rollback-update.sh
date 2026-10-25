@@ -957,6 +957,22 @@ state_field() {
     sed -n "s/^$1: //p" "$2" 2>/dev/null | head -n 1
 }
 
+# frontend_rebuilt_detail <installed-sha> <target-sha>: why the running
+# frontend image is not the one recorded for <target-sha>. <installed-sha> is
+# the commit the update recorded as installing (installing-superproject), which
+# is the code its frontend build ran on. When an update re-installed the commit
+# that was already deployed, the rollback returns to that same commit, and
+# "the newer code" would be false.
+frontend_rebuilt_detail() {
+    if [ -z "$1" ] || [ "$1" = "unknown" ]; then
+        echo "the running frontend image is not the one recorded when $2 was deployed"
+    elif [ "$1" = "$2" ]; then
+        echo "the frontend image was rebuilt from the same commit, $2, after it was deployed"
+    else
+        echo "the frontend image was rebuilt from the newer code ($1)"
+    fi
+}
+
 # Which record describes the dump just restored? update.sh writes
 # pre-update-ref (state file name + dump name) in the same step as the dump,
 # so the record is identified by the attempt, not by the commit: several
@@ -1031,7 +1047,7 @@ if [ -n "$STATE_RECORD" ]; then
         IMG_DETAIL="the running frontend image is the one recorded when $TARGET_SHA was deployed"
     else
         IMG_STATUS="differs"
-        IMG_DETAIL="the frontend image was rebuilt from the newer code"
+        IMG_DETAIL="$(frontend_rebuilt_detail "$(state_field installing-superproject "$STATE_RECORD")" "$TARGET_SHA")"
     fi
 fi
 
