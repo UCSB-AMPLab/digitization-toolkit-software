@@ -717,6 +717,20 @@ write_unresolved_marker() {
     return 1
 }
 
+# The code was restored to the previous version, and with it that version's
+# scripts/update.sh. One older than the record does not know it, so it would
+# not refuse: say so, loudly, where the record is written.
+warn_if_restored_update_ignores_record() {
+    grep -q 'unresolved-deployment' "$PROJECT_ROOT/scripts/update.sh" 2>/dev/null && return 0
+    echo ""
+    echo "  ⚠⚠⚠ DO NOT RUN scripts/update.sh ON THIS UNIT UNTIL THE ROLLBACK HAS SUCCEEDED."
+    echo "      The code is back on $(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo 'the previous version'),"
+    echo "      whose update.sh predates the unresolved-deployment record: it will NOT"
+    echo "      refuse, and would update over the broken database. The only way"
+    echo "      forward is the rollback command above."
+    echo ""
+}
+
 report_started_failure() {
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -857,6 +871,7 @@ restore_after_stop() {
             echo "  ⚠ Could not write $UNRESOLVED_FILE. Do NOT run update.sh again"
             echo "    before the rollback."
         fi
+        warn_if_restored_update_ignores_record
         echo ""
         return
     fi
@@ -1852,6 +1867,17 @@ systemctl stop dtk 2>/dev/null || true
 # project network and wedges every later network operation (NEH-214).
 $COMPOSE down --remove-orphans
 assert_stack_gone
+# assert_stack_gone sees only Docker. The backend runs natively, and one that
+# survived the stop could reconnect once the db is back and write after the
+# backup below, and a restore would then discard those writes. So the stop has
+# to be confirmed (unit inactive or failed, no main PID, no uvicorn) before
+# any backup or migration; otherwise abort here, with the database untouched.
+if ! wait_backend_stopped; then
+    echo "✗ The backend did not stop: dtk is still active, or a"
+    echo "  'uvicorn app.main:app' process survives (systemctl status dtk; pgrep -af uvicorn)."
+    echo "  Aborting before the backup and the migration; the database is untouched."
+    exit 1   # EXIT trap: no migration ran, so it restores code and image and starts the previous version
+fi
 echo ""
 fail_point stopped
 
@@ -1909,6 +1935,12 @@ fail_point dumped
 
 echo "→ Applying migrations..."
 cd "$PROJECT_ROOT/backend"
+# Checked again: nothing may have started a backend since the backup.
+if ! wait_backend_stopped; then
+    echo "✗ A backend is running again; aborting before the migration. The"
+    echo "  database is untouched."
+    exit 1
+fi
 # Set before the call: a migration that fails part-way can leave the database
 # changed, and the restore then loads this run's dump.
 MIGRATION_STARTED=1

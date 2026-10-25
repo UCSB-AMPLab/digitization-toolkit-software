@@ -252,7 +252,12 @@ exit 0
 EOF
 cat > "$FAKEBIN/pgrep" <<'EOF2'
 #!/bin/sh
+# FAKE_PGREP_STUCK: a backend survives every stop. FAKE_PGREP_STUCK_AFTER_B:
+# only once B has been started.
 [ -n "${FAKE_PGREP_STUCK:-}" ] && { echo 4243; exit 0; }
+if [ -n "${FAKE_PGREP_STUCK_AFTER_B:-}" ] && grep -qx B "$CASE_DIR/sys/started" 2>/dev/null; then
+    echo 4243; exit 0
+fi
 exit 1
 EOF2
 chmod +x "$FAKEBIN"/*
@@ -292,6 +297,14 @@ g -C "$UP/super/frontend" pull -q origin dev
 echo "B" > "$UP/super/VERSION"
 g -C "$UP/super" add -A; g -C "$UP/super" commit -m B
 SHA_B="$(git -C "$UP/super" rev-parse HEAD)"
+
+# An older deployed version, A_OLD: A with an update.sh that predates the
+# unresolved-deployment record (as 0.0.0-pre.3's does).
+g -C "$UP/super" checkout -q -b old "$SHA_A"
+printf '#!/bin/bash\necho "an update.sh from before the record"\n' > "$UP/super/scripts/update.sh"
+g -C "$UP/super" commit -qam "A with an old update.sh"
+SHA_A_OLD="$(git -C "$UP/super" rev-parse HEAD)"
+g -C "$UP/super" checkout -q dev
 
 # The unit: a clone on dev at A, tracking the remote's dev (at B).
 TEMPLATE="$WORK/template"
@@ -658,7 +671,7 @@ DTK_UPDATE_FAIL_AT=served run_case "fails after serving" --yes
 started_failure_checks
 has "answered /health, and the update"
 
-FAKE_HEALTHY_VERSIONS="A" FAKE_PGREP_STUCK=1 run_case "backend does not stop" --yes
+FAKE_HEALTHY_VERSIONS="A" FAKE_PGREP_STUCK_AFTER_B=1 run_case "backend does not stop" --yes
 eq "$RC" 1 "exit status"
 db_is migrated
 unlogged "DROP DATABASE"
@@ -736,6 +749,55 @@ eq "$RC" 0 "exit status"
 head_is "$SHA_A" A
 db_is restored
 no_marker
+
+# ── The backend survives the stop: no backup, no migration ──────────────────
+FAKE_PGREP_STUCK=1 FAKE_MIGRATE_FAIL=1 run_case "backend survives the stop" --yes
+eq "$RC" 1 "exit status"
+has "The backend did not stop"
+has "Aborting before the backup and the migration"
+eq "$(cat "$CASE_DIR/dumps")" 1 "only the trial dump was taken"
+unlogged "pixi run db-upgrade"
+unlogged "DROP DATABASE"
+db_is schema-A
+head_is "$SHA_A" A
+has "database: untouched"
+no_marker
+
+# ── The restored code's update.sh predates the record ───────────────────────
+# B's update.sh is run by hand (--no-pull) on a unit last deployed at A_OLD;
+# the migration fails, and so does the database restore after the code is
+# back on A_OLD.
+CASE_DIR="$WORK/cases/old-update-script"
+mkdir -p "$CASE_DIR/sys" "$CASE_DIR/docker"; export CASE_DIR
+PROJECT_ROOT="$CASE_DIR/dtk"; export PROJECT_ROOT
+cp -R "$TEMPLATE" "$PROJECT_ROOT"
+g -C "$PROJECT_ROOT" fetch origin
+g -C "$PROJECT_ROOT" merge --ff-only origin/dev
+g -C "$PROJECT_ROOT" submodule update --init --recursive
+export DTK_TEST_STATE="$CASE_DIR/state"
+mkdir -p "$DTK_TEST_STATE/backups"
+echo "$SHA_A_OLD" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
+touch "$CASE_DIR/sys/active" "$CASE_DIR/docker/db_running" "$CASE_DIR/docker/known_$OLD_IMG"
+echo "$OLD_IMG" > "$CASE_DIR/docker/tag_dtk-frontend_latest"
+echo "$OLD_IMG" > "$CASE_DIR/docker/frontend_container"
+echo "A" > "$CASE_DIR/sys/started"
+echo "schema-A" > "$CASE_DIR/db_state"
+CASE="restored update.sh predates the record"
+: > "$CASE_DIR/log"
+OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 \
+    bash "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes 2>&1 </dev/null)"
+RC=$?
+echo "$OUT" > "$CASE_DIR/out"
+eq "$RC" 1 "exit status"
+head_is "$SHA_A_OLD" "A_OLD"
+marker_has "kind: restore-failed"
+has "DO NOT RUN scripts/update.sh ON THIS UNIT UNTIL THE ROLLBACK HAS SUCCEEDED"
+has "predates the unresolved-deployment record"
+
+CASE="restored update.sh has the guard: no warning"
+FAKE_MIGRATE_FAIL=1 FAKE_RESTORE_FAIL=1 run_case "restored update.sh has the guard" --yes
+marker_has "kind: restore-failed"
+hasnt "DO NOT RUN scripts/update.sh"
 
 # ── The fetch fails: nothing has moved ──────────────────────────────────────
 FAKE_BREAK_ORIGIN=1 run_case "fetch fails" --yes
