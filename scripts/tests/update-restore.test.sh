@@ -1608,6 +1608,32 @@ if grep -qx "# dump-check: not possible; every volume with a stem directory is l
 list_has "7\tLibro 7\tlibro-7\tunknown\t-\t$DTK_TEST_STATE/projects/libro-7"
 stems_untouched
 
+# P2: a current database from before the stem migration, no filename_stem.
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$NEW_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "current database without filename_stem, paths present"
+: > "$DTK_TEST_STATE/projects/libro-7/captures/libro-7-img_0001.jpg"
+CASE="current database without filename_stem, paths present: the rollback"
+FAKE_NO_STEM_COLUMN=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 0 "exit status"
+hasnt "Could not check the current database"
+has "The current database predates file name stems"
+db_is restored
+
+FAKE_DUMP_COLLECTIONS="$DUMP_7" FAKE_DUMP_RECORDS="$RECORDS_7" \
+FAKE_DUMP_RECORD_IMAGES="700\t70\tlibro-7-img_0001.jpg\t$OLD_PATH\tjpg\tt\t\\N\t\\N" \
+    stem_case "current database without filename_stem, paths missing"
+CASE="current database without filename_stem, paths missing: the rollback"
+FAKE_NO_STEM_COLUMN=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
+eq "$RC" 1 "exit status"
+hasnt "Could not check the current database"
+has "stem libro-7: 1 of 1 images not on disk"
+stems_untouched
+CASE="current database without filename_stem, paths missing: accepted"
+FAKE_NO_STEM_COLUMN=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes --accept-lost-stems "$(dump_name)"
+eq "$RC" 0 "exit status"
+db_is restored
+
 stem_case "database unreachable"
 CASE="database unreachable: the rollback"
 FAKE_DB_UNREACHABLE=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"

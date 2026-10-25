@@ -910,9 +910,16 @@ if ! DB_EXISTS="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d postgres -At \
     stem_guard_refuse_unanswered "the query failed"
 fi
 HAS_COLLECTIONS=""
+HAS_STEM_COLUMN=""
 if [ -n "$DB_EXISTS" ]; then
     if ! HAS_COLLECTIONS="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At \
             -c "SELECT to_regclass('public.collections')" 2>/dev/null)"; then
+        stem_guard_refuse_unanswered "the query failed"
+    fi
+    # A schema from before the stem migration has the table without the
+    # column; then no volume has a stem in the current database.
+    if [ -n "$HAS_COLLECTIONS" ] && ! HAS_STEM_COLUMN="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At \
+            -c "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'collections' AND column_name = 'filename_stem'" 2>/dev/null)"; then
         stem_guard_refuse_unanswered "the query failed"
     fi
 fi
@@ -940,6 +947,9 @@ if [ -z "$DB_EXISTS" ]; then
 elif [ -z "$HAS_COLLECTIONS" ]; then
     # Dropped, or never created: a restore that failed part-way leaves this.
     echo "  The current database has no volumes table, so no volume can lose its files."
+elif [ -z "$HAS_STEM_COLUMN" ]; then
+    echo "  The current database predates file name stems, so no volume in it has a"
+    echo "  stem directory to lose; the backup's own images are still checked."
 else
     if ! STEMMED="$($COMPOSE exec -T db psql -U "$DATABASE_USER" -d "$DATABASE_NAME" -At -F "$(printf '\t')" \
             -c "SELECT id, translate(name, E'\t\n\r', '   '), filename_stem FROM collections WHERE filename_stem IS NOT NULL ORDER BY id" 2>/dev/null)"; then
