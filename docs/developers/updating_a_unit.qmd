@@ -78,13 +78,13 @@ git -C /home/pi/dtk fetch origin
 git -C /home/pi/dtk rev-parse --verify --quiet refs/heads/main
 ```
 
-Check that the commit the unit runs (the first command in 1.1) is in the release's history:
+Check that the commit in `last-deployed-SHA` (1.1) is in the release's history:
 
 ```bash
-git -C /home/pi/dtk merge-base --is-ancestor <commit from 1.1> origin/main && echo ok
+git -C /home/pi/dtk merge-base --is-ancestor "$(sudo cat /var/lib/dtk/backups/last-deployed-SHA)" origin/main && echo ok
 ```
 
-It must print `ok`. If it does not, the unit runs code newer than the release, or code the release does not contain: stop, and decide what to do with that code before going on.
+It must print `ok`. If it does not, the unit runs code newer than the release, or code the release does not contain: stop, and decide what to do with that code before going on. `update.sh --no-pull` makes the same check and refuses (2.2).
 
 If the second command above prints nothing, there is no local `main` yet; create it tracking `origin/main`:
 
@@ -114,6 +114,15 @@ git -C /home/pi/dtk submodule foreach --quiet --recursive 'git status --porcelai
 - Every line of `submodule status` must begin with a space (each submodule on its pin).
 - The last two commands must print nothing. `update.sh` does not put back a checkout with modified tracked files if it fails, and `rollback-update.sh` refuses one, so the tree must be clean before 2.2.
 
+Check also that no tracked file is marked assume-unchanged or skip-worktree, which hides changes from `git status`. Both commands must print nothing:
+
+```bash
+git -C /home/pi/dtk ls-files -v | grep '^[a-zS] '
+git -C /home/pi/dtk submodule foreach --quiet --recursive 'git ls-files -v | grep "^[a-zS] " || true'
+```
+
+`update.sh --no-pull` checks all of this itself and refuses with nothing changed (2.2). The checks here are what to run before it, so that it does not refuse.
+
 `checkout` refuses when local changes would be overwritten; set them aside by hand first, since `update.sh` does that only when it fetches.
 
 ### 2.2 Run `update.sh` outside the SSH session
@@ -127,6 +136,19 @@ sudo systemd-run --unit=dtk-deploy --collect /home/pi/dtk/scripts/update.sh --ye
 Never run `update.sh` directly in an SSH session. If the connection is lost, the shell sends the script SIGHUP and it stops part-way. Under `systemd-run` it runs as its own transient unit and continues whatever happens to the connection.
 
 `--yes` is required here. `update.sh` asks for confirmation when the update may need internet access, and with no terminal and no `--yes` it aborts.
+
+#### When `--no-pull` refuses
+
+With `--no-pull`, `update.sh` installs whatever is checked out, so it checks the checkout first. Each refusal comes before anything changes, and each message ends with the commands that show and fix the problem.
+
+| The message begins | Meaning | Fix |
+|---|---|---|
+| `✗ --no-pull: a submodule is not on the commit HEAD records (<commit>),` / `or its staged pointer differs from it (or this could not be read).` | A submodule's checked-out commit, or a pointer staged in the superproject, is not the gitlink `HEAD` records. | `git -C /home/pi/dtk reset -q -- <submodule path>` for a staged pointer, then `git -C /home/pi/dtk submodule update --init --recursive`. |
+| `✗ --no-pull: tracked files are marked assume-unchanged or skip-worktree` | A tracked file, in the superproject or a submodule, carries a flag that hides its changes. The message lists the files. | In the repository that owns each file: `git -C <repository> update-index --no-assume-unchanged --no-skip-worktree <file>`, then look at what `git status --short` reports. |
+| `✗ --no-pull: the checkout has modified tracked files (changed or staged),` | A tracked file is changed or staged, in the superproject or a submodule. | Copy aside anything worth keeping, commit it, or discard it. The message gives the `reset --hard HEAD` commands that discard every local change to tracked files. |
+| `✗ --no-pull: the code checked out (<commit>) does not descend from the version` / `this unit last deployed (<commit>).` | The checkout is older than, or unrelated to, the commit in `last-deployed-SHA`. Installing it would put older code over a database migrated for the deployed version. | To go back to an earlier version, use the rollback (step 8). To install a newer version, check out a commit that contains the deployed one. |
+
+Each refusal says `Nothing has been changed.` The script prints its commands with `sudo -u pi`.
 
 **Later updates (0.1.x onward).** The script on disk is then already the 0.1.0 one, so the ordinary path applies: `sudo systemd-run --unit=dtk-deploy --collect /home/pi/dtk/scripts/update.sh --yes`, which fetches and fast-forwards `main` itself.
 
@@ -303,11 +325,24 @@ READ_APP_KEY=...
 
 | Key | What it is |
 |---|---|
-| `KEY_ID`, `APP_KEY` | The unit's upload key: a B2 application key scoped to the one bucket and the unit's tenant prefix, with `listFiles` and `writeFiles`. No `readFiles` and no `deleteFiles`, so a stolen unit can neither download nor erase the archive. |
-| `BUCKET` | The unit's bucket, one per institution. |
-| `READ_KEY_ID`, `READ_APP_KEY` | Optional. A second key with the same scope, with `listFiles` and `readFiles`. It must differ from the upload key. Without it, restoring a freed volume is unavailable. |
+| `KEY_ID`, `APP_KEY` | The unit's write key, `captua-<unit>-write`: `listBuckets`, `listFiles` and `writeFiles`. No `readFiles` and no `deleteFiles`, so a stolen unit can neither download nor erase the archive. |
+| `BUCKET` | The unit's bucket, `<federation>-masters`. |
+| `READ_KEY_ID`, `READ_APP_KEY` | Optional. The unit's read key, `captua-<unit>-read`: `listBuckets`, `listFiles` and `readFiles`. It must differ from the write key. Without it, restoring a freed volume is unavailable. |
 
-The keys issued for 0.1.0 also carry `listBuckets`, each scoped to its unit's bucket and tenant prefix. The interim Rionegro key carries `listBuckets`, `listFiles` and `writeFiles`, scoped to its bucket with no prefix. `provision-rclone.sh` asks only for `writeFiles` and `listFiles` on the upload key and `listFiles` and `readFiles` on the read key. Whether rclone needs `listBuckets` (verify on the bench). The file's mode is 0600 and its owner root.
+Both keys are scoped to the unit's bucket and its tenant prefix. `provision-rclone.sh` asks only for `writeFiles` and `listFiles` on the write key and `listFiles` and `readFiles` on the read key; the keys issued for 0.1.0 also carry `listBuckets`, as the interim Rionegro key did. Whether rclone needs `listBuckets` (verify on the bench). The file's mode is 0600 and its owner root.
+
+`FISQUA_TOKEN` in the same file, for the link to Fisqua (lands with the Fisqua link).
+
+#### Units and tenants
+
+| Former name | Unit and tenant (`--tenant`) | Keys |
+|---|---|---|
+| rionegro | `ahr` | `captua-ahr-write`, `captua-ahr-read` |
+| lab | `ampl` | `captua-ampl-write`, `captua-ampl-read` |
+| sbmal | `sbmal` | `captua-sbmal-write`, `captua-sbmal-read` |
+| cobos | `cobos` (staging only) | `captua-cobos-write`, `captua-cobos-read` |
+
+Never print a key id or an application key in a log, a ticket or this guide.
 
 Never pass a key as an assignment in front of `sudo`: it becomes part of sudo's command line, which any local user can read from `/proc/<pid>/cmdline`.
 
@@ -316,12 +351,16 @@ Never pass a key as an assignment in front of `sudo`: it becomes part of sudo's 
 ```bash
 sudo DTK_OFFSITE_KEY_FILE=/root/dtk-offsite-key \
     /home/pi/dtk/scripts/provision-rclone.sh \
-    --tenant <prefix> --dump-recipient age1...
+    --tenant <tenant> \
+    --dump-recipient age172wkzadqepd565chppztfw8jefpcga8s7t6eqrfhnxnv2nlfkdrqygrl3m
 ```
 
-- `--tenant` is the prefix every object of the unit is keyed under: one segment of lowercase letters and digits joined by single hyphens. Replacing a tenant already recorded also needs `--change-tenant`.
-- `--dump-recipient` is the age public key (`age1...`) the catalogue dumps are encrypted to. The script refuses a private key. The private key never goes on the unit.
+- `--tenant` is the prefix every object of the unit is keyed under, and the unit's slug in Fisqua. The script refuses a value that is not 1 to 63 lowercase letters, digits and single hyphens, starting with a letter and not ending with a hyphen, or that is one of `platform`, `www`, `api`, `admin` or `app`. Replacing a tenant already recorded also needs `--change-tenant`.
+- `--dump-recipient` is the age public key the catalogue dumps are encrypted to; the one above is the recipient for every unit. The script refuses a private key. The private key never goes on the unit.
+- `--fisqua-env`, for the link to Fisqua (lands with the Fisqua link).
 - Both are kept on later runs that do not give them, including the run inside every update.
+
+Before it probes the bucket, the script checks that `api.backblazeb2.com` answers. Any HTTP answer counts, an error status included; only a connection that cannot be made skips the probes, and the script then says so. The probes list the bucket with the keys, which is what tests the credentials.
 
 The script writes the rclone config at `/var/lib/dtk/rclone.conf` (the upload remote, and `[b2read]` when a read key is given) and writes `/var/lib/dtk/offsite.env` whole, both `0600` and owned by `pi`. It never replaces an existing credential. It does not start, stop or restart `dtk`.
 
@@ -601,6 +640,27 @@ sudo systemd-run --unit=dtk-rollback --collect \
 
 At the first start after a rollback, `start.sh` runs `pixi run start`, which may reinstall the pixi environment for the restored lock file; that needs the network.
 
+### 8.0a The stem guard
+
+Before it stops anything, the rollback checks whether the restored catalogue would point at files that are not there:
+
+- It reads every image path in the backup and looks for the file on disk, resolving a relative path as the backend does, against `/home/pi/dtk/backend`. A master freed to offsite storage is not counted. A volume with any image missing is at risk.
+- It asks the current database for volumes with a stem directory, under the projects root in `/var/lib/dtk/storage-override.json` and under the default root. A volume with a stem directory that the backup does not have is at risk: it would be gone from the catalogue, its files left in the directory.
+
+If any volume is at risk, the rollback refuses with nothing changed and writes the list to `/var/lib/dtk/backups/rollback-stems-at-risk`. The message begins:
+
+```text
+✗ Restoring this backup may cut volumes off from their files:
+```
+
+and ends with `To roll back anyway, accepting this, run the same command again with --accept-lost-stems.` With `--accept-lost-stems`, the rollback goes on and records the acceptance in the list.
+
+If the current database cannot answer, the rollback refuses too: `✗ Could not check the current database for volumes with a stem directory`. Start the database and run it again. A database that does not exist, which an interrupted restore leaves, holds no volume, and a schema from before stems has no stem directories; in both cases the backup's own images are still checked.
+
+**The first 0.1.0 install.** Once 0.1.0 has started and moved files into `<stem>/captures/` (3.3, and for volumes that already had a stem, the start at the end of `update.sh`), the pre-update backup names those files at their old paths. A rollback to it would cut those volumes off, so the guard refuses it. After a failed update with an unresolved record of kind `started-failed` or `migrated-not-restored`, the way forward is `update.sh --resolve-forward` (7.4), not a rollback. After a successful update, the way forward is a fixed version installed with an ordinary update.
+
+Recovering a volume after an accepted loss has no command yet. A `restore-stem` command is planned after 0.1.0.
+
 ### 8.1 What it restores
 
 1. It checks that the checkout is clean and on its pins and that the pre-update commit is present, and stops with the unit still running if not. It keeps a copy of itself at `/var/lib/dtk/rollback-update.sh`.
@@ -628,7 +688,7 @@ Never roll back after a volume has been freed. The freed files are no longer on 
 
 The cleanest point is before step 3. By then the backend has moved files only for volumes that had a stem before the update; on a unit where no volume had one, it has moved nothing.
 
-Do not roll back after the restart in 3.3. From then on the files of each volume given a stem are in `<stem>/`, and the restored rows name their old paths. The earlier version cannot find the moved files, and nothing moves them back.
+Do not roll back after the restart in 3.3. From then on the files of each volume given a stem are in `<stem>/`, and the restored rows name their old paths. The earlier version cannot find the moved files, and nothing moves them back. The stem guard (8.0a) refuses such a rollback.
 
 ### 8.4 The next update
 
@@ -644,17 +704,18 @@ The rollback writes the restored commit to `last-deployed-SHA` and moves the loc
 
    `offsite.env` stays aside only while the rolled-back backend in the plaintext range runs.
 3. 2.2, with `--no-pull`.
-4. Steps 3 to 5 again: the rollback discarded the stems, keys and counter raises written after the dump (8.2).
-5. Remove the hold (6.2).
+4. Steps 3 to 6 again: the rollback discarded everything written after the dump (8.2).
 
 When the unit is updated to 0.1.0 again, the backend moves files at its start:
 
 - For a volume whose stem is in the restored database, a row whose old path is gone is pointed at the file of the same name in `<stem>/captures/` when the file's sha256 matches the capture-time checksum. A file with no such checksum is reported as `missing`.
-- A stem given after the update is not in the restored database. Giving it again is refused while `<stem>/` holds files that none of the volume's rows name, and the move leaves a volume without a stem where it is. The code has no procedure for recovering such a volume. Open question for Juan.
+- A volume whose files a rollback would cut off is refused beforehand by the stem guard (8.0a). Recovering a volume after an accepted loss has no command yet; `restore-stem` is planned after 0.1.0.
 
 ---
 
 ## 9. Fisqua
+
+The release number is in the file `VERSION` at the root of the checkout (`0.1.0`). The backend reports it to Fisqua (lands with the Fisqua link).
 
 What the unit offers Fisqua at this version:
 
@@ -673,6 +734,7 @@ Run these on the bench unit after every update, and on a unit in service after i
 curl -s http://localhost:8000/health
 sudo cat /var/lib/dtk/backups/last-deployed-SHA
 git -C /home/pi/dtk rev-parse HEAD
+cat /home/pi/dtk/VERSION
 git -C /home/pi/dtk submodule status
 sudo ls /var/lib/dtk/backups/unresolved-deployment /etc/dtk/unresolved-deployment
 systemctl cat dtk | grep ConditionPathExists
@@ -681,7 +743,7 @@ journalctl -u dtk --since "15 min ago" | grep -E "Volume layout:|Cannot start|Tr
 ```
 
 - `/health` answers `{"status":"ok"}`.
-- `last-deployed-SHA` and `HEAD` name the same commit, and every line of `submodule status` begins with a space (on its pin).
+- `VERSION` names the release installed. `last-deployed-SHA` and `HEAD` name the same commit, and every line of `submodule status` begins with a space (on its pin).
 - Neither unresolved file exists (`ls` reports both missing).
 - The drop-in's `ConditionPathExists=!/etc/dtk/unresolved-deployment` is listed.
 - `check-stack-health.sh` reports the database healthy and port 5432 listening on the host, on any address, the frontend running and nginx running.
