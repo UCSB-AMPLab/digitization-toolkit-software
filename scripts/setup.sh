@@ -14,7 +14,7 @@
 #      migrations, then stops it
 #
 # Usage: sudo ./scripts/setup.sh
-#        sudo DTK_HOSTNAME=captua-2 ./scripts/setup.sh   (a second unit at a site)
+#        sudo CAPTUA_HOSTNAME=captua-2 ./scripts/setup.sh   (a second unit at a site)
 
 set -e
 
@@ -22,6 +22,8 @@ set -e
 # it belongs to rather than the symlink's parent.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=captua-env.sh
+. "$SCRIPT_DIR/captua-env.sh"
 
 # Resolve the real (non-root) user so pixi runs under the correct home dir
 if [ -n "$SUDO_USER" ]; then
@@ -302,13 +304,13 @@ echo ""
 # 6f. Unit name (mDNS): captua.local
 # ---------------------------------------------------------------------------
 # Every unit is captua. Two units on one network cannot share a name, so the
-# rare site with two sets the second one's name here: DTK_HOSTNAME=captua-2.
+# rare site with two sets the second one's name here: CAPTUA_HOSTNAME=captua-2 (DTK_HOSTNAME also works).
 # Sets the hostname and /etc/hosts, and points HOST_IP and CORS_ORIGINS in
 # .env at the name. A card already in service as digitool is renamed the way
 # update.sh renames it, with digitool.local kept as an alias. Shared with
 # update.sh: scripts/provision-hostname.sh.
-DTK_HOSTNAME="${DTK_HOSTNAME:-captua}"
-"$SCRIPT_DIR/provision-hostname.sh" --name "$DTK_HOSTNAME"
+UNIT_HOSTNAME="$(captua_env HOSTNAME captua)"
+"$SCRIPT_DIR/provision-hostname.sh" --name "$UNIT_HOSTNAME"
 echo ""
 
 # ---------------------------------------------------------------------------

@@ -181,6 +181,8 @@ set -Eeuo pipefail
 # it belongs to rather than the symlink's parent.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=captua-env.sh
+. "$SCRIPT_DIR/captua-env.sh"
 
 ADVISORY=0
 # Relocates every path this script writes under one directory. It is an
@@ -2724,18 +2726,19 @@ print_key_instructions() {
     echo "  above goes on the command line; the key itself never does."
 }
 
-B2_KEY_ID="${DTK_B2_KEY_ID:-}"
-B2_APP_KEY="${DTK_B2_APP_KEY:-}"
-B2_BUCKET="${DTK_OFFSITE_BUCKET:-}"
+B2_KEY_ID="$(captua_env B2_KEY_ID)"
+B2_APP_KEY="$(captua_env B2_APP_KEY)"
+B2_BUCKET="$(captua_env OFFSITE_BUCKET)"
+OFFSITE_KEY_FILE="$(captua_env OFFSITE_KEY_FILE)"
 
-if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ]; then
-    if [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
-        [ -n "$B2_KEY_ID" ]  || B2_KEY_ID="$(key_file_value "$DTK_OFFSITE_KEY_FILE" KEY_ID)"
-        [ -n "$B2_APP_KEY" ] || B2_APP_KEY="$(key_file_value "$DTK_OFFSITE_KEY_FILE" APP_KEY)"
-        [ -n "$B2_BUCKET" ]  || B2_BUCKET="$(key_file_value "$DTK_OFFSITE_KEY_FILE" BUCKET)"
-        echo "  read key material from $DTK_OFFSITE_KEY_FILE"
+if [ -n "$OFFSITE_KEY_FILE" ]; then
+    if [ -r "$OFFSITE_KEY_FILE" ]; then
+        [ -n "$B2_KEY_ID" ]  || B2_KEY_ID="$(key_file_value "$OFFSITE_KEY_FILE" KEY_ID)"
+        [ -n "$B2_APP_KEY" ] || B2_APP_KEY="$(key_file_value "$OFFSITE_KEY_FILE" APP_KEY)"
+        [ -n "$B2_BUCKET" ]  || B2_BUCKET="$(key_file_value "$OFFSITE_KEY_FILE" BUCKET)"
+        echo "  read key material from $OFFSITE_KEY_FILE"
     else
-        echo "  ⚠ DTK_OFFSITE_KEY_FILE=$DTK_OFFSITE_KEY_FILE is not readable — ignoring it."
+        echo "  ⚠ The key file $OFFSITE_KEY_FILE is not readable — ignoring it."
     fi
 fi
 
@@ -2793,9 +2796,9 @@ fi
 B2_READ_KEY_ID=""
 B2_READ_APP_KEY=""
 READ_KEY_FOR_COMPARISON_ONLY=0
-if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
-    B2_READ_KEY_ID="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_KEY_ID)"
-    B2_READ_APP_KEY="$(key_file_value "$DTK_OFFSITE_KEY_FILE" READ_APP_KEY)"
+if [ -n "$OFFSITE_KEY_FILE" ] && [ -r "$OFFSITE_KEY_FILE" ]; then
+    B2_READ_KEY_ID="$(key_file_value "$OFFSITE_KEY_FILE" READ_KEY_ID)"
+    B2_READ_APP_KEY="$(key_file_value "$OFFSITE_KEY_FILE" READ_APP_KEY)"
     if [ "$ADVISORY" -eq 1 ] && { [ -n "$B2_READ_KEY_ID" ] || [ -n "$B2_READ_APP_KEY" ]; }; then
         READ_KEY_FOR_COMPARISON_ONLY=1
         # The application key is dropped at once; only the id is kept, for
@@ -2860,8 +2863,8 @@ fi
 # The token reaches only variables, builtins and the file: key_file_value
 # names the key on sed's command line, not the value, and nothing here
 # echoes it. No call is made to Fisqua to check it (see THE FISQUA LINK).
-if [ -n "${DTK_OFFSITE_KEY_FILE:-}" ] && [ -r "$DTK_OFFSITE_KEY_FILE" ]; then
-    FISQUA_TOKEN_GIVEN="$(key_file_value "$DTK_OFFSITE_KEY_FILE" FISQUA_TOKEN)"
+if [ -n "$OFFSITE_KEY_FILE" ] && [ -r "$OFFSITE_KEY_FILE" ]; then
+    FISQUA_TOKEN_GIVEN="$(key_file_value "$OFFSITE_KEY_FILE" FISQUA_TOKEN)"
     if [ "$ADVISORY" -eq 1 ] && [ -n "$FISQUA_TOKEN_GIVEN" ]; then
         FISQUA_TOKEN_GIVEN=""
         echo "  note: the Fisqua token is not written under --advisory, which is"

@@ -68,6 +68,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # BASH_SOURCE may be relative to a directory this script cds out of.
 THIS_SCRIPT="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
+# CAPTUA_<X> first, then DTK_<X>, as in captua-env.sh. Defined here rather
+# than sourced from it: the kept copy of this script under /var/lib/dtk runs
+# with no scripts/ directory beside it, and tests/captua-env.test.sh checks
+# that the two definitions stay identical.
+captua_env() {
+    local suffix="$1" default="${2:-}"
+    local new="CAPTUA_$suffix" old="DTK_$suffix"
+    local new_value="${!new:-}" old_value="${!old:-}"
+
+    if [ -n "$new_value" ] && [ -n "$old_value" ] && [ "$new_value" != "$old_value" ]; then
+        echo "⚠ Both $new and $old are set to different values; using $new." >&2
+    fi
+    if [ -n "$new_value" ]; then
+        printf '%s' "$new_value"
+    elif [ -n "$old_value" ]; then
+        printf '%s' "$old_value"
+    else
+        printf '%s' "$default"
+    fi
+}
+
 # Everything this script keeps outside the checkout lives here -- outside,
 # because step 3 replaces the checkout, scripts/ included, and anything a
 # second run needs has to survive that.
@@ -783,7 +804,7 @@ print(v)' "$STORAGE_OVERRIDE_FILE" 2>/dev/null)"
     if [ -n "${PROJECTS_ROOT:-}" ]; then
         default="$PROJECTS_ROOT"
     else
-        default="$(backend_path "${DTK_DATA_DIR:-/var/lib/dtk}")/projects"
+        default="$(backend_path "$(captua_env DATA_DIR /var/lib/dtk)")/projects"
     fi
     [ -z "$override" ] || override="$(backend_path "$override")"
     printf '%s\n%s\n' "$override" "$(backend_path "$default")" | awk 'NF && !seen[$0]++'

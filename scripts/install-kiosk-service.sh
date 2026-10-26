@@ -125,12 +125,14 @@ sudo tee /usr/local/sbin/dtk-thd-sync > /dev/null << 'EOF'
 # Hand input event nodes to the running triggerhappy daemon (add only).
 # Usage: dtk-thd-sync [/dev/input/eventN ...]   (no arguments: every node
 # thd does not already hold)
-SOCK="${DTK_THD_SOCKET:-/run/thd.socket}"
-TH_CMD="${DTK_TH_CMD:-/usr/sbin/th-cmd}"
+# Test overrides: CAPTUA_<NAME> first, DTK_<NAME> as the fallback. Installed
+# on its own, so it cannot source scripts/captua-env.sh.
+SOCK="${CAPTUA_THD_SOCKET:-${DTK_THD_SOCKET:-/run/thd.socket}}"
+TH_CMD="${CAPTUA_TH_CMD:-${DTK_TH_CMD:-/usr/sbin/th-cmd}}"
 # th-cmd's sendmsg() has no deadline; bound every call.
-BOUND="${DTK_THD_TIMEOUT:-3}"
-PROC="${DTK_PROC:-/proc}"
-INPUT_DIR="${DTK_INPUT_DIR:-/dev/input}"
+BOUND="${CAPTUA_THD_TIMEOUT:-${DTK_THD_TIMEOUT:-3}}"
+PROC="${CAPTUA_PROC:-${DTK_PROC:-/proc}}"
+INPUT_DIR="${CAPTUA_INPUT_DIR:-${DTK_INPUT_DIR:-/dev/input}}"
 # Called from ExecStartPost (no arguments), thd may not have bound its socket
 # yet: wait up to ~5 s. Called with a device (udev), never wait.
 if [ "$#" -eq 0 ]; then
@@ -190,13 +192,14 @@ sudo chmod 755 /usr/local/sbin/dtk-thd-sync
 sudo tee /usr/local/sbin/dtk-thd-enqueue > /dev/null << 'EOF'
 #!/bin/sh
 # Queue dtk-thd-sync for one input node without holding the udev worker.
-SYSTEMD_RUN="${DTK_SYSTEMD_RUN:-/usr/bin/systemd-run}"
+# Test overrides: CAPTUA_<NAME> first, DTK_<NAME> as the fallback.
+SYSTEMD_RUN="${CAPTUA_SYSTEMD_RUN:-${DTK_SYSTEMD_RUN:-/usr/bin/systemd-run}}"
 # Both calls are bounded. systemd-run --no-block still makes one synchronous
 # call to the manager, and logger writes to /dev/log with a blocking socket, so
 # a stalled journal would hold this udev worker just as surely as a stalled
 # manager. Neither failure is worth a wedged worker: the node is picked up by
 # the ExecStartPost sweep on the next thd start either way.
-BOUND="${DTK_ENQUEUE_TIMEOUT:-3}"
+BOUND="${CAPTUA_ENQUEUE_TIMEOUT:-${DTK_ENQUEUE_TIMEOUT:-3}}"
 timeout "$BOUND" "$SYSTEMD_RUN" --no-block --collect --quiet \
     /usr/local/sbin/dtk-thd-sync "$1" ||
     timeout "$BOUND" logger -t dtk-thd-sync \
