@@ -8,8 +8,14 @@ echo ""
 echo "To exit: Press Ctrl+Alt+F2, then run 'pkill cage'"
 echo ""
 
-echo -n "Waiting for frontend at http://localhost:3000..."
-until curl -sSf http://localhost:3000 >/dev/null 2>&1; do
+# Through nginx on port 80, like every other browser: the page and its /api
+# calls then share one origin. The frontend container on :3000 has no /api.
+KIOSK_URL="http://localhost"
+
+# curl -f also waits out the 502 nginx answers while the frontend container
+# is still starting.
+echo -n "Waiting for the app at $KIOSK_URL..."
+until curl -sSf "$KIOSK_URL" >/dev/null 2>&1; do
   echo -n "."
   sleep 0.2
 done
@@ -33,4 +39,4 @@ exec cage -- chromium-browser \
   --disable-background-networking \
   --disable-default-apps \
   --disable-extensions \
-  http://localhost:3000
+  "$KIOSK_URL"
