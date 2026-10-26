@@ -787,6 +787,11 @@ case "$*" in
         printf '%s\n' "${FAKE_ADDRS:-}" | while read -r ifc addr; do
             [ -n "$ifc" ] && echo "3: $ifc    inet $addr/24 brd x scope global $ifc\       valid_lft forever"
         done ;;
+    "-6 -o addr show dev "*" scope global")
+        want="$6"
+        printf '%s\n' "${FAKE_ADDRS6:-}" | while read -r ifc addr flags; do
+            [ "$ifc" = "$want" ] && echo "3: $ifc    inet6 $addr/64 scope global $flags \\       valid_lft forever"
+        done ;;
     "-4 route get 1.1.1.1")
         [ -n "${FAKE_ROUTE_SRC:-}" ] || exit 2
         echo "1.1.1.1 via 192.0.2.1 dev wlan0 src $FAKE_ROUTE_SRC uid 0" ;;
@@ -817,6 +822,25 @@ FAKE_ADDRS="$(printf 'docker0 172.17.0.1\nlo 127.0.0.1')" run_alias
 eq "$RC" 1 "exit status"
 has "no IPv4 address on a real interface yet"
 case "$OUT" in *avahi-publish*) fail "published anyway" ;; *) ok "published nothing" ;; esac
+
+CASE="alias, a global IPv6 on the same interface"
+FAKE_ADDRS="$(printf 'eth0 10.0.0.5\nwlan0 192.0.2.10')" FAKE_ROUTE_SRC=192.0.2.10 \
+    FAKE_ADDRS6="$(printf 'eth0 fd00:1::5\nwlan0 fd00:2::10')" run_alias
+eq "$RC" 0 "exit status"
+has "avahi-publish -a -R digitool.local 192.0.2.10"
+has "avahi-publish -a -R digitool.local fd00:2::10"
+case "$OUT" in *fd00:1::5*) fail "took the IPv6 of another interface" ;; *) ok "IPv6 taken from the IPv4 choice's interface" ;; esac
+
+CASE="alias, only link-local IPv6"
+FAKE_ADDRS="wlan0 192.0.2.10" FAKE_ROUTE_SRC=192.0.2.10 FAKE_ADDRS6="" run_alias
+has "avahi-publish -a -R digitool.local 192.0.2.10"
+case "$OUT" in *"digitool.local fe80"*|*"digitool.local fd"*|*"digitool.local 2"*) fail "published an IPv6 address" ;; *) ok "published IPv4 only" ;; esac
+
+CASE="alias, IPv6 temporary or deprecated skipped"
+FAKE_ADDRS="wlan0 192.0.2.10" FAKE_ROUTE_SRC=192.0.2.10 \
+    FAKE_ADDRS6="$(printf 'wlan0 fd00:2::99 temporary dynamic\nwlan0 fd00:2::98 deprecated\nwlan0 fd00:2::10 dynamic mngtmpaddr')" run_alias
+has "avahi-publish -a -R digitool.local fd00:2::10"
+case "$OUT" in *fd00:2::99*|*fd00:2::98*) fail "published an unusable IPv6" ;; *) ok "unusable IPv6 skipped" ;; esac
 
 # ── Arguments ───────────────────────────────────────────────────────────────
 new_unit "unknown argument"
