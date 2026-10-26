@@ -5,11 +5,16 @@
 # (IPv4 and IPv6); when the unit's addresses change (a new DHCP lease, a cable
 # plugged in, the wi-fi joining another network) it has to publish the new ones.
 #
+# Restarts only on events that can change which address should be published:
+# up, down (the chosen interface may be the one that went away) and a DHCP
+# lease change. connectivity-change leaves the addresses as they are, and at
+# boot it arrives with the others and only multiplies the restarts.
+#
 # Only on a unit where the alias is enabled, which is a unit renamed from
 # digitool; elsewhere this does nothing.
 
 case "$2" in
-    up|down|dhcp4-change|dhcp6-change|connectivity-change) ;;
+    up|down|dhcp4-change|dhcp6-change) ;;
     *) exit 0 ;;
 esac
 

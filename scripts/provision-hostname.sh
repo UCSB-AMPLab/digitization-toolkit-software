@@ -480,6 +480,9 @@ prepare() {
     if [ "$changed" -eq 1 ]; then
         systemctl daemon-reload || { echo "  ✗ systemctl daemon-reload failed"; FAILED=1; }
     fi
+    # A unit that hit the start limit stays failed, and restart requests from
+    # the dispatcher hook do not clear that state.
+    systemctl reset-failed "$ALIAS_UNIT_NAME" >/dev/null 2>&1 || true
     if [ "$FAILED" -eq "$failed_before" ]; then
         echo "  alias script, unit, dispatcher hook and repair drop-in in place  ✓"
     fi
