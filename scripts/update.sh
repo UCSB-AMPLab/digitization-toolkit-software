@@ -58,7 +58,7 @@
 #               records the version and leaves the unit stopped, so that a
 #               fixed commit can then be deployed with an ordinary update.
 #
-# Test only: DTK_UPDATE_FAIL_AT=<point> makes the script fail on purpose at
+# Test only: CAPTUA_UPDATE_FAIL_AT=<point> (DTK_UPDATE_FAIL_AT too) makes the script fail on purpose at
 # one point, so the restore path can be exercised on a bench unit without a
 # broken migration or a broken build. The points, in order:
 #   fetched   after the fast-forward and submodule sync (pull path only)
@@ -71,14 +71,16 @@
 #   served    after the new version has answered /health
 # Never set it on an appliance in service.
 #
-# Also tunable: DTK_UPDATE_HEALTH_TIMEOUT (seconds to wait for /health after a
-# start, default 300) and DTK_UPDATE_HEALTH_POLL (seconds between tries,
-# default 5).
+# Also tunable: CAPTUA_UPDATE_HEALTH_TIMEOUT (seconds to wait for /health after a
+# start, default 300) and CAPTUA_UPDATE_HEALTH_POLL (seconds between tries,
+# default 5). Both also answer to their DTK_ names.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=captua-env.sh
+. "$SCRIPT_DIR/captua-env.sh"
 
 ASSUME_YES=0
 DO_PULL=1
@@ -106,15 +108,15 @@ if [ "$OFFLINE" -eq 1 ] && { [ "$DO_PULL" -eq 1 ] || [ "$RESOLVE_FORWARD" -eq 1 
     exit 2
 fi
 
-FAIL_AT="${DTK_UPDATE_FAIL_AT:-}"
+FAIL_AT="$(captua_env UPDATE_FAIL_AT)"
 case "$FAIL_AT" in
     ""|fetched|build|pixi|stopped|dumped|migrate|started|served) ;;
     *) echo "✗ DTK_UPDATE_FAIL_AT='$FAIL_AT' is not a failure point this script knows."
        echo "  Known: fetched build pixi stopped dumped migrate started served (test only)."
        exit 2 ;;
 esac
-HEALTH_TIMEOUT="${DTK_UPDATE_HEALTH_TIMEOUT:-300}"
-HEALTH_POLL="${DTK_UPDATE_HEALTH_POLL:-5}"
+HEALTH_TIMEOUT="$(captua_env UPDATE_HEALTH_TIMEOUT 300)"
+HEALTH_POLL="$(captua_env UPDATE_HEALTH_POLL 5)"
 
 # One update or rollback at a time. update.sh and rollback-update.sh (and
 # its kept copy under /var/lib/dtk) take the same lock, held until they exit,

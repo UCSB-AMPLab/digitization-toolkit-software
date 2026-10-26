@@ -385,6 +385,7 @@ mkdir -p "$UP/super/scripts"
 TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g; s#/run/dtk-update.lock#$DTK_TEST_STATE/dtk-update.lock#g'
 sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
 sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
+cp "$SCRIPTS/captua-env.sh" "$UP/super/scripts/captua-env.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-rclone.sh"
 # Records its calls. The switch writes what the real one writes inside the

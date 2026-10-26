@@ -23,6 +23,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=captua-env.sh
+. "$SCRIPT_DIR/captua-env.sh"
 
 cd "$PROJECT_ROOT"
 
@@ -32,9 +34,9 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.pi.yml"
 
 # Bounded poll: up to ~60s (30 tries × 2s) by default for the containers to
 # settle. Tunable per hardware/venue via environment (e.g. in a dtk.service
-# drop-in: Environment=DTK_HEALTH_MAX_TRIES=60) without editing this script.
-MAX_TRIES="${DTK_HEALTH_MAX_TRIES:-30}"
-SLEEP_SECS="${DTK_HEALTH_SLEEP_SECS:-2}"
+# drop-in: Environment=CAPTUA_HEALTH_MAX_TRIES=60; the DTK_ name works too) without editing this script.
+MAX_TRIES="$(captua_env HEALTH_MAX_TRIES 30)"
+SLEEP_SECS="$(captua_env HEALTH_SLEEP_SECS 2)"
 
 # Is a service defined in this compose config at all? (nginx is Pi-only.)
 service_defined() {
