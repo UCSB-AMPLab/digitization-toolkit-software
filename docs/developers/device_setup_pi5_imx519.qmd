@@ -33,7 +33,7 @@ The actual camera connection looks like this:
 
 ![Camera Connection Actual](../_static/imgs/imx519_ribbon_connection.JPG)
 
-Make sure the ribbon cable is properly seated in the connector with the **blue stiffener facing outward** (toward the Ethernet port) and the metal contacts facing inward toward the board.
+Make sure the ribbon cable is fully and squarely seated in the connector before closing the retaining clip. Orientation on the Pi side is the same for both ports: the cable's **metal contacts face the Ethernet port**, with the blue stiffener toward the board's front edge (HDMI/USB-C side) — see the dual-camera photo below.
 
 ### Dual Camera Connection on Raspberry Pi 5
 

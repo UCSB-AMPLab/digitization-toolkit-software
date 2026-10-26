@@ -5,9 +5,9 @@
 #
 # THREAT MODEL
 # ------------
-# The backend API is reachable on the LAN. The previous design granted the
-# `pi` user open-ended NOPASSWD sudo to mount/umount/mkdir/chown. Any of those
-# is a trivial full-root escalation primitive:
+# The backend API is reachable on the LAN. Open-ended NOPASSWD sudo for the
+# `pi` user to mount/umount/mkdir/chown would make each of them a trivial
+# full-root escalation primitive:
 #   - arbitrary `mount`: bind-mount an attacker-controlled dir over
 #     /etc/sudoers.d (or /etc, /root/.ssh, ...) → instant root.
 #   - arbitrary `chown pi:pi <path>`: take ownership of /etc/shadow,
@@ -26,10 +26,12 @@
 # Consequently the helper owns the mountpoint directory lifecycle end to end:
 # it creates the dir on mount (removing it again if the mount fails) and
 # removes it after a successful umount. The backend must NOT pre-create
-# mountpoints or clean them up itself — as `pi` it no longer can.
+# mountpoints or clean them up itself — as `pi` it cannot.
 #
-# The verb contract is depended on by a coordinated backend change; do not
-# alter verb names, argument order, or exit semantics without updating both.
+# The backend depends on the verb contract; do not alter verb names, argument
+# order, or exit semantics without updating both.
+#
+# Version: 0.1.0-beta
 
 set -euf
 

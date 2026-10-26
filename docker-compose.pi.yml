@@ -12,17 +12,28 @@ services:
 
   frontend:
     environment:
-      # Route browser-side API calls through Nginx (same-origin, fixes Chrome PNA policy)
-      # http://digitool.local/api/* → Nginx strips /api → backend:8000/*
-      - PUBLIC_API_BASE=http://${HOST_IP:-localhost}/api
-      # ORIGIN must match the URL users open (port 80 via Nginx, no explicit port)
+      # Browser-side API calls go to /api on whatever origin the page was
+      # opened from (captua.local, digitool.local on a renamed unit, the
+      # unit's IP, localhost in the kiosk); Nginx strips /api and proxies to
+      # host.docker.internal:8000. Relative, so page and API always share an
+      # origin: no CORS, and nothing for Chrome's Private Network Access
+      # policy to block. Server-side rendering keeps the absolute
+      # PUBLIC_API_BASE_SSR from docker-compose.yml, since Node has no page
+      # origin to resolve /api against.
+      - PUBLIC_API_BASE=/api
+      # SvelteKit compares ORIGIN with the Origin header of form submissions
+      # it receives itself (its CSRF check) and builds server-side URLs from
+      # it. The app has no form actions or server endpoints, and every API
+      # call goes to nginx's /api, never to SvelteKit, so a page opened by
+      # another name or by IP is not refused.
       - ORIGIN=http://${HOST_IP:-localhost}
 
   # ── Nginx reverse proxy ────────────────────────────────────────────────────
   # Puts frontend (:3000) and backend (:8000) behind a single origin (port 80).
   # This eliminates the cross-port request that Chrome's Private Network Access
   # (PNA) policy blocks when the client is on a .local HTTP address.
-  # Access the app at: http://digitool.local  (instead of :3000)
+  # Access the app at http://captua.local, or by the unit's IP; the kiosk
+  # opens http://localhost.
   nginx:
     # Pinned by multi-arch index digest for golden-card reproducibility;
     # refresh deliberately with `docker buildx imagetools inspect <image:tag>` when updating.

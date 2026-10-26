@@ -22,5 +22,5 @@ repository-code: "https://github.com/UCSB-AMPLab/digitization-toolkit-software"
 url: "https://ampl.clair.ucsb.edu/project/digitization-toolkit"
 abstract: "An open-source, modular digitization system for low-cost, high-quality scanning in low-resource environments and community archives, built on Raspberry Pi hardware."
 license: AGPL-3.0-only
-version: "0.0.0-pre.3"
-date-released: "2026-07-24"
+version: "0.1.0-beta"
+date-released: "2026-10-25"

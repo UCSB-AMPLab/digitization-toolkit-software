@@ -75,6 +75,8 @@ pixi run setup-camera-link  # Raspberry Pi only
 pixi run dev
 ```
 
+**rclone is a runtime dependency of the backend**, not a developer convenience, and it does not come from pixi or from apt. The offsite backup path shells out to it to push captures and compressed `pg_dumpall` dumps to Backblaze B2, and to verify each upload against the SHA1 in a bucket listing (NEH-249, NEH-227). The minimum version is **1.70**: Debian Bookworm packages rclone 1.60, which fails B2 authentication for application keys created after mid-2024, and fails in a way indistinguishable from a wrong key, so a unit running it reports every backup as a credentials problem. `scripts/provision-rclone.sh` therefore installs a pinned official static build under `/usr/local/bin`, verifying its SHA-256 against a checksum recorded in that script before installing anything; it runs from `scripts/setup.sh` at provisioning, and asserts the version of the build it staged before promoting it, refusing to finish on one that is too old. It uses the network in two cases only: to fetch the pinned build when the rclone already present is missing or below the floor, and to check a newly written credential against its bucket. A unit that already has a good rclone and is not being given a new credential makes no network call at all. The same script records the unit's tenant prefix (`--tenant`; replacing a recorded one also needs `--change-tenant`) and the age public key its catalogue dumps are encrypted to (`--dump-recipient`), each checked against the rule the backend applies to it, and, when the key file also carries `READ_KEY_ID` and `READ_APP_KEY`, writes a second, read-only remote beside the upload remote for restoring freed files; it refuses an age private key, and the same key id for both remotes.
+
 ## Production Distribution (SD Card Imaging)
 
 The toolkit is designed to ship as a pre-flashed SD card. The end user only needs to insert the card, power on the Pi, and the application starts automatically — no internet connection required.
@@ -93,7 +95,9 @@ headless.
 sudo apt update && sudo apt install -y git
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER          # re-login for this to take effect
-curl -fsSL https://pixi.sh/install.sh | bash
+# pixi is pinned: older versions cannot read the committed pixi.lock format
+# (keep in lockstep with PIXI_VERSION in scripts/setup.sh)
+curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.73.0 bash
 
 # 1. Clone the repository
 git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
@@ -116,6 +120,11 @@ sudo ./scripts/install-kiosk-service.sh
 curl http://localhost:8000/health   # → {"status":"ok"}
 curl -I http://localhost:3000       # → HTTP 200
 ```
+
+> **Do the first run camera-less.** Complete steps 0–5 and pass the health
+> checks above with no cameras attached, then connect the cameras (see the
+> camera setup guides under `docs/`) and re-verify. When something fails,
+> this isolates the fault to the camera layer instead of the whole build.
 
 ### Creating an SD card image
 

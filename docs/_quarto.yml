@@ -32,6 +32,7 @@ website:
           - section: "Cameras Setup"
             contents:
               - href: users/setting-up-gphoto2-cams.qmd
+              - href: users/setting-up-chdk-cams.qmd
       - section: "Developer Guides"
         contents:
           - section: "Hardware Setup Guides"
@@ -44,6 +45,8 @@ website:
             contents:
               - href: developers/sd_card_distribution.qmd
                 text: "SD Card Distribution"
+              - href: developers/updating_a_unit.qmd
+                text: "Updating a Unit to 0.1.0"
   page-footer:
     center: "Documentation site built: {{< meta date >}}"
 

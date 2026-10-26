@@ -13,7 +13,8 @@
 #   - allow in on lo and tailscale0 (remote support path)
 #   - allow 22/tcp (SSH) and 80/tcp (harmless next to Docker's own bypass,
 #     and future-proofs a host-network nginx)
-#   - allow 5353/udp (mDNS — without it digitool.local stops resolving)
+#   - allow 5353/udp (mDNS — without it captua.local, and digitool.local on a
+#     renamed unit, stop resolving)
 #   - allow 8000/tcp from 172.30.0.0/24 only — the appliance compose network,
 #     pinned to that subnet in docker-compose.pi.yml precisely so this rule
 #     can be exact. Never widen to 172.16.0.0/12 (a venue LAN could occupy
@@ -33,6 +34,8 @@
 # Wired into provisioning via setup.sh. Do NOT run ad hoc over the network on
 # a deployed unit; it must be hardware-tested on a spare Pi before any
 # dev → main release.
+#
+# Version: 0.1.0-beta
 
 set -e
 
@@ -59,7 +62,7 @@ ufw allow in on lo
 ufw allow in on tailscale0 comment 'Tailscale (remote support)'
 ufw allow 22/tcp comment 'SSH'
 ufw allow 80/tcp comment 'nginx UI'
-ufw allow 5353/udp comment 'mDNS (digitool.local)'
+ufw allow 5353/udp comment 'mDNS (captua.local)'
 ufw allow from 172.30.0.0/24 to any port 8000 proto tcp comment 'appliance compose network -> native backend'
 
 ufw --force enable

@@ -6,45 +6,65 @@ toc: false
 lang: es
 ---
 
-Guía de una página para el personal que opera el equipo de digitalización. Imprímala y déjela junto al equipo.
+Guía de una página para quienes operan el equipo de digitalización. Imprímela y déjala junto al equipo.
 
-## Apagar el equipo de forma segura
+## Apagar y reiniciar el equipo
 
-1. Si la aplicación tiene el botón **«Apagar»** (Configuración → Energía), úselo y confirme.
-2. Si no: presione **Ctrl+Alt+F2** y, en la pantalla de texto, escriba `sudo poweroff` y presione Enter.
-3. Espere a que la pantalla quede negra antes de desconectar la corriente.
+1. Si hay una captura en curso, espera a que termine.
+2. Abre el menú de usuario. En **Resumen** y **Proyectos**, presiona tu nombre de usuario, abajo en la barra lateral; si la barra está contraída, presiona el cuadro con las dos primeras letras del nombre. En la pantalla de captura y en la del volumen, presiona el círculo con esas letras, arriba a la derecha.
+3. Presiona "Apagar el equipo" y, en la confirmación, "Sí, apagar".
+4. Aparece "Apagando el equipo…". Desconecta la corriente solo cuando la pantalla se apague.
+
+Para reiniciar, presiona "Reiniciar el equipo" en el mismo menú y luego "Sí, reiniciar". La pantalla se apaga un momento. No desconectes la corriente hasta que vuelva a aparecer la aplicación.
+
+Si eres administrador, también tienes los botones "Apagar" y "Reiniciar" en **Configuración → Energía**.
+
+**Si la pantalla no responde:** presiona una vez el botón de encendido del equipo. Así apagas el equipo de forma segura. Espera a que la pantalla se apague antes de desconectar la corriente.
+
+**Si el equipo sigue encendido:** presiona **Ctrl+Alt+F2**, escribe `sudo poweroff` y presiona Enter. Espera a que la pantalla se apague.
 
 ::: {.callout-warning appearance="simple"}
-**Nunca desconecte el enchufe con el equipo encendido:** puede dañar la memoria del equipo y perder el trabajo del día.
+**Nunca desconectes la corriente con el equipo encendido:** puedes dañar la tarjeta de memoria y perder información.
 :::
 
 ## Cambiar de pantalla
 
 - **Ctrl+Alt+F2** → pantalla de texto (recuperación)
-- **Ctrl+Alt+F1** → volver a la aplicación
+- **Ctrl+Alt+F1** → la aplicación
 
 ## Cámaras: enfoque al iniciar la jornada
 
-1. Ponga el selector del lente en **AF** en las dos cámaras y tome la primera captura (las dos enfocan solas).
-2. Pase el selector a **MF**, también **en las dos cámaras**. El resto de la jornada queda enfocado — la distancia entre la cámara y el documento no cambia.
+1. Pon el interruptor del lente en **AF** en las dos cámaras y toma la primera captura (las dos enfocan solas).
+2. Pasa el interruptor a **MF**, también **en las dos cámaras**. Así el enfoque se mantiene el resto de la jornada, porque la distancia entre la cámara y el documento no cambia.
 
-Si el lente queda en AF, cada captura tarda unos 12 segundos más, la aplicación muestra una advertencia y la cámara puede llegar a bloquearse. Confirme que las dos cámaras quedaron en **MF** antes de empezar a digitalizar. El flash queda apagado automáticamente; no hay que tocarlo.
+Si dejas el interruptor en AF, cada captura tarda unos 12 segundos más y puede quedarse bloqueada. En ese caso, la pantalla de captura puede mostrar una advertencia en el panel "Controles de cámara". Antes de empezar a digitalizar, mira el lente de cada cámara y comprueba que el interruptor quedó en **MF**. El flash queda apagado automáticamente; no hay que tocarlo.
 
-## Si las cámaras no aparecen (o aparece «imx519»)
+## Enviar un volumen terminado a revisión
 
-Cierre la sesión en la aplicación y vuelva a entrar. Casi siempre es suficiente.
+1. Abre el volumen: **Proyectos →** tu proyecto **→** el volumen.
+2. Presiona "Enviar a revisión", en la barra superior. Si ya habías enviado parte del volumen, el botón indica cuántos registros nuevos vas a enviar (por ejemplo, "Enviar 3 registros nuevos").
+3. En la confirmación, presiona "Enviar".
+
+Desde ese momento los registros quedan en revisión y no puedes moverlos a otro volumen. Si te equivocaste, presiona "Retirar de revisión" y, en la confirmación, "Retirar". Así retiras solo los registros que todavía no se han revisado: los aprobados y los rechazados se quedan como están.
+
+## Si las cámaras no aparecen
+
+1. Si una cámara se apagó sola, presiona el disparador hasta la mitad para despertarla, o vuelve a conectar el cable USB.
+2. Presiona "Reconectar cámaras". Está en **Resumen**, en la sección "Probar cámaras", y en la pantalla de captura, en el panel "Controles de cámara" (ábrelo con el ícono del engranaje).
+3. Si siguen sin aparecer, presiona "Salir" en el menú de usuario (ver arriba) y vuelve a iniciar sesión.
 
 ## Si una cámara deja de responder
 
-1. Revise que el selector del lente esté en **MF** (ver arriba).
-2. Apague y encienda esa cámara.
-3. Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
-4. Solo si nada de esto funciona: apague todo de forma segura (ver arriba) y vuelva a encender.
+1. Revisa que el interruptor del lente esté en **MF** (ver arriba).
+2. Apaga esa cámara, vuelve a encenderla y presiona "Reconectar cámaras".
+3. Si sigue igual, reinicia el equipo desde el menú de usuario (ver arriba).
 
 ## Si la aplicación se congela
 
-Presione **Ctrl+Alt+F2**, escriba `sudo systemctl restart dtk`, presione Enter y vuelva a la aplicación con **Ctrl+Alt+F1**.
+Presiona **Ctrl+Alt+F2**, escribe `sudo systemctl restart dtk` y presiona Enter. **Después de presionar Enter no aparece ningún mensaje: es normal.** Espera unos 30 segundos y vuelve a la aplicación con **Ctrl+Alt+F1**.
+
+Si la aplicación sigue sin responder, apaga el equipo con el botón de encendido (ver arriba) y vuelve a encenderlo.
 
 ## Contacto
 
-Escriba a **coordinacion@neogranadina.org**.
+Escribe a **coordinacion@neogranadina.org**.

@@ -1,0 +1,153 @@
+---
+title: "Setting Up CHDK Cameras"
+date-modified: last-modified
+format: html
+lightbox: true
+---
+
+## What CHDK is
+
+[CHDK](https://chdk.fandom.com/wiki/CHDK) is firmware that lets a Canon compact camera be controlled over USB. On this appliance, a pair of Canon A2500 cameras running CHDK are what the appliance's CHDK backend talks to over PTP/USB, through the `pychdk` library.
+
+CHDK is not installed onto the camera's own firmware. It boots from a specially prepared SD card: the card carries CHDK's own boot files, and the card's boot sector is patched so the camera recognizes it as bootable. Put an ordinary, unprepared card in one of these cameras and CHDK does not run — the camera simply boots its own, ordinary firmware instead.
+
+## What you need
+
+- **Two Canon A2500 cameras.** The card-preparation tool (`tools/flash_chdk.py`) downloads and installs CHDK 1.6.1-6315 for the A2500 running firmware 1.00A specifically; it is not a general CHDK installer for other Canon models.
+- **Two SD cards**, one per camera, each prepared as described below.
+- **A Mac**, with its own clone of the `pychdk` repository (`https://github.com/UCSB-AMPLab/pychdk`, at tag `v0.1.2` — the version this appliance's backend is pinned to, in `backend/requirements.txt` and `backend/pixi.toml`) to prepare the cards from. `pychdk` is not part of this toolkit checkout, and installing it as a Python package — which is all the backend itself does — does not bring the card-preparation tool along either: it lives only under `tools/` in the repository, which packaging leaves out. `tools/flash_chdk.py` only runs on macOS — it drives the Mac's own `diskutil` to format and write the card.
+- **A USB cable** per camera, to connect it to the appliance.
+
+::: {.callout-important}
+## Capture over USB is not proven on this hardware yet
+
+The appliance takes the picture over the USB cable: the image is sent straight down the wire and is never written to the camera's own SD card. The A2500's CHDK port is alpha-level, and `pychdk` records that this streamed capture can fail on the A2500 with PTP error `0x2002`. Neither `pychdk` v0.1.2 nor this backend falls back to shooting onto the card, so wherever that failure occurs the capture fails outright rather than quietly producing a file somewhere else. A capture that fails this way also drops the camera: the backend closes its session and takes it out of the device list, and the next scan has to open it again. Whether it comes back cleanly, and whether preview still works when it does, is not established either — the same test would settle all of it. The backend's log names the error.
+
+Whether it happens on these particular bodies is not yet known — it has never been run against the cameras themselves. That test is on the bench-test list. Until it has been done, treat capture on the A2500 as unproven, and do not plan a digitization session around it.
+:::
+
+## Selecting the CHDK backend
+
+This page applies from the release that bumps the superproject's backend pointer past NEH-231 onward; an appliance still on an earlier backend has neither the CHDK backend code nor its `pychdk` dependency, so `CAMERA_BACKEND=chdk` cannot work there yet.
+
+::: {.callout-warning appearance="simple"}
+The appliance only talks to these cameras as CHDK bodies if it is told to. The backend defaults to a different camera system entirely, and nothing in the appliance's setup changes that on its own — you can prepare both cards perfectly and connect two working cameras and still see nothing, because the appliance is listening for a different kind of camera altogether.
+:::
+
+Before connecting any CHDK camera, confirm the appliance's `.env` file (at the project root) has:
+
+```
+CAMERA_BACKEND=chdk
+```
+
+and then restart the backend service so it takes effect:
+
+```bash
+sudo systemctl restart dtk
+```
+
+If you did not provision this appliance yourself, check with whoever did — it may already be set this way, or it may be running a different backend for a different pair of cameras.
+
+## Preparing an SD card
+
+Cards are prepared with `tools/flash_chdk.py`, on a Mac, from a clone of the `pychdk` repository itself — not from anything in this toolkit checkout, and not from wherever the backend's own Python dependency installed it:
+
+```bash
+git clone https://github.com/UCSB-AMPLab/pychdk.git
+cd pychdk
+git checkout v0.1.2
+python3 tools/flash_chdk.py
+```
+
+::: {.callout-warning appearance="simple"}
+Preparing a card **erases it**. The confirmation prompt — "This will ERASE the disk. Continue?" — only fires when the Mac detects **exactly one** removable disk in total, not one SD card. If any other removable storage is also attached (a USB drive, a second card reader, and so on), the tool skips the prompt entirely and erases whichever disk you pick by number. Disconnect every other piece of removable storage first, so that the card you intend to prepare is the only one connected.
+:::
+
+The tool downloads (and caches) the CHDK build, formats the card, extracts CHDK's boot files onto it, and patches the card's boot sector so it is bootable. It then asks which pages this camera will shoot — odd, even, or skip — and records that choice on the card. When it finishes, **lock the card** with the write-protect switch on its edge before inserting it into the camera.
+
+If you are re-preparing a card that was already assigned to a camera, the tool keeps whatever page-parity and identity were already on it, even if you skip the prompt — see below for why that matters.
+
+## Page parity, not a side of the table
+
+::: {.callout-important appearance="simple"}
+The card records which **pages** that camera photographs — ODD or EVEN — not which side of the table the camera sits on. Those are different questions on purpose: ordinarily EVEN maps to camera index 0 and ODD to camera index 1, and which of the two the operator sees on their left is decided by the kiosk's own swap toggle, not by the card. A book read right-to-left uses the same two cards; only the operator's swap setting changes.
+:::
+
+So a card belongs to "the camera that shoots even pages" or "the camera that shoots odd pages" — not to "the left camera" or "the right camera."
+
+A camera with a parity on its card keeps that parity's index, provided no other connected camera claims the same parity — if one does, neither of them is where you would expect, and neither may capture until you have fixed it. A camera that has not been given one yet holds no index of its own — it takes the lowest index no parity has claimed, so it can be pushed along to another index when a further camera appears, even though nothing is wrong with it. That is one more reason to assign both parities before you start rather than after. What a shared parity does move is the cameras sharing it: both are refused, the first of them on the bus keeps that parity's index, and the other is parked on the lowest index no parity is using — which can be an index that does not match its own card. It cannot capture from there, so nothing is filed under it; it is placed only so that you can still address it to repair it, as described further down. (A shared identity with no shared parity moves nothing at all — it only blocks capture.) Read a camera's actual parity and identity from the device list rather than assuming either from its index.
+
+## The camera's identity
+
+Some of these cameras do not report a USB serial number, so the appliance cannot always tell two connected bodies apart from the USB connection alone. To cover that, the same file on the card that records the page parity can also carry a short identifier — a 12-character hexadecimal string — minted the first time a parity is assigned to that camera, whether at the workbench (by `tools/flash_chdk.py`) or from the appliance (see below). This identity is how the appliance tells one body from the other across replugging, and how it remembers each body's settings.
+
+Re-preparing a card keeps this identity rather than replacing it, so a camera's recorded settings are not lost by re-flashing its card.
+
+## Connecting the cameras
+
+Connect both cameras to the appliance over USB and switch them on.
+
+::: {.callout-warning appearance="simple"}
+The appliance's ordinary web interface only shows a camera's model and its index, and treats any index it lists as fine to use — it does not show a camera's parity, or any error explaining why a camera should not be trusted. Do not rely on it to confirm the cameras are actually ready.
+:::
+
+Read the authenticated device list instead — `GET /cameras/devices`, the same call documented under "Assigning a camera's parity" below. There, each connected body should appear with its model, its page parity (odd or even), and no error. A body that has neither a USB serial nor an identity of its own yet — which happens with these compacts before a parity has ever been assigned to them — shows an error there saying it needs a parity assigned before it can capture; assigning one, as described below, is also what gives it that identity.
+
+If you have just re-flashed a card, or changed a parity by hand, ask the appliance to rescan (`POST /cameras/rescan`) rather than trusting what an earlier check found — a rescan re-reads every connected camera's card.
+
+## Assigning a camera's parity
+
+There is no dashboard control for this yet — a future release is expected to add one. Today, assigning a page parity is an administrator action taken directly against the appliance's API.
+
+::: {.callout-warning appearance="simple"}
+Logging into the appliance's ordinary web interface does not authorise this. The API's interactive explorer needs its own, separate login, and it is not reachable from a laptop on the venue network at all — port 8000 is open only from the appliance itself and over Tailscale, never from the venue LAN.
+:::
+
+1. **Open the API explorer** — a different address from the one the ordinary interface runs on:
+   - On the appliance itself: `http://localhost:8000/docs`.
+   - From elsewhere over Tailscale: the appliance's own Tailscale address (not `localhost`, which on a remote machine means that machine, not the appliance), port 8000, `/docs` — e.g. `http://<the appliance's Tailscale hostname or IP>:8000/docs`.
+2. **Log in as an administrator, inside that explorer.** This is several steps, and skipping any of them leaves every later call rejected with no visible reason:
+   - Expand `POST /auth/login`, click **Try it out**, fill in the administrator's credentials, and click **Execute**.
+   - Copy the `access_token` value out of the response body.
+   - Click the green **Authorize** button near the top of the page — this opens a dialog.
+   - Paste the token into that dialog's field, then click the **Authorize** button *inside the dialog* to submit it (pasting the token alone does nothing; that second click is what actually applies it). Close the dialog once it confirms.
+3. **Read the current device list** (`GET /cameras/devices`) and find the camera you mean to change by its `index`, `hardware_id`, and `location`/port.
+4. **Send the assignment**: `POST /cameras/side/<camera index>`, with a JSON body of `{"side": "odd"}` or `{"side": "even"}`.
+5. **Re-read the response**, which is a freshly rescanned device list rather than a single updated row. The camera you just changed usually moves to the other index. Identify every camera again from this refreshed list before sending another assignment — do not assume a camera kept the index it had a moment ago.
+
+This rewrites the parity — and the camera's existing identity, or a freshly minted one if it had none — onto the camera's own card.
+
+The appliance will not give a camera a parity that another **currently connected** camera already holds. That means two connected cameras cannot trade parities with each other directly: whichever parity you try to assign to either one, the other camera is already holding it, so the request is refused either way — there is no order of requests that works. Swapping two cameras' parities takes the documented sequence instead:
+
+1. Disconnect one of the two cameras.
+2. Rescan, so the appliance stops counting the disconnected one.
+3. Assign the new parity to the camera that is still connected.
+4. Reconnect the other camera, rescan again, and assign it the parity it should have.
+
+Both cards end up rewritten, and the pair comes back with one shooting odd pages and the other even.
+
+## Troubleshooting
+
+::: {.callout-note appearance="simple"}
+Work through these in order — later causes look identical to earlier ones from the camera list alone, and chasing the wrong one first costs time.
+
+- **No cameras appear at all, on either camera:** confirm the backend is actually set to CHDK (see above) and that the backend service was restarted after the change. A picamera2-configured appliance can never show a camera connected this way at all — picamera2 only looks for the Pi's own ribbon-cable sensor, not a USB device. A gPhoto2-configured appliance is a softer case: it speaks a general-purpose USB photography protocol, so it is not safe to assume that *nothing* appearing, or *something* appearing, tells you which backend is actually running — check the `.env` file itself rather than reasoning backward from what the camera list shows.
+- **One particular camera does not appear, and you are sure its card was prepared correctly:** confirm CHDK actually booted on it. An unprepared or badly prepared card still shows up over USB (see further down) — the camera just answers as an ordinary Canon compact, not as a CHDK body — so the appliance will not recognize it either way. Re-check the card.
+- **Still missing, and you cannot otherwise account for it:** check the backend's own log at `/var/log/dtk/capture_service.log`. A camera that the appliance could not use is silently left out of the device list; the log is the only place that says why. The backend logs every failure to open a camera through one and the same message, whatever actually went wrong — read its exact wording rather than assuming which of these it is:
+  - **It could not be opened, and the message names a permissions problem** (access denied, or similar wording) — this is the udev rule; see below.
+  - **It could not be opened, and the message says the device is busy or already claimed** — something else on the appliance already has that camera open; see below.
+  - **It could not be opened, and the message says something else** — a timeout is common here. The log only shows that opening failed, not why; nothing confirms this is a camera still finishing its boot, so treat that as a guess, not a diagnosis. It's still worth giving the camera a moment and rescanning — a fresh timeout can clear on its own — but do not force the message into "permissions" or "busy" if it does not actually say either, and if it keeps failing after a retry, do not keep assuming it will resolve itself: record the exact message and treat it as undiagnosed rather than as an explained, expected delay.
+  - **It opened fine, but a later step failed** (reading the card, most often) — this points at the card or the connection itself, not at permissions: reseat the card, check it is genuinely locked and not corrupted, or try a different card or cable.
+- **The log names a permissions problem opening the camera, and the card and the backend selection both check out:** this is the udev rule. Confirm with `lsusb` — you should see one "Canon, Inc." line per camera, the same as for the gPhoto2 cameras; if `lsusb` sees it, the camera is physically fine and this is a permissions problem. Do not re-run the full setup script for this — on an appliance with no usable network it tears the running stack down and then does network-dependent pulls and builds, over a fault that only stops the cameras working. Instead run `sudo ./scripts/provision-chdk-usb.sh` (installs the rule and the group membership on their own, idempotently, touching nothing else), then restart the backend service (`sudo systemctl restart dtk`) — the service picks up the appliance user's updated group membership on restart, without needing a reboot.
+- **The log says the camera is busy or already claimed:** restarting the backend service only helps if the stale claim is the *backend's own*, left over from a previous run of it that did not release the camera cleanly — restarting `dtk` then releases it. It does nothing for a claim held by anything else running on the appliance, and that claim survives the restart and can simply grab the camera again the next time it is plugged in. Find whatever process actually holds it (for example, check what else is running on the appliance, or which process has the device node open) and stop that process specifically.
+- **A camera does not appear at all, and `lsusb` does not see it either:** this is the USB cable, not the software — check the connection and the camera's power.
+- **Two cameras refuse to capture, one or both reporting a conflict:** read both the parity and the identity of each camera from the device list yourself — do not assume the error text names the only thing wrong. The device list reports an identity clash first whenever one is present, even on a camera that also shares its parity with the other; but the parity is what an assignment request itself checks first, and it will refuse for a shared parity before it ever gets to identity, regardless of which one the list's error text was talking about. So resolve a shared parity first, whether or not the error mentions it:
+  - **A shared parity, with no shared identity:** assign one of the two cameras the parity the other one does not hold.
+  - **A shared parity together with a shared identity** — the common case when a card is cloned wholesale, since the clone carries the same parity and the same id: reassigning either camera the parity it already holds is refused for the parity clash, before the appliance ever gets to the identity. Assign the one free, opposite parity to either camera instead — that resolves the parity clash, and, when neither camera reports a USB serial, mints that camera a fresh identity in the same call, clearing both at once.
+  - **A shared identity alone, with no shared parity** (the two parities differ, or neither camera has one set yet): the fix depends on where the identity comes from:
+    - Neither camera has a USB serial: reassigning that camera a parity is enough on its own to mint it a fresh identity. If it already has a parity, reassign that same one; changing which pages it shoots is not required. If it has none yet — a card cloned before any parity was ever set on it comes back this way, with neither camera holding a parity at all — assign it whichever of odd/even you actually want it to shoot; with neither camera holding a parity yet, either request succeeds.
+    - One camera has a USB serial and the other's card happens to carry the same value as that serial: only the card-identified camera can be repaired this way; assigning it a parity (its existing one, or a free one if it has none) mints it a fresh id. The camera identified by its own USB serial cannot be fixed by reassignment, because a card write cannot change what a camera reports as its serial.
+    - Both cameras report the same USB serial: reassignment cannot fix this at all — no card write changes a USB serial. One of the two cameras has to come off the rig.
+
+  The error shown for each camera names which specific one(s) the repair applies to; follow that rather than guessing, but check the other field yourself too, since the error you see may not be the only thing wrong.
+:::

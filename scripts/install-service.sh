@@ -1,6 +1,8 @@
 #!/bin/bash
 # Install Digitization Toolkit as a systemd service
 # This enables auto-start on boot and proper service management
+#
+# Version: 0.1.0-beta
 
 set -e
 
@@ -14,7 +16,6 @@ echo "Installing Digitization Toolkit Service"
 echo "=========================================="
 echo ""
 
-# Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo "⚠ This script must be run with sudo"
     echo "Usage: sudo ./scripts/install-service.sh"
@@ -36,7 +37,6 @@ if ! docker image inspect dtk-frontend >/dev/null 2>&1; then
     exit 1
 fi
 
-# Check if service file exists
 if [ ! -f "$SERVICE_FILE" ]; then
     echo "✗ Service file not found: $SERVICE_FILE"
     exit 1
@@ -56,6 +56,21 @@ systemctl enable dtk-secrets.service >/dev/null
 # serial mismatch and regenerate. Without this, a master imaged before its
 # next boot could spread identical secrets that every clone then adopts.
 systemctl start dtk-secrets.service
+
+echo "→ Installing the unresolved-update start condition..."
+# While /etc/dtk/unresolved-deployment exists (update.sh writes it with its
+# unresolved-deployment record), systemd does not start dtk, on a boot or a
+# restart. update.sh and rollback-update.sh write the same drop-in; installing
+# it here means a unit is covered before its first update.
+mkdir -p "$SYSTEMD_DIR/dtk.service.d"
+install -m 0644 "$SCRIPT_DIR/dtk-unresolved.conf" "$SYSTEMD_DIR/dtk.service.d/unresolved.conf"
+mkdir -p /etc/dtk
+chown root:root /etc/dtk
+chmod 0700 /etc/dtk
+if [ -e /etc/dtk/unresolved-deployment ]; then
+    echo "  ⚠ /etc/dtk/unresolved-deployment exists: an update was left unresolved, and"
+    echo "    dtk will not start until it is. See /var/lib/dtk/backups/unresolved-deployment."
+fi
 
 echo "→ Configuring storage mount permissions..."
 # install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);

@@ -13,15 +13,20 @@
 # by the compose `restart: unless-stopped` policy; full runtime supervision of
 # the containers is out of scope for this unit.
 #
-# Exit 0 once: db container is healthy AND frontend is running AND (nginx is
-# running OR absent). Exit 1 if that state is not reached within the timeout.
+# Exit 0 once: db container is healthy AND its published port answers on the
+# host AND frontend is running AND (nginx is running OR absent). Exit 1 if
+# that state is not reached within the timeout.
 # nginx exists only in the Pi overlay (docker-compose.pi.yml); on a dev machine
 # it is simply not defined, and its absence must not fail the check.
+#
+# Version: 0.1.0-beta
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=captua-env.sh
+. "$SCRIPT_DIR/captua-env.sh"
 
 cd "$PROJECT_ROOT"
 
@@ -31,9 +36,9 @@ COMPOSE="docker compose -f docker-compose.yml -f docker-compose.pi.yml"
 
 # Bounded poll: up to ~60s (30 tries × 2s) by default for the containers to
 # settle. Tunable per hardware/venue via environment (e.g. in a dtk.service
-# drop-in: Environment=DTK_HEALTH_MAX_TRIES=60) without editing this script.
-MAX_TRIES="${DTK_HEALTH_MAX_TRIES:-30}"
-SLEEP_SECS="${DTK_HEALTH_SLEEP_SECS:-2}"
+# drop-in: Environment=CAPTUA_HEALTH_MAX_TRIES=60; the DTK_ name works too) without editing this script.
+MAX_TRIES="$(captua_env HEALTH_MAX_TRIES 30)"
+SLEEP_SECS="$(captua_env HEALTH_SLEEP_SECS 2)"
 
 # Is a service defined in this compose config at all? (nginx is Pi-only.)
 service_defined() {
@@ -58,6 +63,17 @@ db_healthy() {
     [ "$status" = "healthy" ]
 }
 
+# Is the db's published port actually LISTENING on the host? The container
+# healthcheck runs inside the container: after a botched teardown the db can
+# report healthy while detached from the project network, with nothing on
+# 127.0.0.1:5432 (Rionegro, 2026-08-03). ss is a positive listen check that
+# makes no connection; if ss is unavailable, skip rather than fail the boot
+# on missing tooling. grep without -q reads to EOF (pipefail-safe).
+db_port_listening() {
+    command -v ss >/dev/null 2>&1 || return 0
+    ss -ltn 2>/dev/null | grep -E '[:.]5432[[:space:]]' >/dev/null
+}
+
 NGINX_DEFINED=false
 NGINX_NOTE=""
 if service_defined nginx; then
@@ -65,12 +81,16 @@ if service_defined nginx; then
     NGINX_NOTE=", nginx running"
 fi
 
-echo "→ Verifying stack health (db healthy, frontend running${NGINX_NOTE})..."
+echo "→ Verifying stack health (db healthy + listening on host, frontend running${NGINX_NOTE})..."
 
 for i in $(seq 1 "$MAX_TRIES"); do
     ok=true
 
     if ! db_healthy; then
+        ok=false
+    fi
+
+    if ! db_port_listening; then
         ok=false
     fi
 
@@ -83,7 +103,7 @@ for i in $(seq 1 "$MAX_TRIES"); do
     fi
 
     if [ "$ok" = true ]; then
-        echo "✓ Stack healthy: db healthy, frontend running${NGINX_NOTE}."
+        echo "✓ Stack healthy: db healthy and listening on the host, frontend running${NGINX_NOTE}."
         exit 0
     fi
 
@@ -96,4 +116,5 @@ echo "✗ Stack did not become healthy within $((MAX_TRIES * SLEEP_SECS))s."
 echo "  Inspect with:"
 echo "    $COMPOSE ps"
 echo "    $COMPOSE logs db frontend"
+echo "    ss -ltn | grep 5432    # is the db port published on the host?"
 exit 1

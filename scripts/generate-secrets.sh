@@ -1,5 +1,5 @@
 #!/bin/bash
-# Per-unit secret generation for cloned SD cards (NEH-158)
+# Per-unit secret generation for cloned SD cards.
 #
 # The distribution model is "provision a golden card, image it, flash many":
 # anything on the card at imaging time — .env AND the initialized Postgres
@@ -24,10 +24,9 @@
 # the local socket inside the db container, which needs no old password),
 # then .env is rewritten atomically, then the marker is stamped. A power cut
 # anywhere in between leaves a state this script converges from on next boot.
+# Production startup requires valid SECRET_KEY, DATABASE_PASSWORD and BOOTSTRAP_TOKEN to be present in .env when APP_ENV is set to production
 #
-# Backend contract (NEH-54/NEH-55): by the time the backend starts with
-# APP_ENV=production, real secrets exist in .env.
-
+# Version: 0.1.0-beta
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,16 +61,86 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
+# Assert the mode on every boot (NEH-269). setup.sh creates .env with
+# `install -m 600 -o $DTK_USER`, but a hand-edit with a tool that recreates
+# the file under the default umask loosens the mode, and every secret written
+# below would inherit it. Asserting it here also covers the run that decides
+# it has nothing to do, so a unit whose secrets are already its own does not
+# stay world-readable.
+#
+# Ownership comes FIRST, and the mode is only tightened when it is safe to.
+# Tightening alone is not: a `.env` that is root-owned and 644 — which a hand
+# `sudo cp` produces, the very scenario above — is readable by `pi` today, and
+# chmod 600 would make it root-only while dtk.service runs as User=pi. That
+# turns a world-readable file into an appliance that cannot start. The service
+# user is taken to be the owner of the checkout, which is what setup.sh
+# provisioned `.env` as; where no non-root owner can be established the mode
+# is left alone and the problem reported, because a visibly insecure unit
+# beats a silently unserving one.
+ENV_OWNER="$(stat -c %U "$ENV_FILE" 2>/dev/null || echo "")"
+REPO_OWNER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || echo "")"
+ENV_MODE="$(stat -c %a "$ENV_FILE" 2>/dev/null || echo "")"
+if [ "$ENV_OWNER" = "root" ] && [ -n "$REPO_OWNER" ] && [ "$REPO_OWNER" != "root" ]; then
+    chown "$REPO_OWNER":"$REPO_OWNER" "$ENV_FILE"
+    log "chowned $ENV_FILE root -> $REPO_OWNER (the service runs as the checkout's owner)"
+    ENV_OWNER="$REPO_OWNER"
+fi
+# Whether the writers below may assert 600 as well.
+ENV_FORCE_600=1
+if [ -z "$ENV_OWNER" ] || [ "$ENV_OWNER" = "root" ]; then
+    ENV_FORCE_600=0
+    log "WARNING: $ENV_FILE is owned by ${ENV_OWNER:-an unknown user} and no"
+    log "         non-root owner could be established, so its mode is left as"
+    log "         ${ENV_MODE:-unknown}. 600 here would stop the dtk service reading it."
+    log "         Fix by hand:  chown pi:pi $ENV_FILE && chmod 600 $ENV_FILE"
+elif [ "$ENV_MODE" != "600" ]; then
+    chmod 600 "$ENV_FILE"
+    log "set $ENV_FILE mode ${ENV_MODE:-unreadable} -> 600"
+fi
+
 get_env() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | xargs; }
+
+# Atomically update a .env key, preserving owner/mode. Used for BOOTSTRAP_TOKEN backfill.
+set_env_atomic() {
+    local var="$1" val="$2" tmp
+    tmp="$(mktemp "$PROJECT_ROOT/.env.XXXXXX")"
+    cp "$ENV_FILE" "$tmp"
+    if grep -qE "^$var=" "$tmp"; then
+        sed -i "s|^$var=.*|$var=$val|" "$tmp"
+    else
+        echo "$var=$val" >> "$tmp"
+    fi
+    chown --reference="$ENV_FILE" "$tmp"
+    # Mode asserted rather than copied: `--reference` would propagate a loose
+    # mode onto a file that holds a fresh secret (NEH-269). Ownership still
+    # follows the real file, which the block above has already corrected where
+    # it could. When it could not, the mode is copied from the real file so the
+    # unit stays able to read its own configuration.
+    if [ "$ENV_FORCE_600" -eq 1 ]; then
+        chmod 600 "$tmp"
+    else
+        chmod --reference="$ENV_FILE" "$tmp"
+    fi
+    mv "$tmp" "$ENV_FILE"
+    sync
+}
 
 SECRET_KEY="$(get_env SECRET_KEY || true)"
 DB_PASSWORD="$(get_env DATABASE_PASSWORD || true)"
+BOOTSTRAP_TOKEN="$(get_env BOOTSTRAP_TOKEN || true)"
 DB_USER="$(get_env DATABASE_USER || true)"; DB_USER="${DB_USER:-user}"
 DB_NAME="$(get_env DATABASE_NAME || true)"; DB_NAME="${DB_NAME:-digitization_toolkit}"
 
+# Every value the repo ships or has shipped, so a card set up from any of them
+# gets its own secrets instead of keeping one known to every unit. SECRET_KEY:
+# .env.example now and before 2026-07-25, the backend's built-in default, and
+# the example in docs/developers/API_REFERENCE.md. DATABASE_PASSWORD:
+# .env.example now and before 2026-01-10, which is also the compose default.
+# The backend's _INSECURE_SECRET_KEYS and _INSECURE_DB_PASSWORDS
+# (app/core/config.py) are the other half of this and should hold the same set.
 is_placeholder_secret() {
     case "$1" in
-        ""|"your-secret-key-here-change-in-production"|"dev-secret-change-me") return 0 ;;
+        ""|"secret-key-here-change-in-production"|"your-secret-key-here-change-in-production"|"dev-secret-change-me"|"change-this-to-a-random-string") return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -81,13 +150,27 @@ is_placeholder_dbpass() {
         *) return 1 ;;
     esac
 }
+is_placeholder_bootstrap() {
+    # The bootstrap token has no shared "example" value; empty is the only placeholder.
+    [ -z "$1" ]
+}
+
+# Backfill BOOTSTRAP_TOKEN without changing existing secrets.
+# Used by keep-existing-secrets paths; rotate paths regenerate it inline.
+backfill_bootstrap_token() {
+    if is_placeholder_bootstrap "$BOOTSTRAP_TOKEN"; then
+        log "generating first-user BOOTSTRAP_TOKEN"
+        set_env_atomic BOOTSTRAP_TOKEN "$(openssl rand -hex 32)"
+    fi
+}
 
 # ── Decide ──────────────────────────────────────────────────────────────────
 # The marker fast path still verifies the secrets are real: if .env was ever
 # manually reverted to placeholders, a matching marker must not mask it.
 if [ -f "$MARKER" ] && [ "$(cat "$MARKER")" = "$SERIAL" ] \
    && ! is_placeholder_secret "$SECRET_KEY" && ! is_placeholder_dbpass "$DB_PASSWORD"; then
-    log "secrets already generated on this unit — nothing to do"
+    log "secrets already generated on this unit; nothing to do"
+    backfill_bootstrap_token
     exit 0
 fi
 
@@ -96,16 +179,18 @@ if is_placeholder_secret "$SECRET_KEY" || is_placeholder_dbpass "$DB_PASSWORD"; 
 elif [ ! -f "$MARKER" ]; then
     # Real secrets but no provenance record: a hand-provisioned unit (e.g. the
     # Rionegro card). Adopt them — never rotate secrets we didn't generate.
-    log "real secrets with no provenance marker — adopting as hand-provisioned"
+    log "Real secrets with no provenance marker; adopting as hand-provisioned"
     echo "$SERIAL" > "$MARKER"
+    backfill_bootstrap_token
     exit 0
 else
-    REASON="marker from another machine ($(cat "$MARKER")) — this card is a clone"
+    REASON="Marker from another machine ($(cat "$MARKER")); this card is a clone"
 fi
 
 log "generating per-unit secrets: $REASON"
 NEW_SECRET="$(openssl rand -hex 32)"
 NEW_DBPASS="$(openssl rand -hex 24)"
+NEW_BOOTSTRAP="$(openssl rand -hex 32)"
 
 # ── 1. Rotate the Postgres password first (crash-safe ordering) ─────────────
 # Only needed when a data directory already exists (cloned or test-booted
@@ -117,24 +202,45 @@ NEW_DBPASS="$(openssl rand -hex 24)"
 if [ -f "$PG_DATA/PG_VERSION" ]; then
     log "rotating Postgres password for existing data directory..."
     cd "$PROJECT_ROOT"
-    $COMPOSE up -d db >/dev/null
+    # Only start db if it is not already running, and never recreate an
+    # existing container (or drag the project network into reconciliation)
+    # from this boot-time oneshot — it just needs A running db to ALTER the
+    # password through (NEH-214 class). If we started it, we stop it below.
+    # A probe failure must NOT read as "db not running" — that would make the
+    # cleanup below stop a database this script did not start. Failing the
+    # oneshot blocks dtk.service (Requires=), which is the designed loud
+    # failure: if docker is broken the app cannot run anyway.
+    if ! RUNNING_SERVICES="$($COMPOSE ps --services --status running 2>/dev/null)"; then
+        log "ERROR: cannot determine container state (docker compose ps failed); leaving secrets untouched"
+        exit 1
+    fi
+    DB_WAS_RUNNING=0
+    if echo "$RUNNING_SERVICES" | grep -qx db; then
+        DB_WAS_RUNNING=1
+    else
+        $COMPOSE up -d --no-recreate db >/dev/null
+    fi
     for i in $(seq 1 30); do
         if $COMPOSE exec -T db pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
             break
         fi
         if [ "$i" -eq 30 ]; then
-            log "ERROR: database did not become ready — leaving secrets untouched"
-            $COMPOSE stop db >/dev/null 2>&1 || true
+            log "ERROR: database did not become ready; leaving secrets untouched"
+            if [ "$DB_WAS_RUNNING" -eq 0 ]; then
+                $COMPOSE stop db >/dev/null 2>&1 || true
+            fi
             exit 1
         fi
         sleep 2
     done
     $COMPOSE exec -T db psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
         -c "ALTER USER \"$DB_USER\" WITH PASSWORD '$NEW_DBPASS';" >/dev/null
-    $COMPOSE stop db >/dev/null
+    if [ "$DB_WAS_RUNNING" -eq 0 ]; then
+        $COMPOSE stop db >/dev/null
+    fi
     log "Postgres password rotated"
 else
-    log "no Postgres data directory yet — initdb will use the new password"
+    log "No Postgres data directory yet; initdb will use the new password"
 fi
 
 # ── 2. Rewrite .env atomically ───────────────────────────────────────────────
@@ -150,12 +256,18 @@ TMP_ENV="$(mktemp "$PROJECT_ROOT/.env.XXXXXX")"
 cp "$ENV_FILE" "$TMP_ENV"
 set_env SECRET_KEY "$NEW_SECRET"
 set_env DATABASE_PASSWORD "$NEW_DBPASS"
+set_env BOOTSTRAP_TOKEN "$NEW_BOOTSTRAP"
 chown --reference="$ENV_FILE" "$TMP_ENV"
-chmod --reference="$ENV_FILE" "$TMP_ENV"
+# Mode asserted where safe — see set_env_atomic above (NEH-269).
+if [ "$ENV_FORCE_600" -eq 1 ]; then
+    chmod 600 "$TMP_ENV"
+else
+    chmod --reference="$ENV_FILE" "$TMP_ENV"
+fi
 mv "$TMP_ENV" "$ENV_FILE"
 sync
 
 # ── 3. Stamp provenance ──────────────────────────────────────────────────────
 echo "$SERIAL" > "$MARKER"
 sync
-log "done — this unit now has its own SECRET_KEY and DATABASE_PASSWORD"
+log "Done. this unit now has its own SECRET_KEY, DATABASE_PASSWORD and BOOTSTRAP_TOKEN"

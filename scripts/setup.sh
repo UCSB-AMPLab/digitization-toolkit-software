@@ -10,29 +10,65 @@
 #   3. Builds Docker images (frontend multi-stage, pulls postgres:16-alpine)
 #   4. Installs backend pixi environment (conda-forge packages)
 #   5. Links system camera libraries (picamera2 / libcamera)
-#   6. Starts the DB, applies Alembic migrations, then stops it
+#   6. Names the unit (captua.local), starts the DB, applies Alembic
+#      migrations, then stops it
 #
 # Usage: sudo ./scripts/setup.sh
+#        sudo CAPTUA_HOSTNAME=captua-2 ./scripts/setup.sh   (a second unit at a site)
+#
+# Version: 0.1.0-beta
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f, so a script reached through a symlink still finds the checkout
+# it belongs to rather than the symlink's parent.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# shellcheck source=captua-env.sh
+. "$SCRIPT_DIR/captua-env.sh"
 
 # Resolve the real (non-root) user so pixi runs under the correct home dir
 if [ -n "$SUDO_USER" ]; then
     DTK_USER="$SUDO_USER"
 else
-    DTK_USER="$(whoami)"
+    # No SUDO_USER means a service unit or a plain root shell, where whoami
+    # is root, and what this script does for "the user" would then be done
+    # for root. The checkout's owner is the user the backend runs as.
+    # Reproduced on the bench unit 2026-10-20 through provision-rclone.sh.
+    DTK_USER="$(stat -c %U "$PROJECT_ROOT" 2>/dev/null || whoami)"
 fi
 DTK_USER_HOME=$(eval echo "~$DTK_USER")
 PIXI_BIN="$DTK_USER_HOME/.pixi/bin/pixi"
 
+# Pinned pixi for provisioning (NEH-170). The committed pixi.lock is
+# lock-file format v7, written by pixi 0.73 (see backend/DEVELOPMENT.md);
+# older pixi cannot read it at all, and an unpinned
+# `curl | bash` gives every unit whatever is latest that day. Bump this pin
+# and the lock format together, deliberately. v0.73.0 is what the bench and
+# Rionegro units run. Keep in lockstep with README.md / README-SETUP.md.
+PIXI_VERSION="v0.73.0"
+
 if [ ! -x "$PIXI_BIN" ]; then
-    echo "✗ pixi not found at $PIXI_BIN"
-    echo "  Install pixi as $DTK_USER first:"
-    echo "    curl -fsSL https://pixi.sh/install.sh | bash"
-    exit 1
+    echo "→ pixi not found — installing pinned pixi $PIXI_VERSION as $DTK_USER..."
+    # PIXI_VERSION must sit on bash's side of the pipe: the installer reads
+    # it (VERSION="${PIXI_VERSION:-latest}"); prefixing curl would set it in
+    # curl's environment only and silently install latest.
+    sudo -u "$DTK_USER" env HOME="$DTK_USER_HOME" bash -c \
+        "curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=$PIXI_VERSION bash"
+    if [ ! -x "$PIXI_BIN" ]; then
+        echo "✗ pixi install failed (still not found at $PIXI_BIN)."
+        echo "  Install it manually as $DTK_USER and re-run setup:"
+        echo "    curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=$PIXI_VERSION bash"
+        exit 1
+    fi
+fi
+
+INSTALLED_PIXI="$(sudo -u "$DTK_USER" "$PIXI_BIN" --version 2>/dev/null | awk '{print $2}' || true)"
+if [ -n "$INSTALLED_PIXI" ] && [ "v$INSTALLED_PIXI" != "$PIXI_VERSION" ]; then
+    echo "⚠ pixi $INSTALLED_PIXI is installed, but this repo is validated with"
+    echo "  $PIXI_VERSION. If 'pixi install --locked' later fails on the"
+    echo "  lock-file format, align it with:"
+    echo "    pixi self-update --version ${PIXI_VERSION#v}"
 fi
 
 # Run a command as DTK_USER, preserving the pixi bin in PATH
@@ -59,20 +95,38 @@ echo ""
 if [ ! -f "$PROJECT_ROOT/.env" ]; then
     echo "→ No .env found — creating it from .env.example..."
     # 0600 from the start: dtk-secrets later writes the real SECRET_KEY and
-    # DB password into this file preserving whatever mode it has.
+    # DB password into this file. It asserts mode 600 on every boot, but leaves
+    # the mode as it is when it cannot establish a non-root owner.
     install -m 600 -o "$DTK_USER" -g "$DTK_USER" \
         "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-    echo "  Review it (HOST_IP and CORS_ORIGINS in particular)."
+    echo "  HOST_IP and CORS_ORIGINS are set for the unit's name in step 6f."
     echo "  SECRET_KEY and DATABASE_PASSWORD may stay as placeholders:"
     echo "  dtk-secrets.service generates per-unit values on first boot."
     echo ""
 fi
 
 # ---------------------------------------------------------------------------
+# 0b. Resolve GitHub submodule URLs over HTTPS on this appliance (NEH-217)
+# ---------------------------------------------------------------------------
+# .gitmodules registers the submodules over SSH (developers push over SSH),
+# but appliances have no GitHub key — and the repos are public, so HTTPS
+# fetches work fine. A config-level rewrite survives any branch/tag checkout
+# that restores .gitmodules; hand-editing that file does not: the next
+# checkout restores the SSH URLs and the update fails mid-way with
+# "Permission denied (publickey)" (the Rionegro unit was found running such an
+# edit). The rewrite lives in
+# DTK_USER's global git config because the documented update workflow runs
+# git pull / submodule update as that user.
+echo "→ Configuring HTTPS fallback for GitHub submodule URLs..."
+run_as_user git config --global url."https://github.com/".insteadOf "git@github.com:"
+echo "  URLs under git@github.com: now resolve via https://github.com/  ✓"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 1. Stop any running services
 # ---------------------------------------------------------------------------
 echo "→ Stopping any running services..."
-$COMPOSE down 2>/dev/null || true
+$COMPOSE down --remove-orphans 2>/dev/null || true
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -143,7 +197,6 @@ fi
 # 6. Installing packages and binaries for cameras
 # ---------------------------------------------------------------------------
 
-# gPhoto2
 if sudo apt install -y gphoto2; then
     echo "gPhoto2 package installed"
     echo ""
@@ -169,6 +222,16 @@ else
     echo "→ Skipping python-gphoto2 source build (no pip in the pixi env)"
     echo ""
 fi
+
+# ---------------------------------------------------------------------------
+# 6a. CHDK camera USB access (libusb + udev rule)
+# ---------------------------------------------------------------------------
+# Shared with update.sh, not copied: scripts/provision-chdk-usb.sh is the one
+# copy, called by both, so an appliance updating to a release with the CHDK
+# backend gets this too, not only one freshly provisioned from scratch.
+# Idempotent — safe on every provisioning run and every later update — and
+# does not touch the dtk service itself; see that script for the reasoning.
+"$SCRIPT_DIR/provision-chdk-usb.sh"
 
 # ---------------------------------------------------------------------------
 # 6b. System clock hardening (survive power cuts without an RTC)
@@ -222,6 +285,37 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
+# 6e. Offsite catalogue backup (pinned rclone + per-unit B2 remote)
+# ---------------------------------------------------------------------------
+# Shared with update.sh, not copied, the way provision-chdk-usb.sh is: one
+# copy called from both, so an appliance updating to a release whose backend
+# uploads through rclone gets the binary too, not only one freshly
+# provisioned. See step 4c in update.sh. Idempotent, touches neither the dtk
+# service nor the network when a new-enough rclone is already present and no
+# new credential is being written, and writes no remote at all unless this
+# unit's B2 key material was supplied — see that script.
+#
+# Called WITHOUT --advisory on purpose. At provisioning, a unit that cannot
+# end up with a working rclone must not be handed to an archive as
+# provisioned, so a failure here stops setup. update.sh's call takes
+# --advisory instead, because aborting an update on a merely-offline field
+# unit costs more than leaving offsite backup unprovisioned another week.
+"$SCRIPT_DIR/provision-rclone.sh"
+
+# ---------------------------------------------------------------------------
+# 6f. Unit name (mDNS): captua.local
+# ---------------------------------------------------------------------------
+# Every unit is captua. Two units on one network cannot share a name, so the
+# rare site with two sets the second one's name here: CAPTUA_HOSTNAME=captua-2 (DTK_HOSTNAME also works).
+# Sets the hostname and /etc/hosts, and points HOST_IP and CORS_ORIGINS in
+# .env at the name. A card already in service as digitool is renamed the way
+# update.sh renames it, with digitool.local kept as an alias. Shared with
+# update.sh: scripts/provision-hostname.sh.
+UNIT_HOSTNAME="$(captua_env HOSTNAME captua)"
+"$SCRIPT_DIR/provision-hostname.sh" --name "$UNIT_HOSTNAME"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations
 # ---------------------------------------------------------------------------
 cd "$PROJECT_ROOT"
@@ -237,7 +331,7 @@ for i in $(seq 1 30); do
     if [ "$i" -eq 30 ]; then
         echo "✗ Database did not become ready after 60s."
         echo "  Check logs: docker compose logs db"
-        $COMPOSE down
+        $COMPOSE down --remove-orphans
         exit 1
     fi
     sleep 2
@@ -252,7 +346,40 @@ echo ""
 
 echo "→ Stopping database..."
 cd "$PROJECT_ROOT"
-$COMPOSE down
+$COMPOSE down --remove-orphans
+echo ""
+
+# ---------------------------------------------------------------------------
+# 8. Record the provisioned version for update.sh / rollback-update.sh
+# ---------------------------------------------------------------------------
+# update.sh keys its offline-safety check and its rollback target off the
+# last successfully deployed commit (last-deployed-SHA). Without a record
+# from provisioning, a unit's FIRST update — the largest jump it will ever
+# make — has no code-rollback target and only a conservative "cannot confirm
+# offline-safe" warning (NEH-216). Path kept in sync with update.sh's
+# BACKUP_DIR / LAST_DEPLOYED_SHA_FILE.
+echo "→ Recording the provisioned version..."
+# root:root 0700: update.sh writes its pre-update database dumps here, and
+# they hold every account's password hash. Nothing that runs as $DTK_USER
+# reads this directory (see update.sh, secure_backup_dir). On a re-run of
+# this script the blanket chown -R in step 2 has just given the directory and
+# every dump in it to $DTK_USER, so ownership is returned to root recursively
+# and the directory's mode set explicitly, whatever install -d does with a
+# directory that already exists.
+install -d -o root -g root -m 0700 /var/lib/dtk/backups
+chown -R root:root /var/lib/dtk/backups
+chmod 0700 /var/lib/dtk/backups
+# git must run as the repo owner: root-run git hits dubious-ownership on a
+# user-cloned repo and would silently poison the record.
+PROVISIONED_SHA="$(run_as_user git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+if [ -n "$PROVISIONED_SHA" ]; then
+    echo "$PROVISIONED_SHA" > /var/lib/dtk/backups/last-deployed-SHA
+    echo "  last-deployed-SHA = $PROVISIONED_SHA  ✓"
+else
+    echo "  ⚠ Could not read the repository HEAD — last-deployed-SHA not"
+    echo "    recorded; the first update will warn that it cannot confirm a"
+    echo "    rollback target."
+fi
 echo ""
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,11 @@
+# The project name Compose derives on a unit from the checkout's directory
+# (/home/pi/dtk), written out so that it does not depend on where the checkout
+# is: it prefixes the containers, the network, the postgres_data volume and
+# the dtk-frontend image that update.sh tags and restores. On a development
+# checkout in another directory the names change once, to dtk-*, and the
+# development database volume with them.
+name: dtk
+
 services:
   db:
     # Pinned by multi-arch index digest for golden-card reproducibility;
@@ -93,7 +101,7 @@ services:
       - ORIGIN=http://${HOST_IP:-localhost}:3000
       - NODE_ENV=production
     # No depends_on db — the frontend is a Node.js API proxy and never connects
-    # to Postgres directly. Removing this lets db and frontend start in parallel.
+    # to Postgres directly. Leaving it out lets db and frontend start in parallel.
     logging:
       driver: json-file
       options:
