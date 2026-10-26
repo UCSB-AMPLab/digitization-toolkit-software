@@ -25,8 +25,26 @@ echo ""
 echo "Launching Chromium kiosk..."
 echo ""
 
+# Chromium's profile lock (SingletonLock, a symlink to <hostname>-<pid>, with
+# SingletonCookie and SingletonSocket) names the host it was taken on, and
+# Chromium refuses a profile locked by "another computer". The rename in
+# scripts/provision-hostname.sh points a running kiosk's lock at the new
+# name; this covers a lock it could not reach, or a hostname changed any
+# other way. This script starts the session's only Chromium, so a lock here
+# is stale, unless a Chromium of this user is still running (one that has
+# not finished exiting): its lock is then left alone. The profile is passed
+# as --user-data-dir below, so the files removed are those of the profile
+# Chromium opens.
+PROFILE_DIR="$HOME/.config/chromium"
+if pgrep -u "$(id -u)" -x 'chromium|chromium-browse' >/dev/null 2>&1; then
+  echo "A Chromium of this user is still running; its profile lock is left in place."
+else
+  rm -f "$PROFILE_DIR/SingletonLock" "$PROFILE_DIR/SingletonCookie" "$PROFILE_DIR/SingletonSocket"
+fi
+
 # Cage automatically makes the app fullscreen
 exec cage -- chromium-browser \
+  --user-data-dir="$PROFILE_DIR" \
   --kiosk \
   --noerrdialogs \
   --disable-infobars \

@@ -37,15 +37,19 @@
 # first, then run with --no-pull so the script does not try to reach the
 # remote.
 #
-# Usage: sudo ./scripts/update.sh [--yes] [--no-pull]
+# Usage: sudo ./scripts/update.sh [--yes] [--no-pull [--offline]]
 #        sudo ./scripts/update.sh --resolve-forward
 #   --yes       Skip the "this update needs internet" confirmation prompt
 #               (for scripted / unattended use).
 #   --no-pull   Do not fetch; update to whatever is already checked out.
-#               For offline updates, and for testing a specific commit. The
-#               checkout must be clean, with every submodule on its pin, and
-#               must descend from the deployed commit (see 0a); otherwise it
-#               is refused before anything changes.
+#               For offline updates, for the 0.1.0 install (code fetched by
+#               hand first), and for testing a specific commit. The checkout
+#               must be clean, with every submodule on its pin, and must
+#               descend from the deployed commit (see 0a); otherwise it is
+#               refused before anything changes. It skips git only: apt is
+#               still tried for avahi-utils (4d).
+#   --offline   With --no-pull, for a unit with no network at all: 4d does
+#               not try apt, and a unit without avahi-utils keeps its name.
 #   --resolve-forward [--no-start]
 #               After an update that failed once its new version had started
 #               (see UNRESOLVED_FILE below), accept that version as deployed
@@ -78,20 +82,27 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 ASSUME_YES=0
 DO_PULL=1
+OFFLINE=0
 RESOLVE_FORWARD=0
 RESOLVE_NO_START=0
 for arg in "$@"; do
     case "$arg" in
         --yes|-y) ASSUME_YES=1 ;;
         --no-pull) DO_PULL=0 ;;
+        --offline) OFFLINE=1 ;;
         --resolve-forward) RESOLVE_FORWARD=1 ;;
         --no-start) RESOLVE_NO_START=1 ;;
-        *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull] | --resolve-forward"; exit 2 ;;
+        *) echo "Unknown argument: $arg"; echo "Usage: sudo ./scripts/update.sh [--yes] [--no-pull [--offline]] | --resolve-forward"; exit 2 ;;
     esac
 done
 
 if [ "$RESOLVE_NO_START" -eq 1 ] && [ "$RESOLVE_FORWARD" -ne 1 ]; then
     echo "✗ --no-start goes with --resolve-forward only."
+    exit 2
+fi
+# Without --no-pull the update fetches, which an offline unit cannot do.
+if [ "$OFFLINE" -eq 1 ] && { [ "$DO_PULL" -eq 1 ] || [ "$RESOLVE_FORWARD" -eq 1 ]; }; then
+    echo "✗ --offline goes with --no-pull only."
     exit 2
 fi
 
@@ -1340,6 +1351,19 @@ on_exit() {
     fi
     end_trap "$rc"
 }
+# The kiosk's Chromium runs in the tty1 login session, which restarting dtk
+# does not reach, and keeps the address start-kiosk.sh gave it at launch.
+# Ending cage makes getty log in again and relaunch it from the start-kiosk.sh
+# now on disk: from 0.1.0 that opens http://localhost through nginx, since
+# the frontend container on :3000 has no /api. Only DTK_USER's cage: on a
+# unit as shipped that is pi, the user the tty1 autologin runs the kiosk as
+# (install-kiosk-service.sh). A unit with no kiosk has no cage to end.
+relaunch_kiosk() {  # relaunch_kiosk <which address, for the message>
+    if pkill -u "$DTK_USER" -x cage 2>/dev/null; then
+        echo "→ Relaunched the kiosk on $1."
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # --resolve-forward: accept the version a started-then-failed update left in
 # place, instead of rolling back. Nothing is changed until everything checks:
@@ -1351,7 +1375,8 @@ on_exit() {
 # Then last-deployed-SHA names that commit, so the next update restores to it
 # and not to the version before, the record is removed, and the unit is
 # started and checked against /health: it was left stopped, and resolving
-# forward is the decision to run this version.
+# forward is the decision to run this version. The kiosk is relaunched, as
+# after an update.
 # ---------------------------------------------------------------------------
 resolve_forward() {
     local want now sub_status db_rev heads i
@@ -1438,6 +1463,9 @@ resolve_forward() {
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
     local healthy=0 img
     wait_for_health "$HEALTH_TIMEOUT" && healthy=1
+    # Healthy or not: the kiosk waits for nginx itself, and the one running
+    # still has the address of the version before the failed update.
+    relaunch_kiosk "this version's address"
     # As the success path does: the image serving now, recorded against this
     # commit, so a later rollback to it can put that image back. No record
     # rather than a wrong one when it cannot be read.
@@ -2173,14 +2201,14 @@ fail_point pixi
 #     while the unit still serves (avahi-utils from apt, the digitool.local
 #     alias service, its NetworkManager hook, and the dtk.service drop-in that
 #     finishes an interrupted rename). Renames nothing; the switch is in 6b.
-#     --offline under --no-pull: an update from a USB drive does not reach
-#     apt, and a unit without avahi-utils keeps its name until an update with
-#     a connection. Advisory for the reason 4c is.
+#     apt is tried under --no-pull too: the 0.1.0 install runs --no-pull on
+#     units that are online. Only --offline skips it, and a unit without
+#     avahi-utils then keeps its name. Advisory for the reason 4c is.
 # ---------------------------------------------------------------------------
-if [ "$DO_PULL" -eq 1 ]; then
-    "$SCRIPT_DIR/provision-hostname.sh" --prepare --advisory
-else
+if [ "$OFFLINE" -eq 1 ]; then
     "$SCRIPT_DIR/provision-hostname.sh" --prepare --advisory --offline
+else
+    "$SCRIPT_DIR/provision-hostname.sh" --prepare --advisory
 fi
 
 # ---------------------------------------------------------------------------
@@ -2489,15 +2517,7 @@ clear_unresolved_marker
 UPDATE_OK=1
 SERVICE_STOPPED=0
 
-# The kiosk's Chromium runs in the tty1 login session, which restarting dtk
-# does not reach, and keeps the address start-kiosk.sh gave it at launch.
-# Ending cage makes getty log in again and relaunch it from the start-kiosk.sh
-# just installed: from 0.1.0 that opens http://localhost through nginx, since
-# the frontend container on :3000 has no /api. A unit with no kiosk has no
-# cage to end.
-if pkill -x cage 2>/dev/null; then
-    echo "→ Relaunched the kiosk on the new version's address."
-fi
+relaunch_kiosk "the new version's address"
 
 # ---------------------------------------------------------------------------
 # Done

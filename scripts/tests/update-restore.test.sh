@@ -387,8 +387,10 @@ sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
 sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-rclone.sh"
-# Records its calls; the switch marks the unit renamed in the case's own
-# file, which nothing in update.sh or rollback-update.sh restores.
+# Records its calls. The switch writes what the real one writes inside the
+# unit's reach: HOST_IP in the checkout's .env (when there is one) and the
+# record in /etc/dtk, both places a restore or rollback works in, so a
+# restore that put either back would show.
 # FAKE_SWITCH_FAIL: the switch exits 1, as it would not under --advisory.
 cat > "$UP/super/scripts/provision-hostname.sh" <<'EOF'
 #!/bin/sh
@@ -396,7 +398,12 @@ echo "provision-hostname $*" >> "$CASE_DIR/log"
 case " $* " in
     *" --switch "*)
         [ -z "${FAKE_SWITCH_FAIL:-}" ] || exit 1
-        echo captua > "$CASE_DIR/hostname" ;;
+        if [ -f "$PROJECT_ROOT/.env" ]; then
+            sed 's/^HOST_IP=.*/HOST_IP=captua.local/' "$PROJECT_ROOT/.env" > "$PROJECT_ROOT/.env.new" \
+                && mv "$PROJECT_ROOT/.env.new" "$PROJECT_ROOT/.env"
+        fi
+        mkdir -p "$DTK_TEST_STATE/etc-dtk"
+        printf 'state=done\nfrom=digitool\nto=captua\n' > "$DTK_TEST_STATE/etc-dtk/hostname-switch" ;;
 esac
 exit 0
 EOF
@@ -460,6 +467,7 @@ run_case() {
     cp -R "$TEMPLATE" "$PROJECT_ROOT"
     [ -z "${FAKE_BREAK_ORIGIN:-}" ] || g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
     [ -z "${FAKE_STAGE_BACKEND_PIN:-}" ] || stage_backend_pin "$FAKE_STAGE_BACKEND_PIN"
+    [ -z "${FAKE_DOTENV:-}" ] || printf '%s\n' "$FAKE_DOTENV" > "$PROJECT_ROOT/.env"
     export DTK_TEST_STATE="$CASE_DIR/state"
     mkdir -p "$DTK_TEST_STATE/backups"
     echo "$SHA_A" > "$DTK_TEST_STATE/backups/last-deployed-SHA"
@@ -503,13 +511,19 @@ MARKER_REL="backups/unresolved-deployment"
 marker_has() { if grep -qxF -- "$1" "$DTK_TEST_STATE/$MARKER_REL" 2>/dev/null; then ok "marker records: $1"; else fail "marker does not record: $1"; fi; }
 no_marker() { if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then fail "an unresolved-deployment marker exists"; else ok "no unresolved-deployment marker"; fi; }
 dump_name() { ls "$DTK_TEST_STATE/backups"/pre-update-*.sql.gz 2>/dev/null | head -n 1; }
+# line_of <text>: the first log line holding it.
+line_of() { grep -n -F -- "$1" "$CASE_DIR/log" | head -n 1 | cut -d: -f1; }
+before()  {  # before <a> <b>: a is logged, b is logged, a first
+    local a b; a="$(line_of "$1")"; b="$(line_of "$2")"
+    if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then ok "'$1' before '$2'"; else fail "'$1' (line ${a:-none}) not before '$2' (line ${b:-none})"; fi
+}
 
 echo "update.sh restore paths"
 
 # ── Success path ────────────────────────────────────────────────────────────
 FAKE_KIOSK=1 run_case "success" --yes
 eq "$RC" 0 "exit status"
-logged "pkill -x cage"
+logged "pkill -u $(whoami) -x cage"
 has "Relaunched the kiosk on the new version's address."
 head_is "$SHA_B" B
 backend_is "$(git -C "$UP/backend" rev-parse HEAD)" B
@@ -603,10 +617,12 @@ if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "
 g -C "$PROJECT_ROOT" checkout -q dev
 
 CASE="resolve forward: accepted"
-run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
+FAKE_KIOSK=1 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
 eq "$RC" 0 "exit status"
 has "Recorded $SHA_B as the deployed version"
 has "online on $SHA_B"
+before "systemctl start dtk" "pkill -u $(whoami) -x cage"
+has "Relaunched the kiosk on this version's address."
 no_marker
 eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
 eq "$(sed -n 's/^sha: //p' "$DTK_TEST_STATE/backups/last-deployed-frontend")" "$SHA_B" "last-deployed-frontend names B"
@@ -649,7 +665,7 @@ if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "
 CASE="restore-failed record: the rollback clears it"
 FAKE_KIOSK=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
 eq "$RC" 0 "exit status"
-logged "pkill -x cage"
+logged "pkill -u $(whoami) -x cage"
 has "Relaunched the kiosk on the restored version's address."
 db_is restored
 head_is "$SHA_A" A
@@ -1032,9 +1048,9 @@ setup_no_pull_case() {  # setup_no_pull_case <dir-name> [last-deployed-SHA conte
     echo "schema-A" > "$CASE_DIR/db_state"
     : > "$CASE_DIR/log"
 }
-run_no_pull() {
+run_no_pull() {  # run_no_pull [more update.sh args...]
     OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" DTK_UPDATE_HEALTH_TIMEOUT=0 \
-        bash "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes 2>&1 </dev/null)"
+        bash "$PROJECT_ROOT/scripts/update.sh" --no-pull --yes "$@" 2>&1 </dev/null)"
     RC=$?
     echo "$OUT" > "$CASE_DIR/out"
 }
@@ -1261,11 +1277,12 @@ has "kind: restore-refused"
 # ── --resolve-forward --no-start ─────────────────────────────────────────
 FAKE_HEALTHY_VERSIONS="A" run_case "resolve forward without starting" --yes
 CASE="resolve forward without starting: resolve"
-run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward --no-start
+FAKE_KIOSK=1 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward --no-start
 eq "$RC" 0 "exit status"
 no_marker
 inactive
 unlogged "systemctl start"
+unlogged "pkill"
 eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
 if [ -e "$DTK_TEST_STATE/backups/last-deployed-frontend" ]; then fail "a frontend record remains"; else ok "no frontend record for an unstarted version"; fi
 has "Deploy the fixed version"
@@ -1947,13 +1964,8 @@ has "back online on the previous version"
 if grep -q "fetch" "$CASE_DIR/log" 2>/dev/null; then fail "--no-pull fetched"; else ok "--no-pull did not fetch"; fi
 
 # ── The rename (6b): in the stopped window, and kept by a restore ──────────
-# line_of <text>: the first log line holding it.
-line_of() { grep -n -F -- "$1" "$CASE_DIR/log" | head -n 1 | cut -d: -f1; }
-before()  {  # before <a> <b>: a is logged, b is logged, a first
-    local a b; a="$(line_of "$1")"; b="$(line_of "$2")"
-    if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then ok "'$1' before '$2'"; else fail "'$1' (line ${a:-none}) not before '$2' (line ${b:-none})"; fi
-}
-DTK_UPDATE_FAIL_AT=dumped run_case "fails after the rename" --yes
+FAKE_DOTENV="$(printf 'HOST_IP=digitool.local\nAPP_ENV=production')" \
+    DTK_UPDATE_FAIL_AT=dumped run_case "fails after the rename" --yes
 eq "$RC" 1 "exit status"
 head_is "$SHA_A" A
 db_is schema-A
@@ -1963,7 +1975,9 @@ before "provision-hostname --prepare --advisory" "systemctl stop dtk"
 before "systemctl stop dtk" "provision-hostname --switch --advisory"
 before "provision-hostname --switch --advisory" "systemctl start dtk"
 unlogged "--offline"
-eq "$(cat "$CASE_DIR/hostname" 2>/dev/null)" captua "the restore leaves the rename in place"
+eq "$(grep '^HOST_IP=' "$PROJECT_ROOT/.env" 2>/dev/null)" "HOST_IP=captua.local" "the restore leaves .env as the rename wrote it"
+eq "$(grep -c . "$PROJECT_ROOT/.env" 2>/dev/null)" 2 "and keeps its other line"
+eq "$(sed -n 's/^state=//p' "$DTK_TEST_STATE/etc-dtk/hostname-switch" 2>/dev/null)" done "the restore leaves the record of the rename"
 has "back online on the previous version"
 
 FAKE_SWITCH_FAIL=1 run_case "rename fails" --yes
@@ -1976,15 +1990,32 @@ has "The rename to captua did not finish"
 has "Update complete!"
 hasnt "UPDATE FAILED"
 
-setup_no_pull_case "no-pull-offline" "$SHA_A"
-CASE="--no-pull (offline): prepare without the network"
+setup_no_pull_case "no-pull-online" "$SHA_A"
+CASE="--no-pull: the prepare step still tries apt"
 run_no_pull
 eq "$RC" 0 "exit status"
 head_is "$SHA_B" B
 started "A B "
+logged "provision-hostname --prepare --advisory"
+unlogged "--offline"
+logged "provision-hostname --switch --advisory"
+has "Update complete!"
+
+setup_no_pull_case "no-pull-offline" "$SHA_A"
+CASE="--no-pull --offline: prepare without apt"
+run_no_pull --offline
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
 logged "provision-hostname --prepare --advisory --offline"
 logged "provision-hostname --switch --advisory"
 has "Update complete!"
+
+setup_no_pull_case "offline-without-no-pull" "$SHA_A"
+CASE="--offline without --no-pull: refused"
+OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" bash "$PROJECT_ROOT/scripts/update.sh" --offline --yes 2>&1 </dev/null)"; RC=$?
+eq "$RC" 2 "exit status"
+has "--offline goes with --no-pull only"
+eq "$(cat "$CASE_DIR/log")" "" "nothing run"
 
 # ── The test-only switch refuses an unknown point ───────────────────────────
 DTK_UPDATE_FAIL_AT=nowhere run_case "unknown failure point" --yes
