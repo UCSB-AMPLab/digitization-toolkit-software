@@ -519,14 +519,18 @@ names_resolve() {
     done
 }
 
-# A repair that undoes the switch: as revert_switch, and HOST_IP back to
-# digitool.local if the switch had got as far as .env.
+# A repair that undoes the switch: HOST_IP back to digitool.local if the
+# switch had got as far as .env, then revert_switch. .env first, while the
+# record still exists: revert_switch removes it, and a repair without one
+# would never come back to a HOST_IP left on captua.local. digitool.local
+# keeps answering meanwhile: through the alias while the hostname is captua
+# (revert_switch stops it only once the hostname is digitool).
 undo_from_repair() {
-    revert_switch || return
     if [ "$(env_value HOST_IP)" = "$NEW_NAME.local" ]; then
         rewrite_env "$OLD_NAME.local" "http://$OLD_NAME.local" \
-            || { echo "  ✗ Could not point HOST_IP in $ENV_FILE back at $OLD_NAME.local."; FAILED=1; return; }
+            || { echo "  ✗ Could not point HOST_IP in $ENV_FILE back at $OLD_NAME.local; the undo waits for the next start."; FAILED=1; return; }
     fi
+    revert_switch || return
     echo "  The unit is $OLD_NAME, as before  ✓"
 }
 

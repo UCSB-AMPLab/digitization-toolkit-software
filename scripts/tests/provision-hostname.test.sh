@@ -431,6 +431,24 @@ alias_off
 eq "$(marker_state)" "" "the record is removed"
 has "another device on this network has the name"
 
+# The same, but .env cannot be pointed back (CORS_ORIGINS is not a list):
+# nothing is undone and the record stays, so the next start tries again.
+new_unit "repair, pending, captua.local elsewhere, .env cannot be restored"
+with_avahi
+prepared
+mkdir -p "$R/etc/dtk"
+cp "$R/etc/hosts" "$R/etc/dtk/hosts.before-hostname-switch"
+printf 'state=pending\nfrom=digitool\nto=captua\n' > "$R/etc/dtk/hostname-switch"
+printf 'captua\n' > "$R/etc/hostname"
+sed -i.bak -e 's/^HOST_IP=.*/HOST_IP=captua.local/' -e 's#^CORS_ORIGINS=.*#CORS_ORIGINS=http://captua.local#' "$R/dtk/.env" && rm -f "$R/dtk/.env.bak"
+FAKE_FOREIGN="captua.local" run --repair --advisory --wait 1
+eq "$RC" 0 "exit status"
+hostname_is captua
+eq "$(env_line HOST_IP)" "HOST_IP=captua.local" "HOST_IP unchanged"
+alias_on
+eq "$(marker_state)" pending "the record stays"
+has "the undo waits for the next start"
+
 # Pending, hostname captua, and neither name resolving yet (the network not
 # up at boot): .env goes forward, the record stays pending.
 new_unit "repair, pending, names not resolving yet"
