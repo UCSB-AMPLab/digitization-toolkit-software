@@ -7,6 +7,10 @@ Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit-software
 Requires=avahi-daemon.service
 After=avahi-daemon.service network.target
 PartOf=avahi-daemon.service
+# The NetworkManager hook restarts this unit on several events within one
+# second at boot. The default start limit (5 starts in 10s) would trip and
+# leave the unit failed, and Restart=on-failure does not recover from that.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

@@ -194,6 +194,7 @@ if [ -x "$R/etc/NetworkManager/dispatcher.d/90-dtk-mdns-alias" ]; then ok "dispa
 if grep -q -- '--repair --advisory' "$R/etc/systemd/system/dtk.service.d/hostname-repair.conf" 2>/dev/null; then ok "dtk drop-in runs --repair"; else fail "dtk drop-in missing"; fi
 if grep -q '^ExecStartPre=-+/bin/sh -c ' "$R/etc/systemd/system/dtk.service.d/hostname-repair.conf" 2>/dev/null; then ok "the drop-in runs as root and never fails the start"; else fail "drop-in ExecStartPre is not -+"; fi
 logged "systemctl daemon-reload"
+logged "systemctl reset-failed dtk-mdns-alias.service"
 unlogged "apt-get"
 # Order: the alias starts only after the host stopped claiming digitool.local.
 order="$(grep -n -e 'hostnamectl set-hostname captua' -e 'systemctl restart avahi-daemon' -e 'systemctl enable --now dtk-mdns-alias' "$R/log" | cut -d: -f1 | tr '\n' ' ')"
@@ -841,6 +842,29 @@ FAKE_ADDRS="wlan0 192.0.2.10" FAKE_ROUTE_SRC=192.0.2.10 \
     FAKE_ADDRS6="$(printf 'wlan0 fd00:2::99 temporary dynamic\nwlan0 fd00:2::98 deprecated\nwlan0 fd00:2::10 dynamic mngtmpaddr')" run_alias
 has "avahi-publish -a -R digitool.local fd00:2::10"
 case "$OUT" in *fd00:2::99*|*fd00:2::98*) fail "published an unusable IPv6" ;; *) ok "unusable IPv6 skipped" ;; esac
+
+# ── The unit file and the dispatcher hook ───────────────────────────────────
+CASE="alias unit file"
+SCRIPTS_DIR="$(dirname "$HERE")"
+DR="$WORK/dispatcher"; mkdir -p "$DR"
+if grep -q '^StartLimitIntervalSec=0$' "$SCRIPTS_DIR/dtk-mdns-alias.service"; then ok "StartLimitIntervalSec=0"; else fail "StartLimitIntervalSec=0 missing"; fi
+if grep -q '^Restart=on-failure$' "$SCRIPTS_DIR/dtk-mdns-alias.service" && grep -q '^RestartSec=10s$' "$SCRIPTS_DIR/dtk-mdns-alias.service"; then ok "Restart=on-failure, RestartSec=10s kept"; else fail "restart policy changed"; fi
+
+run_dispatcher() {  # run_dispatcher EVENT
+    DBIN="$DR/bin"; mkdir -p "$DBIN"; : > "$DR/dlog"
+    printf '#!/bin/sh\necho "$*" >> "%s/dlog"\n' "$DR" > "$DBIN/systemctl"; chmod +x "$DBIN/systemctl"
+    PATH="$DBIN:$PATH" sh "$SCRIPTS_DIR/dtk-mdns-alias.dispatcher" eth0 "$1"
+}
+for ev in up dhcp4-change dhcp6-change; do
+    CASE="dispatcher, $ev"
+    run_dispatcher "$ev"
+    if grep -qF 'restart --no-block dtk-mdns-alias.service' "$DR/dlog"; then ok "restarts the alias"; else fail "did not restart the alias"; fi
+done
+for ev in down connectivity-change pre-up hostname; do
+    CASE="dispatcher, $ev"
+    run_dispatcher "$ev"
+    if grep -qF 'restart' "$DR/dlog"; then fail "restarted the alias"; else ok "ignored"; fi
+done
 
 # ── Arguments ───────────────────────────────────────────────────────────────
 new_unit "unknown argument"
