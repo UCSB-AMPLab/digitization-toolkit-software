@@ -30,6 +30,8 @@
 #
 # The backend depends on the verb contract; do not alter verb names, argument
 # order, or exit semantics without updating both.
+#
+# Version: 0.1.0-beta
 
 set -euf
 

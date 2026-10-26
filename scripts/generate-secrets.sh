@@ -25,6 +25,8 @@
 # then .env is rewritten atomically, then the marker is stamped. A power cut
 # anywhere in between leaves a state this script converges from on next boot.
 # Production startup requires valid SECRET_KEY, DATABASE_PASSWORD and BOOTSTRAP_TOKEN to be present in .env when APP_ENV is set to production
+#
+# Version: 0.1.0-beta
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -65,8 +65,8 @@ script_files() {
     fi | while read -r f; do
         case "$f" in
             *.sh|*.ps1|*.bat) echo "$f" ;;
-            *.*) ;;
-            *) head -n 1 "$f" | grep -qE '^#!.*\b(ba)?sh\b' && echo "$f" ;;
+            *.service|*.conf) ;;
+            *) if head -n 1 "$f" | grep -qE '^#!.*\b(ba)?sh\b'; then echo "$f"; fi ;;
         esac
     done
 }

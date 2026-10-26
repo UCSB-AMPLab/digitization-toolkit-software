@@ -12,6 +12,8 @@
 #
 # Only on a unit where the alias is enabled, which is a unit renamed from
 # digitool; elsewhere this does nothing.
+#
+# Version: 0.1.0-beta
 
 case "$2" in
     up|down|dhcp4-change|dhcp6-change) ;;

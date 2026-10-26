@@ -1,5 +1,7 @@
 #!/bin/bash
 # Uninstall Digitization Toolkit systemd service
+#
+# Version: 0.1.0-beta
 
 set -e
 

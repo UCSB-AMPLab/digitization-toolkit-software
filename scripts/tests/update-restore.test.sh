@@ -30,6 +30,8 @@
 #
 # Each case states the failure it injects, through the fakes or through
 # update.sh's test-only DTK_UPDATE_FAIL_AT.
+#
+# Version: 0.1.0-beta
 
 set -u
 

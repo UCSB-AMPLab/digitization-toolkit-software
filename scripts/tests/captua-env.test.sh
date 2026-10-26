@@ -8,6 +8,8 @@
 # helper is sourced, and the lines or functions that read a setting are taken
 # out of the real scripts and run, so a read site changed back to a bare DTK_
 # name fails here.
+#
+# Version: 0.1.0-beta
 
 set -u
 

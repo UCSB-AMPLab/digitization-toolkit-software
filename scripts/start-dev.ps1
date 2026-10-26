@@ -1,6 +1,8 @@
 # Development startup script for Digitization Toolkit
 # Starts all services in Docker (database + frontend + backend)
 # Use this on machines without camera hardware
+#
+# Version: 0.1.0-beta
 
 $ErrorActionPreference = 'Stop'
 

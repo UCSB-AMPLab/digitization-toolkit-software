@@ -12,6 +12,8 @@
 # set up from .env.example has to get fresh secrets on first boot, so every
 # secret .env.example ships must read as a placeholder, and so must every value
 # it has shipped before, since an older card can still carry one.
+#
+# Version: 0.1.0-beta
 
 set -u
 

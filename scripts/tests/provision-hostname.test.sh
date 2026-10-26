@@ -30,6 +30,8 @@
 # The cases that expect the names not to resolve pass --wait 1.
 #
 # Nothing touches the machine's own hostname, hosts file, avahi or systemd.
+#
+# Version: 0.1.0-beta
 
 set -u
 

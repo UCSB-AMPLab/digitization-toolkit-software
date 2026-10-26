@@ -61,6 +61,8 @@
 #                                     # the kept copy, after the checkout moved
 #
 # WARNING: restoring a dump DISCARDS any data written since that dump was taken.
+#
+# Version: 0.1.0-beta
 
 set -e
 

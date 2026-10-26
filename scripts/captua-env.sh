@@ -14,6 +14,8 @@
 #
 # rollback-update.sh carries its own copy of this function, because its kept
 # copy under /var/lib/dtk runs with no scripts/ directory beside it.
+#
+# Version: 0.1.0-beta
 captua_env() {
     local suffix="$1" default="${2:-}"
     local new="CAPTUA_$suffix" old="DTK_$suffix"
