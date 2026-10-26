@@ -81,6 +81,8 @@ cmd="$1"; shift
 exec env "${vars[@]}" "$cmd" "$@"
 EOF
 
+# pkill: records the call; no kiosk is running (exit 1), unless FAKE_KIOSK.
+printf '#!/bin/sh\necho "pkill $*" >> "$CASE_DIR/log"\n[ -n "${FAKE_KIOSK:-}" ]\n' > "$FAKEBIN/pkill"
 for f in chown sleep; do
     printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/$f"
 done
@@ -505,8 +507,10 @@ dump_name() { ls "$DTK_TEST_STATE/backups"/pre-update-*.sql.gz 2>/dev/null | hea
 echo "update.sh restore paths"
 
 # ── Success path ────────────────────────────────────────────────────────────
-run_case "success" --yes
+FAKE_KIOSK=1 run_case "success" --yes
 eq "$RC" 0 "exit status"
+logged "pkill -x cage"
+has "Relaunched the kiosk on the new version's address."
 head_is "$SHA_B" B
 backend_is "$(git -C "$UP/backend" rev-parse HEAD)" B
 tag_is "$NEW_IMG" "the new build"
@@ -643,8 +647,10 @@ eq "$RC" 1 "exit status"
 has "cannot resolve this record (kind: restore-failed)"
 if [ -e "$DTK_TEST_STATE/$MARKER_REL" ]; then ok "the record stays"; else fail "the record was removed"; fi
 CASE="restore-failed record: the rollback clears it"
-run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
+FAKE_KIOSK=1 run_again "$DTK_TEST_STATE/rollback-update.sh" --project-root="$PROJECT_ROOT" --yes "$(dump_name)"
 eq "$RC" 0 "exit status"
+logged "pkill -x cage"
+has "Relaunched the kiosk on the restored version's address."
 db_is restored
 head_is "$SHA_A" A
 no_marker

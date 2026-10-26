@@ -1630,6 +1630,12 @@ fi
 # ---------------------------------------------------------------------------
 echo "→ Starting the appliance..."
 systemctl start dtk
+# The kiosk keeps the address it was launched with; relaunch it from the
+# restored start-kiosk.sh, as update.sh does after an update. Before 0.1.0
+# that is the frontend container on :3000, from 0.1.0 nginx on port 80.
+if pkill -x cage 2>/dev/null; then
+    echo "→ Relaunched the kiosk on the restored version's address."
+fi
 sleep 5
 SERVICE_OK=0
 if systemctl is-active --quiet dtk; then

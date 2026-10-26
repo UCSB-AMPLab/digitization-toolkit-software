@@ -2489,6 +2489,16 @@ clear_unresolved_marker
 UPDATE_OK=1
 SERVICE_STOPPED=0
 
+# The kiosk's Chromium runs in the tty1 login session, which restarting dtk
+# does not reach, and keeps the address start-kiosk.sh gave it at launch.
+# Ending cage makes getty log in again and relaunch it from the start-kiosk.sh
+# just installed: from 0.1.0 that opens http://localhost through nginx, since
+# the frontend container on :3000 has no /api. A unit with no kiosk has no
+# cage to end.
+if pkill -x cage 2>/dev/null; then
+    echo "→ Relaunched the kiosk on the new version's address."
+fi
+
 # ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------

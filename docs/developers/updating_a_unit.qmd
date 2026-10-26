@@ -176,7 +176,7 @@ In order:
 7. Starts the database alone and takes the dump with the backend stopped.
 8. Writes the unresolved record (7.3) and applies the migrations with `pixi run db-upgrade`, then stops the database.
 9. Starts `dtk` and waits up to 300 seconds for the backend to answer `/health`.
-10. Writes the new commit to `last-deployed-SHA` and removes the unresolved record.
+10. Writes the new commit to `last-deployed-SHA`, removes the unresolved record, and relaunches the kiosk (2.6).
 
 What `update.sh` does when one of these steps fails is in step 7.
 
@@ -220,7 +220,7 @@ A power cut in the middle of the rename is handled at the next start of `dtk`: t
 
 A failed update, and a rollback, restore the code but not the name. The code before 0.1.0 works under it: its frontend calls `http://${HOST_IP}/api`, now `http://captua.local/api`, which resolves, and `CORS_ORIGINS` lists both names, so a page opened as `digitool.local` can call it.
 
-The kiosk opens a new origin, so it asks for a login once after the update.
+Once the new version answers `/health`, `update.sh` ends the kiosk's `cage`, and the tty1 autologin relaunches it from the new `start-kiosk.sh`, on `http://localhost`. That is a new origin for the browser, so the kiosk asks for a login once. A rollback relaunches it the same way, on the restored version's address.
 
 Two units on one network that are both called `digitool` cannot both become `captua`: the second one's check finds `captua.local` answering from the first and undoes its rename. Give it its own name by hand, as in [SD Card Distribution](sd_card_distribution.qmd), troubleshooting; its update then leaves it alone.
 
@@ -718,7 +718,7 @@ No command recovers a volume after an accepted loss yet. A `restore-stem` comman
 3. It checks out the commit in `/var/lib/dtk/backups/pre-update-SHA` and syncs the submodules to that commit's pins. With no recorded commit, the code is left as it is.
 4. It drops the database and restores the newest `pre-update-*.sql.gz`, or the dump named on the command line.
 5. It puts back the frontend image recorded for the restored version, when the record names it and the image is still on the unit.
-6. It removes the unresolved record and flag, starts `dtk` and reports, component by component, whether the pixi environment and the frontend image correspond to the restored version. It does not rebuild the pixi environment; the summary gives the command.
+6. It removes the unresolved record and flag, starts `dtk`, relaunches the kiosk, and reports, component by component, whether the pixi environment and the frontend image correspond to the restored version. It does not rebuild the pixi environment; the summary gives the command.
 
 It does not touch `/var/lib/dtk/offsite.env`, the rclone config, the files on the card or the bucket, nor the unit's name (2.6), `.env`, `/etc/hosts` or avahi.
 
