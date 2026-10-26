@@ -385,6 +385,19 @@ sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
 sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-rclone.sh"
+# Records its calls; the switch marks the unit renamed in the case's own
+# file, which nothing in update.sh or rollback-update.sh restores.
+# FAKE_SWITCH_FAIL: the switch exits 1, as it would not under --advisory.
+cat > "$UP/super/scripts/provision-hostname.sh" <<'EOF'
+#!/bin/sh
+echo "provision-hostname $*" >> "$CASE_DIR/log"
+case " $* " in
+    *" --switch "*)
+        [ -z "${FAKE_SWITCH_FAIL:-}" ] || exit 1
+        echo captua > "$CASE_DIR/hostname" ;;
+esac
+exit 0
+EOF
 chmod +x "$UP/super/scripts/"*.sh
 echo "services: {}" > "$UP/super/docker-compose.yml"
 echo "services: {}" > "$UP/super/docker-compose.pi.yml"
@@ -1926,6 +1939,46 @@ active
 has "database: untouched"
 has "back online on the previous version"
 if grep -q "fetch" "$CASE_DIR/log" 2>/dev/null; then fail "--no-pull fetched"; else ok "--no-pull did not fetch"; fi
+
+# ── The rename (6b): in the stopped window, and kept by a restore ──────────
+# line_of <text>: the first log line holding it.
+line_of() { grep -n -F -- "$1" "$CASE_DIR/log" | head -n 1 | cut -d: -f1; }
+before()  {  # before <a> <b>: a is logged, b is logged, a first
+    local a b; a="$(line_of "$1")"; b="$(line_of "$2")"
+    if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then ok "'$1' before '$2'"; else fail "'$1' (line ${a:-none}) not before '$2' (line ${b:-none})"; fi
+}
+DTK_UPDATE_FAIL_AT=dumped run_case "fails after the rename" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+db_is schema-A
+started "A A "
+active
+before "provision-hostname --prepare --advisory" "systemctl stop dtk"
+before "systemctl stop dtk" "provision-hostname --switch --advisory"
+before "provision-hostname --switch --advisory" "systemctl start dtk"
+unlogged "--offline"
+eq "$(cat "$CASE_DIR/hostname" 2>/dev/null)" captua "the restore leaves the rename in place"
+has "back online on the previous version"
+
+FAKE_SWITCH_FAIL=1 run_case "rename fails" --yes
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+db_is migrated
+started "A B "
+active
+has "The rename to captua did not finish"
+has "Update complete!"
+hasnt "UPDATE FAILED"
+
+setup_no_pull_case "no-pull-offline" "$SHA_A"
+CASE="--no-pull (offline): prepare without the network"
+run_no_pull
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+started "A B "
+logged "provision-hostname --prepare --advisory --offline"
+logged "provision-hostname --switch --advisory"
+has "Update complete!"
 
 # ── The test-only switch refuses an unknown point ───────────────────────────
 DTK_UPDATE_FAIL_AT=nowhere run_case "unknown failure point" --yes

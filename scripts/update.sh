@@ -2169,6 +2169,21 @@ fail_point pixi
 "$SCRIPT_DIR/provision-rclone.sh" --advisory
 
 # ---------------------------------------------------------------------------
+# 4d. Unit name, first half: what renaming digitool to captua needs, installed
+#     while the unit still serves (avahi-utils from apt, the digitool.local
+#     alias service, its NetworkManager hook, and the dtk.service drop-in that
+#     finishes an interrupted rename). Renames nothing; the switch is in 6b.
+#     --offline under --no-pull: an update from a USB drive does not reach
+#     apt, and a unit without avahi-utils keeps its name until an update with
+#     a connection. Advisory for the reason 4c is.
+# ---------------------------------------------------------------------------
+if [ "$DO_PULL" -eq 1 ]; then
+    "$SCRIPT_DIR/provision-hostname.sh" --prepare --advisory
+else
+    "$SCRIPT_DIR/provision-hostname.sh" --prepare --advisory --offline
+fi
+
+# ---------------------------------------------------------------------------
 # 5. Trial backup, while the old stack is STILL RUNNING. pg_dump takes one
 #    transactional snapshot, so this is safe on a live database, and a backup
 #    that cannot be written (no space, a broken pg_dump) then aborts the update
@@ -2310,6 +2325,26 @@ if ! wait_backend_stopped; then
 fi
 echo ""
 fail_point stopped
+
+# ---------------------------------------------------------------------------
+# 6b. Unit name, second half: rename digitool to captua, keeping
+#     digitool.local as an alias (scripts/provision-hostname.sh). Here, with
+#     the stack stopped, because it rewrites .env (HOST_IP, CORS_ORIGINS),
+#     which only a start reads. Only a unit named digitool with
+#     HOST_IP=digitool.local is renamed; it checks that both names resolve
+#     and undoes itself if they do not.
+#
+#     Never fatal: a unit that keeps the name digitool works, and the guard
+#     below keeps an unexpected exit status from reaching the EXIT trap. A
+#     failure later in this update restores the previous code but not the
+#     name, and the previous code works under it: its frontend calls
+#     http://${HOST_IP}/api, captua.local now, and CORS_ORIGINS lists both
+#     names.
+# ---------------------------------------------------------------------------
+if ! "$SCRIPT_DIR/provision-hostname.sh" --switch --advisory; then
+    echo "⚠ The rename to captua did not finish; the unit keeps its current name."
+fi
+echo ""
 
 # ---------------------------------------------------------------------------
 # 7. Apply DB migrations.
@@ -2467,7 +2502,7 @@ echo "    $DUMP_FILE"
 echo "  If something looks wrong, you can roll back with:"
 echo "    sudo $SCRIPT_DIR/rollback-update.sh"
 echo ""
-echo "  Frontend: http://localhost:3000"
+echo "  Frontend: http://localhost (nginx), or http://$(hostname 2>/dev/null || echo captua).local from the network"
 echo "  Backend:  http://localhost:8000/health"
 echo "  Logs:     journalctl -u dtk -f"
 echo ""

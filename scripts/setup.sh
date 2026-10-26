@@ -10,9 +10,11 @@
 #   3. Builds Docker images (frontend multi-stage, pulls postgres:16-alpine)
 #   4. Installs backend pixi environment (conda-forge packages)
 #   5. Links system camera libraries (picamera2 / libcamera)
-#   6. Starts the DB, applies Alembic migrations, then stops it
+#   6. Names the unit (captua.local), starts the DB, applies Alembic
+#      migrations, then stops it
 #
 # Usage: sudo ./scripts/setup.sh
+#        sudo DTK_HOSTNAME=captua-2 ./scripts/setup.sh   (a second unit at a site)
 
 set -e
 
@@ -93,7 +95,7 @@ if [ ! -f "$PROJECT_ROOT/.env" ]; then
     # the mode as it is when it cannot establish a non-root owner.
     install -m 600 -o "$DTK_USER" -g "$DTK_USER" \
         "$PROJECT_ROOT/.env.example" "$PROJECT_ROOT/.env"
-    echo "  Review it (HOST_IP and CORS_ORIGINS in particular)."
+    echo "  HOST_IP and CORS_ORIGINS are set for the unit's name in step 6f."
     echo "  SECRET_KEY and DATABASE_PASSWORD may stay as placeholders:"
     echo "  dtk-secrets.service generates per-unit values on first boot."
     echo ""
@@ -295,6 +297,19 @@ echo ""
 # --advisory instead, because aborting an update on a merely-offline field
 # unit costs more than leaving offsite backup unprovisioned another week.
 "$SCRIPT_DIR/provision-rclone.sh"
+
+# ---------------------------------------------------------------------------
+# 6f. Unit name (mDNS): captua.local
+# ---------------------------------------------------------------------------
+# Every unit is captua. Two units on one network cannot share a name, so the
+# rare site with two sets the second one's name here: DTK_HOSTNAME=captua-2.
+# Sets the hostname and /etc/hosts, and points HOST_IP and CORS_ORIGINS in
+# .env at the name. A card already in service as digitool is renamed the way
+# update.sh renames it, with digitool.local kept as an alias. Shared with
+# update.sh: scripts/provision-hostname.sh.
+DTK_HOSTNAME="${DTK_HOSTNAME:-captua}"
+"$SCRIPT_DIR/provision-hostname.sh" --name "$DTK_HOSTNAME"
+echo ""
 
 # ---------------------------------------------------------------------------
 # 7. Database initialisation & migrations

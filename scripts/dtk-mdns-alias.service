@@ -1,0 +1,21 @@
+[Unit]
+Description=Captua: answer the old digitool.local name over mDNS
+Documentation=https://github.com/UCSB-AMPLab/digitization-toolkit-software
+# avahi-publish is a client of avahi-daemon: it needs the daemon running,
+# and a restart of the daemon (which drops every published record) must
+# restart it too, or the alias would silently stop answering.
+Requires=avahi-daemon.service
+After=avahi-daemon.service network.target
+PartOf=avahi-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/dtk-mdns-alias digitool.local
+Restart=on-failure
+RestartSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dtk-mdns-alias
+
+[Install]
+WantedBy=multi-user.target

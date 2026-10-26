@@ -1,0 +1,60 @@
+#!/bin/bash
+# dtk-mdns-alias NAME — answer NAME (digitool.local) over mDNS with this
+# unit's address, for as long as it runs. Installed to
+# /usr/local/sbin/dtk-mdns-alias by scripts/provision-hostname.sh and run by
+# dtk-mdns-alias.service, outside the checkout, so a rollback to code that
+# predates the rename keeps the old name answering.
+#
+# Units renamed from digitool to captua keep digitool.local through 0.1.x,
+# because bookmarks, notes taped to the scanner and the old code that a
+# rollback restores all use it.
+#
+# One address only. avahi refuses a second A record for the same name from
+# another client as a local collision, whatever its address, so publishing
+# one per interface fails from the second on. The address is the one the unit
+# would use to reach the network (the source of its default route), or the
+# first global IPv4 address when there is no default route. When addresses
+# change, the NetworkManager dispatcher hook restarts this service.
+#
+# -R: no reverse (PTR) record. The address's reverse name is the host's own
+# (captua.local), which avahi already publishes; a second PTR would collide
+# with it. That is also why /etc/avahi/hosts is not used: it always publishes
+# the reverse record.
+
+set -u
+
+NAME="${1:-}"
+if [ -z "$NAME" ]; then
+    echo "usage: dtk-mdns-alias NAME" >&2
+    exit 2
+fi
+
+# Interfaces that are not the unit's own network: Docker bridges, veth pairs,
+# the Tailscale tunnel and loopback.
+real_addresses() {
+    ip -4 -o addr show scope global 2>/dev/null \
+        | awk '$2 !~ /^(lo|docker|br-|veth|tailscale|virbr)/ { split($4, a, "/"); print a[1] }'
+}
+
+route_source() {
+    ip -4 route get 1.1.1.1 2>/dev/null \
+        | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'
+}
+
+ADDR=""
+src="$(route_source)"
+if [ -n "$src" ] && real_addresses | grep -qxF "$src"; then
+    ADDR="$src"
+else
+    ADDR="$(real_addresses | head -n 1)"
+fi
+
+if [ -z "$ADDR" ]; then
+    # No address yet (no network, DHCP still pending). Restart=on-failure
+    # tries again; the dispatcher hook restarts it once an address comes up.
+    echo "dtk-mdns-alias: no IPv4 address on a real interface yet" >&2
+    exit 1
+fi
+
+echo "dtk-mdns-alias: publishing $NAME as $ADDR"
+exec avahi-publish -a -R "$NAME" "$ADDR"
