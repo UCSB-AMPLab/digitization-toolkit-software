@@ -40,8 +40,9 @@
 #   4. Enable and start dtk-mdns-alias, which publishes digitool.local. Only
 #      now: while the host itself claims digitool.local, a second record for
 #      the name is a collision.
-#   5. Check that captua.local and digitool.local both resolve here. If
-#      either does not, undo steps 1 to 4 and leave .env untouched.
+#   5. Check that captua.local and digitool.local both resolve, to one of
+#      this unit's own addresses. If either does not (or resolves to another
+#      device on the network), undo steps 1 to 4 and leave .env untouched.
 #   6. Rewrite .env: HOST_IP=captua.local, and CORS_ORIGINS gains
 #      http://captua.local and keeps (or gains) http://digitool.local.
 #   7. Record the switch as done.
@@ -389,11 +390,29 @@ revert_switch() {
     rm -f "$MARKER" "$HOSTS_BACKUP"
 }
 
+# This unit's own addresses, every family and interface.
+local_addresses() {
+    ip -o addr show 2>/dev/null | awk '{ split($4, a, "/"); print a[1] }'
+}
+
+# resolves_here NAME: NAME resolves, to one of this unit's addresses. A name
+# that resolves elsewhere is another device's (two units on one network, or
+# avahi having published this one under a suffixed name after a collision).
+resolves_here() {
+    local addr
+    addr="$(getent hosts "$1" 2>/dev/null | awk '{ print $1; exit }')"
+    [ -n "$addr" ] || { WHY_NOT="$1 does not resolve"; return 1; }
+    if ! local_addresses | grep -qxF -- "$addr"; then
+        WHY_NOT="$1 resolves to $addr, which is not this unit"
+        return 1
+    fi
+}
+
 names_resolve() {
     local i=0
     while :; do
-        if getent hosts "$NEW_NAME.local" >/dev/null 2>&1 \
-           && getent hosts "$OLD_NAME.local" >/dev/null 2>&1; then
+        WHY_NOT=""
+        if resolves_here "$NEW_NAME.local" && resolves_here "$OLD_NAME.local"; then
             return 0
         fi
         i=$((i + 1))
@@ -507,8 +526,9 @@ switch_name() {
         revert_switch; FAILED=1; return 0
     fi
     if ! names_resolve; then
-        echo "  ✗ After ${WAIT_SECONDS}s, $NEW_NAME.local and $OLD_NAME.local did not both resolve on"
-        echo "    this unit (getent hosts). Check: journalctl -u avahi-daemon -u $ALIAS_UNIT_NAME"
+        echo "  ✗ After ${WAIT_SECONDS}s, $NEW_NAME.local and $OLD_NAME.local did not both resolve to"
+        echo "    this unit (getent hosts): ${WHY_NOT}. Another unit on this network may"
+        echo "    have the name. Check: journalctl -u avahi-daemon -u $ALIAS_UNIT_NAME"
         revert_switch; FAILED=1; return 0
     fi
     if ! rewrite_env "$NEW_NAME.local" "http://$NEW_NAME.local" "http://$OLD_NAME.local"; then

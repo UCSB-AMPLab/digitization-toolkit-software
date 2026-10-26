@@ -212,7 +212,7 @@ From 0.1.0 every unit is called `captua` and answers at `http://captua.local`. T
 `update.sh` renames a unit only when its hostname is exactly `digitool` and `.env` has `HOST_IP=digitool.local`. A unit named otherwise by hand is left alone. The work is done by `scripts/provision-hostname.sh`, in two calls:
 
 - Before the stop (`--prepare`): it installs `avahi-utils` from apt if it is missing, the alias script `/usr/local/sbin/dtk-mdns-alias`, its unit `dtk-mdns-alias.service`, the NetworkManager hook `/etc/NetworkManager/dispatcher.d/90-dtk-mdns-alias`, and the drop-in `/etc/systemd/system/dtk.service.d/hostname-repair.conf`. Under `--no-pull` it does not use apt: a unit without `avahi-utils` keeps the name `digitool` until an update with a connection, and the update goes on.
-- With `dtk` stopped (`--switch`): it writes `127.0.1.1 captua digitool` to `/etc/hosts`, runs `hostnamectl set-hostname captua`, restarts `avahi-daemon` and starts `dtk-mdns-alias`, which keeps `digitool.local` answering through 0.1.x. It then checks that `captua.local` and `digitool.local` both resolve on the unit. If either does not, it puts the name, `/etc/hosts`, avahi and the alias back and leaves `.env` as it was. If both do, it sets `HOST_IP=captua.local` in `.env` and adds `http://captua.local` to `CORS_ORIGINS`, keeping `http://digitool.local`.
+- With `dtk` stopped (`--switch`): it writes `127.0.1.1 captua digitool` to `/etc/hosts`, runs `hostnamectl set-hostname captua`, restarts `avahi-daemon` and starts `dtk-mdns-alias`, which keeps `digitool.local` answering through 0.1.x. It then checks that `captua.local` and `digitool.local` both resolve, to one of the unit's own addresses. If either does not, or resolves to another device, it puts the name, `/etc/hosts`, avahi and the alias back and leaves `.env` as it was. If both do, it sets `HOST_IP=captua.local` in `.env` and adds `http://captua.local` to `CORS_ORIGINS`, keeping `http://digitool.local`.
 
 Neither call can make the update fail. A rename that does not happen prints `⚠ The rename to captua did not finish`, and the unit keeps working as `digitool`.
 
@@ -222,7 +222,7 @@ A failed update, and a rollback, restore the code but not the name. The code bef
 
 The kiosk opens a new origin, so it asks for a login once after the update.
 
-Two units on one network that are both called `digitool` would both become `captua` and both publish `digitool.local`, and the check above cannot tell that the name answering is the other unit's. Before updating either, give one of them its own name by hand, as in [SD Card Distribution](sd_card_distribution.qmd), troubleshooting; its update then leaves it alone.
+Two units on one network that are both called `digitool` cannot both become `captua`: the second one's check finds `captua.local` answering from the first and undoes its rename. Give it its own name by hand, as in [SD Card Distribution](sd_card_distribution.qmd), troubleshooting; its update then leaves it alone.
 
 ---
 

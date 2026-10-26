@@ -13,7 +13,10 @@
 #                  marks the alias enabled (fails under FAKE_ALIAS_FAIL),
 #                  `disable --now` unmarks it; `is-active avahi-daemon`
 #                  succeeds unless FAKE_AVAHI_DOWN.
-#   getent         resolves every name except those in FAKE_UNRESOLVED.
+#   getent         resolves every name to this unit's address (192.0.2.10),
+#                  except those in FAKE_UNRESOLVED (not at all) and in
+#                  FAKE_FOREIGN (to another device's address).
+#   ip             `-o addr show` lists 127.0.0.1, 192.0.2.10 and fe80::1.
 #   apt-get        records the call; installs a fake avahi-publish when
 #                  FAKE_APT_OK is set, and fails otherwise.
 #   avahi-publish  present when a case puts it in <root>/avahibin.
@@ -68,7 +71,15 @@ cat > "$FAKEBIN/getent" <<'EOF'
 #!/bin/sh
 echo "getent $*" >> "$R/log"
 for n in ${FAKE_UNRESOLVED:-}; do [ "$n" = "$2" ] && exit 2; done
+for n in ${FAKE_FOREIGN:-}; do [ "$n" = "$2" ] && { echo "198.51.100.7    $2"; exit 0; }; done
 echo "192.0.2.10      $2"
+EOF
+# This unit's addresses, as `ip -o addr show` prints them.
+cat > "$FAKEBIN/ip" <<'EOF'
+#!/bin/sh
+echo "1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever"
+echo "2: wlan0    inet 192.0.2.10/24 brd 192.0.2.255 scope global dynamic wlan0\       valid_lft 86000sec"
+echo "2: wlan0    inet6 fe80::1/64 scope link \       valid_lft forever preferred_lft forever"
 EOF
 cat > "$FAKEBIN/apt-get" <<'EOF'
 #!/bin/sh
@@ -266,6 +277,17 @@ FAKE_UNRESOLVED="captua.local" run --switch --wait 3
 eq "$RC" 1 "exit status"
 hostname_is digitool
 eq "$(sum_of "$R/dtk/.env")" "$ENV_SUM" ".env byte-identical"
+
+# ── A name that resolves to another device: undone ──────────────────────────
+new_unit "name resolves elsewhere"
+with_avahi
+ENV_SUM="$(sum_of "$R/dtk/.env")"
+FAKE_FOREIGN="captua.local" run --advisory --wait 3
+eq "$RC" 0 "exit status"
+hostname_is digitool
+eq "$(sum_of "$R/dtk/.env")" "$ENV_SUM" ".env byte-identical"
+alias_off
+has "resolves to 198.51.100.7, which is not this unit"
 
 # ── The alias does not start: undone ────────────────────────────────────────
 new_unit "alias fails to start"
