@@ -34,6 +34,8 @@
 # Wired into provisioning via setup.sh. Do NOT run ad hoc over the network on
 # a deployed unit; it must be hardware-tested on a spare Pi before any
 # dev → main release.
+#
+# Version: 0.1.0-beta
 
 set -e
 

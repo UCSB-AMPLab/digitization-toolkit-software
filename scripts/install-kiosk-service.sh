@@ -10,6 +10,8 @@
 #
 # Restart: when cage exits, the shell exits, getty re-autologins, .bash_profile
 # runs again → kiosk restarts automatically.
+#
+# Version: 0.1.0-beta
 
 set -e
 

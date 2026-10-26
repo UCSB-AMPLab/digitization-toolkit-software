@@ -9,6 +9,8 @@
 #
 # Called by setup.sh and install-service.sh; can also be run standalone:
 #   sudo ./scripts/install-system-helper.sh
+#
+# Version: 0.1.0-beta
 
 set -e
 

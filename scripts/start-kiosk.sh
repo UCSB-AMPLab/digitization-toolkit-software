@@ -1,5 +1,7 @@
 #!/bin/bash
 # Wayland Kiosk Launcher - starts Chromium in fullscreen using Cage
+#
+# Version: 0.1.0-beta
 
 echo "╔════════════════════════════════════════╗"
 echo "║   Starting Wayland Kiosk Mode          ║"

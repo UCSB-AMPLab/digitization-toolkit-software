@@ -4,6 +4,8 @@
 # `bash -x`, from SHELLOPTS=xtrace in the environment, or from a caller that
 # sourced it, would print every one of those lines, keys included, to stderr
 # and into whatever log captures it.
+#
+# Version: 0.1.0-beta
 set +x
 # provision-rclone.sh — pinned rclone binary + per-unit B2 remote for the
 # offsite catalogue backup (NEH-249, NEH-227). Idempotent: safe to re-run on

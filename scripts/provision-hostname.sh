@@ -89,6 +89,8 @@
 # --env-file FILE names the .env (default: the checkout's). Both are
 # arguments, not environment variables, because update.sh exports every .env
 # key before calling this script.
+#
+# Version: 0.1.0-beta
 
 set -u
 

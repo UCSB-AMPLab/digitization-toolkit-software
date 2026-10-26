@@ -1,5 +1,7 @@
 #!/bin/bash
 # Install Wayland kiosk browser
+#
+# Version: 0.1.0-beta
 
 set -e
 

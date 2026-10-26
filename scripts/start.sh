@@ -1,6 +1,8 @@
 #!/bin/bash
 # Production startup script for Digitization Toolkit
 # Starts database + frontend in Docker, then native backend with camera support
+#
+# Version: 0.1.0-beta
 
 set -e
 

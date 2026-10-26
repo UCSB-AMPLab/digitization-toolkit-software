@@ -22,6 +22,8 @@
 # strings in B2's alphabet, and the age recipients are encodings of fixed byte
 # patterns that no one holds a private key for. The "secret key" is a string
 # of the right shape that is not a key.
+#
+# Version: 0.1.0-beta
 
 set -u
 

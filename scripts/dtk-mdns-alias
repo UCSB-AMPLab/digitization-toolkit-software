@@ -32,6 +32,8 @@
 # (captua.local), which avahi already publishes; a second PTR would collide
 # with it. That is also why /etc/avahi/hosts is not used: it always publishes
 # the reverse record.
+#
+# Version: 0.1.0-beta
 
 set -u
 

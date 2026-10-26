@@ -16,6 +16,8 @@
 # directory and tightens old dumps before it writes a new one, that the dump is
 # written through write_dump, and that setup.sh creates the directory as
 # root:root 0700.
+#
+# Version: 0.1.0-beta
 
 set -u
 

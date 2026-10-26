@@ -1,6 +1,8 @@
 #!/bin/bash
 # Stop script for Digitization Toolkit
 # Safely stops all services (Docker containers + native backend)
+#
+# Version: 0.1.0-beta
 
 set -e
 

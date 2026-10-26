@@ -18,6 +18,8 @@
 # that state is not reached within the timeout.
 # nginx exists only in the Pi overlay (docker-compose.pi.yml); on a dev machine
 # it is simply not defined, and its absence must not fail the check.
+#
+# Version: 0.1.0-beta
 
 set -euo pipefail
 

@@ -1,6 +1,8 @@
 #!/bin/bash
 # Install Digitization Toolkit as a systemd service
 # This enables auto-start on boot and proper service management
+#
+# Version: 0.1.0-beta
 
 set -e
 
