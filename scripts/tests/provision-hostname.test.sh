@@ -855,12 +855,12 @@ run_dispatcher() {  # run_dispatcher EVENT
     printf '#!/bin/sh\necho "$*" >> "%s/dlog"\n' "$DR" > "$DBIN/systemctl"; chmod +x "$DBIN/systemctl"
     PATH="$DBIN:$PATH" sh "$SCRIPTS_DIR/dtk-mdns-alias.dispatcher" eth0 "$1"
 }
-for ev in up dhcp4-change dhcp6-change; do
+for ev in up down dhcp4-change dhcp6-change; do
     CASE="dispatcher, $ev"
     run_dispatcher "$ev"
     if grep -qF 'restart --no-block dtk-mdns-alias.service' "$DR/dlog"; then ok "restarts the alias"; else fail "did not restart the alias"; fi
 done
-for ev in down connectivity-change pre-up hostname; do
+for ev in connectivity-change pre-up hostname; do
     CASE="dispatcher, $ev"
     run_dispatcher "$ev"
     if grep -qF 'restart' "$DR/dlog"; then fail "restarted the alias"; else ok "ignored"; fi

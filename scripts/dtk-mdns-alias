@@ -19,8 +19,8 @@
 # first global IPv4 address when there is no default route. The IPv6 address
 # is a global one on the same interface; link-local addresses are not
 # published, since they are ambiguous without a scope. When addresses change,
-# the NetworkManager dispatcher hook restarts this service on up, dhcp4-change
-# and dhcp6-change.
+# the NetworkManager dispatcher hook restarts this service on up, down,
+# dhcp4-change and dhcp6-change.
 #
 # Limitation: an IPv6 address that is not yet assigned when the service starts
 # (at boot, typically) is published only when one of those events arrives
