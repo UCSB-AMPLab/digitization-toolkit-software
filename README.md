@@ -1,5 +1,7 @@
 # Captua
 
+![Version](https://img.shields.io/badge/version-0.1.0--beta-orange)
+
 **Captua** is the software of the **Digitization Toolkit**, an integrated toolkit of hardware, software, and documentation that allows lower-resourced institutions, collectives, and communities to digitize their archival collections at low cost.
 
 The project builds on a decade of community-based digitization work in the Global South. The DIY book-scanning equipment that made that work possible — cheap digital cameras and single-board computers — has become increasingly obsolete or unavailable; the Digitization Toolkit replaces it with sustainable, up-to-date technologies. Captua runs a Raspberry Pi–based capture station driving paired cameras (ArduCam modules or gPhoto2-compatible DSLRs) through a web interface, in Spanish and English, for image capture, metadata entry, and export — designed to work entirely offline. An alpha version will be tested at the Santa Barbara Mission Archive-Library (SBMAL).
@@ -13,7 +15,7 @@ The project builds on a decade of community-based digitization work in the Globa
 
 ## Status
 
-> Captua is in active development and remains **pre-alpha**. Current release: [0.0.0-pre.3](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases).
+> Captua is in active development. Current release: [0.1.0-beta](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.1.0-beta), the first release built to be tested in day-to-day operation in an archive. It is tested on one configuration: a Captua unit with two Canon EOS Rebel T7 cameras connected over gphoto2, and a monitor, keyboard and mouse.
 
 ## Release History
 
@@ -118,8 +120,10 @@ sudo ./scripts/install-kiosk-service.sh
 
 # 5. Verify the app is running
 curl http://localhost:8000/health   # → {"status":"ok"}
-curl -I http://localhost:3000       # → HTTP 200
+curl -I http://localhost            # → HTTP 200 (the interface, through nginx)
 ```
+
+From another machine on the network, the unit answers at `http://captua.local`.
 
 > **Do the first run camera-less.** Complete steps 0–5 and pass the health
 > checks above with no cameras attached, then connect the cameras (see the
