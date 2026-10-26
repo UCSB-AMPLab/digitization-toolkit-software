@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses pre-1.0 semantic versioning.
 
+## [0.1.0] - Unreleased
+
+### Changed
+
+- **The unit is called `captua`** — New cards are named `captua` and answer at `http://captua.local` (`DTK_HOSTNAME` names a second unit at a site). `update.sh` renames a unit called `digitool` to `captua` and keeps `digitool.local` answering through 0.1.x, with an mDNS alias (`dtk-mdns-alias.service`); a unit named otherwise by hand is left alone, and an offline update without `avahi-utils` leaves the name until an update with a connection. `scripts/provision-hostname.sh` does the work for both scripts.
+- **The API is called on the page's own origin** — The frontend calls `/api` relative to the page (`PUBLIC_API_BASE=/api`), through nginx, so the unit works by its name, by its old name or by its IP address. The kiosk opens `http://localhost` instead of the frontend container on `:3000`, and asks for a login once after the update.
+- **`name: dtk` in `docker-compose.yml`** — The Compose project name is written out instead of derived from the checkout's directory. On a unit it is unchanged; a development checkout in another directory gets new container and volume names once.
+
 ## [0.0.0-pre.2] - 2026-05-31
 
 ### Added
@@ -14,7 +22,7 @@ The format is based on Keep a Changelog, and this project uses pre-1.0 semantic 
 - **Live preview rotation** — The camera feed in the live-preview viewport reflects the selected rotation in real time so operators can frame shots correctly before capturing.
 - **Floating rotation buttons on each camera feed** — Quick-access ↺ / ↻ buttons float over each camera feed (bottom-centre). Clicking them updates both the live preview rotation and the capture rotation without opening the sidebar. State stays in sync with the sidebar orientation control.
 - **Nginx reverse proxy** — All traffic now routes through Nginx on port 80 (`/api/*` → backend, `/*` → frontend). Eliminates hard-coded port references in the browser.
-- **Network discoverability** — Raspberry Pi is accessible on the local network by hostname (`digitool.local`) and by IP. `HOST_IP` and CORS origins are configured dynamically at startup.
+- **Network discoverability** — Raspberry Pi is accessible on the local network by hostname (`digitool.local`) and by IP. `HOST_IP` and CORS origins are static values in `.env`, set by hand.
 - **Documentation service** — Quarto-based docs rendered and served via Docker; includes device-setup guides for CM4 and Pi 5 + IMX519.
 - **SD card distribution guide** — New developer documentation for distributing pre-imaged SD cards.
 - **gPhoto2 device-setup guide** — Step-by-step instructions for connecting Canon DSLR cameras.

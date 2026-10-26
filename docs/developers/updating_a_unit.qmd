@@ -63,6 +63,17 @@ If you abandon the update before step 3, enable the timer again, so the unit goe
 sudo systemctl enable --now b2push-interim.timer
 ```
 
+### 1.5 Pin the unit's Tailscale name
+
+The update renames the unit from `digitool` to `captua` (2.6). Tailscale takes the machine's name from its hostname unless the name is set, so a unit reached as `ssh pi-dtk` or by its Tailscale name would change name in the tailnet with it. Set the Tailscale name explicitly first, to the name the unit has in the tailnet now:
+
+```bash
+tailscale status --self
+sudo tailscale set --hostname=<the unit's current Tailscale name>
+```
+
+The software does not touch Tailscale. Skip this on a unit without Tailscale.
+
 ---
 
 ## 2. Run the update
@@ -159,9 +170,9 @@ In order:
 1. Records what is running: the last deployed commit, the frontend image (kept under a `pre-update-<timestamp>` tag) and the backend's `pixi.lock`. These are what it puts back if the update fails.
 2. Without `--no-pull` only (later updates): fetches the branch's upstream and fast-forwards to it, then syncs the submodules. It refuses a branch that cannot be fast-forwarded. Locally modified tracked files are copied to `/var/lib/dtk/local-mods-<timestamp>/` before they are reset; untracked files are never deleted.
 3. Rebuilds the frontend image and runs `pixi install --locked` for the backend. The containers and the backend keep running, but the code and the pixi environment on disk are already the new ones.
-4. Runs `provision-chdk-usb.sh` and `provision-rclone.sh --advisory`. The second installs the pinned rclone if needed and keeps what `offsite.env` already records. Under `--advisory` it never writes a read key.
+4. Runs `provision-chdk-usb.sh`, `provision-rclone.sh --advisory` and `provision-hostname.sh --prepare --advisory`. The second installs the pinned rclone if needed and keeps what `offsite.env` already records. Under `--advisory` it never writes a read key. The third installs what the rename needs (2.6).
 5. Takes the trial dump while the unit serves (1.3), and records the rollback target in `/var/lib/dtk/backups/pre-update-SHA`.
-6. Stops `dtk` and checks that no backend process is left.
+6. Stops `dtk` and checks that no backend process is left, then renames a `digitool` unit to `captua` (2.6).
 7. Starts the database alone and takes the dump with the backend stopped.
 8. Writes the unresolved record (7.3) and applies the migrations with `pixi run db-upgrade`, then stops the database.
 9. Starts `dtk` and waits up to 300 seconds for the backend to answer `/health`.
@@ -193,6 +204,25 @@ The backend starts its upload schedules at boot only when `DTK_OFFSITE_REMOTE` a
 ```bash
 sudo grep -E '^DTK_OFFSITE_(REMOTE|TENANT)=' /var/lib/dtk/offsite.env
 ```
+
+### 2.6 The unit name: digitool becomes captua
+
+From 0.1.0 every unit is called `captua` and answers at `http://captua.local`. The browser calls the API at `/api` on the page's own origin, through nginx, so the unit also works when opened by its IP address or by any other name that reaches it, and the kiosk opens `http://localhost` instead of `http://localhost:3000`.
+
+`update.sh` renames a unit only when its hostname is exactly `digitool` and `.env` has `HOST_IP=digitool.local`. A unit named otherwise by hand is left alone. The work is done by `scripts/provision-hostname.sh`, in two calls:
+
+- Before the stop (`--prepare`): it installs `avahi-utils` from apt if it is missing, the alias script `/usr/local/sbin/dtk-mdns-alias`, its unit `dtk-mdns-alias.service`, the NetworkManager hook `/etc/NetworkManager/dispatcher.d/90-dtk-mdns-alias`, and the drop-in `/etc/systemd/system/dtk.service.d/hostname-repair.conf`. Under `--no-pull` it does not use apt: a unit without `avahi-utils` keeps the name `digitool` until an update with a connection, and the update goes on.
+- With `dtk` stopped (`--switch`): it writes `127.0.1.1 captua digitool` to `/etc/hosts`, runs `hostnamectl set-hostname captua`, restarts `avahi-daemon` and starts `dtk-mdns-alias`, which keeps `digitool.local` answering through 0.1.x. It then checks that `captua.local` and `digitool.local` both resolve on the unit. If either does not, it puts the name, `/etc/hosts`, avahi and the alias back and leaves `.env` as it was. If both do, it sets `HOST_IP=captua.local` in `.env` and adds `http://captua.local` to `CORS_ORIGINS`, keeping `http://digitool.local`.
+
+Neither call can make the update fail. A rename that does not happen prints `⚠ The rename to captua did not finish`, and the unit keeps working as `digitool`.
+
+A power cut in the middle of the rename is handled at the next start of `dtk`: the drop-in runs `provision-hostname.sh --repair`, which finishes the rename if the hostname had already changed, and undoes it otherwise.
+
+A failed update, and a rollback, restore the code but not the name. The code before 0.1.0 works under it: its frontend calls `http://${HOST_IP}/api`, now `http://captua.local/api`, which resolves, and `CORS_ORIGINS` lists both names, so a page opened as `digitool.local` can call it.
+
+The kiosk opens a new origin, so it asks for a login once after the update.
+
+Two units on one network that are both called `digitool` would both become `captua` and both publish `digitool.local`, and the check above cannot tell that the name answering is the other unit's. Before updating either, give one of them its own name by hand, as in [SD Card Distribution](sd_card_distribution.qmd), troubleshooting; its update then leaves it alone.
 
 ---
 
@@ -690,7 +720,7 @@ No command recovers a volume after an accepted loss yet. A `restore-stem` comman
 5. It puts back the frontend image recorded for the restored version, when the record names it and the image is still on the unit.
 6. It removes the unresolved record and flag, starts `dtk` and reports, component by component, whether the pixi environment and the frontend image correspond to the restored version. It does not rebuild the pixi environment; the summary gives the command.
 
-It does not touch `/var/lib/dtk/offsite.env`, the rclone config, the files on the card or the bucket.
+It does not touch `/var/lib/dtk/offsite.env`, the rclone config, the files on the card or the bucket, nor the unit's name (2.6), `.env`, `/etc/hosts` or avahi.
 
 **Move `offsite.env` aside before rolling back past step 4.** Backends from `ba1688e` (16 October 2026) up to, but not including, `2dda6ac` (24 October 2026) read `offsite.env` but do not encrypt the catalogue dump, so they upload it in plain text. No released version is affected (0.0.0-pre.3 predates the range); the dev superproject pins from `60f05b1` (17 October) to `f429ef7` (24 October) are. A rollback target in that range, with `offsite.env` in place, uploads the plaintext catalogue:
 
@@ -914,6 +944,11 @@ sudo ls /var/lib/dtk/backups/unresolved-deployment /etc/dtk/unresolved-deploymen
 systemctl cat dtk | grep ConditionPathExists
 sudo /home/pi/dtk/scripts/check-stack-health.sh
 journalctl -u dtk --since "15 min ago" | grep -E "Volume layout:|Cannot start|Traceback|offsite uploads are on hold|Fisqua"
+hostname
+getent hosts captua.local digitool.local
+grep -E '^(HOST_IP|CORS_ORIGINS)=' /home/pi/dtk/.env
+systemctl is-enabled dtk-mdns-alias; systemctl is-active dtk-mdns-alias
+sudo cat /etc/dtk/hostname-switch
 ```
 
 - `/health` answers `{"status":"ok"}`.
@@ -925,12 +960,13 @@ journalctl -u dtk --since "15 min ago" | grep -E "Volume layout:|Cannot start|Tr
 - `GET /system/catalogue-backup` (6.3) reports `held` as expected for the point of the procedure, and, on a unit with the link, `fisqua.configured` `true` with no `config_error`.
 - The journal, on a unit with the link, has no `Fisqua answered HTTP` line since the restart. The `Fisqua accepted manifest` line (9.6) appears only after a handed-over volume is received offsite; a `Fisqua outbox pass` line can also report a volume refused as not exportable. Neither appears while the hold exists.
 - On a volume handed over since the update, the Fisqua line under the offsite copy line reads `Sent to Fisqua; waiting for its status` or a status from Fisqua (9.4).
+- On a unit renamed from `digitool`: `hostname` prints `captua`; `getent` prints an address for both names; `HOST_IP=captua.local` and `CORS_ORIGINS` lists `http://captua.local` and `http://digitool.local`; `dtk-mdns-alias` is `enabled` and `active`; `/etc/dtk/hostname-switch` reads `state=done`. From another machine on the same network, `http://captua.local`, `http://digitool.local` and the unit's IP each load the app and log in. On a unit that kept its name, the update's journal says why (2.6).
 
 ---
 
 ## A new unit
 
-1. Provision the card with `sudo ./scripts/setup.sh`, then `sudo ./scripts/install-service.sh`, which also installs the unresolved-update drop-in (see [SD Card Distribution](sd_card_distribution.qmd)).
+1. Provision the card with `sudo ./scripts/setup.sh`, which names it `captua` (`sudo DTK_HOSTNAME=captua-2 ./scripts/setup.sh` for a second unit at a site), then `sudo ./scripts/install-service.sh`, which also installs the unresolved-update drop-in (see [SD Card Distribution](sd_card_distribution.qmd)).
 2. Write the key file and run `provision-rclone.sh` with `--tenant` and `--dump-recipient`, as in step 4. For a unit with the link to Fisqua, add `--fisqua-env` and a `FISQUA_TOKEN` line in the key file (9.2).
 3. Start or restart `dtk` and check as in 6.3.
 
