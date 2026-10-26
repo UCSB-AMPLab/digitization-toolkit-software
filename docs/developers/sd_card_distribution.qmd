@@ -12,30 +12,31 @@ This guide explains how to prepare and ship a Raspberry Pi SD card image with th
 
 ## How It Works
 
-The Raspberry Pi broadcasts its hostname over the local network using **mDNS** (via the Avahi daemon, pre-installed on Raspberry Pi OS). This means any device on the same network can reach the Pi at `http://<hostname>.local` without knowing its IP address.
+The Raspberry Pi broadcasts its hostname over the local network using **mDNS** (via the Avahi daemon, pre-installed on Raspberry Pi OS). This means any device on the same network can reach the Pi at `http://<hostname>.local` without knowing its IP address. Every unit is called `captua`, so it answers at `http://captua.local`.
 
-The application is configured to use this hostname instead of a hardcoded IP, so the image works on any network regardless of what IP the router assigns.
+The browser calls the API at `/api` on the page's own origin, and Nginx on port 80 passes it to the backend. The name therefore matters only for finding the unit: opening it by its IP address works the same, and so does any other name that reaches it.
 
 ---
 
 ## Preparing the Master Image
 
-### 1. Set a meaningful hostname
+### 1. Name the unit
 
-Choose a hostname that identifies the device. The current convention is `digitool`:
+`setup.sh` names the unit `captua` (step 6f, `scripts/provision-hostname.sh`): it sets the hostname and the `127.0.1.1` line of `/etc/hosts`, and sets `HOST_IP=captua.local` and adds `http://captua.local` to `CORS_ORIGINS` in `.env`. Nothing needs editing by hand.
+
+Two units on one network cannot share a name. For the second unit at such a site, give it its own name when running setup:
 
 ```bash
-sudo hostnamectl set-hostname digitool
+sudo DTK_HOSTNAME=captua-2 ./scripts/setup.sh
 ```
 
 Verify:
 
 ```bash
 hostname
-# digitool
+# captua
+grep -E '^(HOST_IP|CORS_ORIGINS)=' /home/pi/dtk/.env
 ```
-
-The Pi will be reachable at `http://digitool.local` on the destination network.
 
 ### 2. Confirm Avahi is running
 
@@ -52,35 +53,13 @@ Both should return `enabled` / `active`. If not:
 sudo systemctl enable --now avahi-daemon
 ```
 
-### 3. Update `.env` to use the hostname
+### 3. Verify
 
-In `/home/pi/dtk/.env`, set `HOST_IP` to the `.local` hostname:
+Open `http://captua.local` from another device on the same network, and the unit's IP address too: both load the app.
 
-```bash
-HOST_IP=digitool.local
-CORS_ORIGINS=["http://digitool.local","http://localhost","http://localhost:5173","http://localhost:3000"]
-```
+`HOST_IP` and `CORS_ORIGINS` no longer route anything on the appliance. The frontend reads `PUBLIC_API_BASE=/api` at runtime (`docker-compose.pi.yml`), and `HOST_IP` sets only SvelteKit's `ORIGIN`. Both are kept correct for the code a rollback can restore, whose frontend calls `http://${HOST_IP}/api`.
 
-In the production stack, everything goes through the Nginx reverse proxy on port 80 (`docker-compose.pi.yml`), so the origin users actually open is `http://digitool.local` with no port. `PUBLIC_API_BASE` resolves automatically from `HOST_IP` and is routed through Nginx's `/api/` location, not straight to the backend port:
-
-```bash
-PUBLIC_API_BASE=http://${HOST_IP}/api
-```
-
-### 4. Apply the new environment and verify
-
-`PUBLIC_API_BASE` is read at runtime by the SvelteKit server (via `$env/dynamic/public`), not compiled into the frontend image — so recreating the containers with the updated `.env` is enough; no image rebuild is required for `.env` changes:
-
-```bash
-cd /home/pi/dtk
-docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --force-recreate
-```
-
-(Only add `--build` if the frontend source itself changed, not for `.env` edits.)
-
-Open `http://digitool.local` from another device on the same network to confirm it loads.
-
-### 5. Image the SD card
+### 4. Image the SD card
 
 Once the system is working correctly, shut down the Pi cleanly and image the SD card from another machine:
 
@@ -144,7 +123,7 @@ Nothing, in most cases. They:
 
 1. Insert the SD card and power on the Pi.
 2. Connect the Pi to their local network (Ethernet or Wi-Fi configured before imaging).
-3. Open `http://digitool.local` from any browser on the same network.
+3. Open `http://captua.local` from any browser on the same network.
 
 ::: {.callout-note}
 ## Wi-Fi pre-configuration
@@ -161,26 +140,25 @@ Raspberry Pi OS Bookworm replaced `dhcpcd` + `wpa_supplicant` with NetworkManage
 
 ## Troubleshooting
 
-**`digitool.local` doesn't resolve**
+**`captua.local` doesn't resolve**
 
 - Windows requires [Bonjour](https://support.apple.com/kb/DL999) (installed automatically with iTunes or iCloud). Windows 10 (1803+) supports mDNS natively.
-- Try pinging: `ping digitool.local`
-- As a fallback, find the IP via the router's DHCP client list and use it directly.
+- Try pinging: `ping captua.local`
+- As a fallback, find the IP via the router's DHCP client list and open it directly: the app works by IP.
+
+**A unit in service before 0.1.0 answers as `digitool.local`**
+
+Units set up before 0.1.0 were called `digitool`. `update.sh` renames them to `captua` and keeps `digitool.local` answering through 0.1.x (see [Updating a unit](updating_a_unit.qmd#the-unit-name-digitool-becomes-captua)).
 
 **CORS errors in the browser**
 
-Under the production Nginx setup, the browser talks to a single origin (`http://digitool.local`, port 80) for both the frontend and `/api/` — this same-origin reverse-proxy model means this class of CORS error should not occur in normal production use. If you still see one, the frontend origin most likely does not match `CORS_ORIGINS` in `.env` (for example after renaming the hostname). Update that list and restart the backend in production mode:
-
-```bash
-cd /home/pi/dtk/backend && pixi run start
-```
+The browser calls the API on the page's own origin, so the production stack has no cross-origin calls and this error should not occur there. On the development stack (Vite on `:5173` calling the backend on `:8000`), the page's origin must be in `CORS_ORIGINS` in `.env`; update that list and restart the backend.
 
 **Two Pis on the same network**
 
-mDNS hostnames must be unique per network. Change the hostname on one of them:
+mDNS hostnames must be unique per network. Name the second unit at setup with `DTK_HOSTNAME=captua-2` (step 1). On a unit already set up, run the same script by hand:
 
 ```bash
-sudo hostnamectl set-hostname digitool-2
+sudo /home/pi/dtk/scripts/provision-hostname.sh --name captua-2
+sudo systemctl restart dtk
 ```
-
-And update `HOST_IP` and `CORS_ORIGINS` in `.env` accordingly, then rebuild the frontend container.

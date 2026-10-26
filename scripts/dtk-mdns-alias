@@ -1,0 +1,101 @@
+#!/bin/bash
+# dtk-mdns-alias NAME — answer NAME (digitool.local) over mDNS with this
+# unit's address, for as long as it runs. Installed to
+# /usr/local/sbin/dtk-mdns-alias by scripts/provision-hostname.sh and run by
+# dtk-mdns-alias.service, outside the checkout, so a rollback to code that
+# predates the rename keeps the old name answering.
+#
+# Units renamed from digitool to captua keep digitool.local through 0.1.x,
+# because bookmarks, notes taped to the scanner and the old code that a
+# rollback restores all use it.
+#
+# One IPv4 address and at most one IPv6 address. avahi refuses a second A
+# record for the same name from another client as a local collision, whatever
+# its address, so publishing one per interface fails from the second on; an A
+# and an AAAA from separate clients are both accepted. The AAAA is needed
+# because clients that ask for both (macOS does) wait for a timeout on every
+# lookup when no AAAA answer comes. The IPv4 address is the one the unit
+# would use to reach the network (the source of its default route), or the
+# first global IPv4 address when there is no default route. The IPv6 address
+# is a global one on the same interface; link-local addresses are not
+# published, since they are ambiguous without a scope. When addresses change,
+# the NetworkManager dispatcher hook restarts this service on up, down,
+# dhcp4-change and dhcp6-change.
+#
+# Limitation: an IPv6 address that is not yet assigned when the service starts
+# (at boot, typically) is published only when one of those events arrives
+# later. NetworkManager's dispatcher has no event for an address configured by
+# SLAAC after the connection is up, so on a network without DHCPv6 the AAAA
+# record appears after the next up event or restart of this service.
+#
+# -R: no reverse (PTR) record. The address's reverse name is the host's own
+# (captua.local), which avahi already publishes; a second PTR would collide
+# with it. That is also why /etc/avahi/hosts is not used: it always publishes
+# the reverse record.
+
+set -u
+
+NAME="${1:-}"
+if [ -z "$NAME" ]; then
+    echo "usage: dtk-mdns-alias NAME" >&2
+    exit 2
+fi
+
+# Interfaces that are not the unit's own network: Docker bridges, veth pairs,
+# the Tailscale tunnel and loopback.
+real_addresses() {
+    ip -4 -o addr show scope global 2>/dev/null \
+        | awk '$2 !~ /^(lo|docker|br-|veth|tailscale|virbr)/ { split($4, a, "/"); print a[1] }'
+}
+
+# Interface that carries the IPv4 address $1.
+interface_of() {
+    ip -4 -o addr show scope global 2>/dev/null \
+        | awk -v want="$1" '{ split($4, a, "/"); if (a[1] == want) { print $2; exit } }'
+}
+
+# First global IPv6 address on interface $1 that is usable: not tentative,
+# deprecated or a temporary privacy address (those rotate and expire).
+global_ipv6() {
+    ip -6 -o addr show dev "$1" scope global 2>/dev/null \
+        | awk '/ (tentative|deprecated|temporary|dadfailed) / || / (tentative|deprecated|temporary|dadfailed)$/ { next }
+               { split($4, a, "/"); print a[1]; exit }'
+}
+
+route_source() {
+    ip -4 route get 1.1.1.1 2>/dev/null \
+        | awk '{ for (i = 1; i < NF; i++) if ($i == "src") { print $(i + 1); exit } }'
+}
+
+ADDR=""
+src="$(route_source)"
+if [ -n "$src" ] && real_addresses | grep -qxF "$src"; then
+    ADDR="$src"
+else
+    ADDR="$(real_addresses | head -n 1)"
+fi
+
+if [ -z "$ADDR" ]; then
+    # No address yet (no network, DHCP still pending). Restart=on-failure
+    # tries again; the dispatcher hook restarts it once an address comes up.
+    echo "dtk-mdns-alias: no IPv4 address on a real interface yet" >&2
+    exit 1
+fi
+
+echo "dtk-mdns-alias: publishing $NAME as $ADDR"
+
+# The IPv6 publisher runs in the background and the IPv4 one replaces this
+# shell, so the unit's main process is the IPv4 publisher: if it exits, the
+# unit fails and Restart=on-failure applies. The background publisher stays in
+# the unit's cgroup, which systemd kills whole on stop and on that failure
+# (the unit sets no KillMode). A missing AAAA only costs the lookup delay, so
+# the IPv6 publisher's own failure does not fail the unit.
+IFACE="$(interface_of "$ADDR")"
+ADDR6=""
+[ -z "$IFACE" ] || ADDR6="$(global_ipv6 "$IFACE")"
+if [ -n "$ADDR6" ]; then
+    echo "dtk-mdns-alias: publishing $NAME as $ADDR6"
+    avahi-publish -a -R "$NAME" "$ADDR6" &
+fi
+
+exec avahi-publish -a -R "$NAME" "$ADDR"

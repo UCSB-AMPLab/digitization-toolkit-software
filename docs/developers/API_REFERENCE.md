@@ -1002,15 +1002,15 @@ The backend's own loggers, `app.*` and `capture.*`, write to stderr, which the j
 
 ### CORS Configuration
 
-Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied at `app/main.py:92-93`. Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
+Allowed origins come from the `CORS_ORIGINS` environment variable, bound in `app/core/config.py` and applied in `app/main.py` (`allow_origins=settings.CORS_ORIGINS`). Set it in `.env` as a JSON array; it defaults to `http://localhost:5173` (Vite dev server) and `http://localhost:3000` (production Node server).
 
 ```env
-CORS_ORIGINS=["http://digitool.local","http://localhost:5173","http://localhost:3000"]
+CORS_ORIGINS=["http://localhost","http://localhost:5173","http://localhost:3000","http://captua.local"]
 ```
 
 Do **not** edit `allow_origins` in `app/main.py` — it reads `settings.CORS_ORIGINS`, so a source edit is overridden by configuration.
 
-In the production stack the browser reaches both the frontend and `/api/` through the Nginx reverse proxy on port 80, so it is a single origin and CORS does not come into play in normal use.
+On the appliance the frontend calls the API at the relative `/api` (`PUBLIC_API_BASE=/api` in `docker-compose.pi.yml`), and nginx on port 80 serves both, so every call is same-origin, whatever name or address the page was opened by, the kiosk's `http://localhost` included. CORS does not come into play there. It matters for the development stack, where the Vite page on `:5173` calls the backend on `:8000`, and for the code a rollback can restore: before 0.1.0 the frontend called `http://${HOST_IP}/api` and the kiosk opened `http://localhost:3000`, so those origins and the unit's names must stay listed. `setup.sh` and `update.sh` add `http://captua.local` (and keep `http://digitool.local` on a unit renamed from it) through `scripts/provision-hostname.sh`.
 
 ---
 

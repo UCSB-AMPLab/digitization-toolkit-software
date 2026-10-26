@@ -8,8 +8,14 @@ echo ""
 echo "To exit: Press Ctrl+Alt+F2, then run 'pkill cage'"
 echo ""
 
-echo -n "Waiting for frontend at http://localhost:3000..."
-until curl -sSf http://localhost:3000 >/dev/null 2>&1; do
+# Through nginx on port 80, like every other browser: the page and its /api
+# calls then share one origin. The frontend container on :3000 has no /api.
+KIOSK_URL="http://localhost"
+
+# curl -f also waits out the 502 nginx answers while the frontend container
+# is still starting.
+echo -n "Waiting for the app at $KIOSK_URL..."
+until curl -sSf "$KIOSK_URL" >/dev/null 2>&1; do
   echo -n "."
   sleep 0.2
 done
@@ -19,8 +25,26 @@ echo ""
 echo "Launching Chromium kiosk..."
 echo ""
 
+# Chromium's profile lock (SingletonLock, a symlink to <hostname>-<pid>, with
+# SingletonCookie and SingletonSocket) names the host it was taken on, and
+# Chromium refuses a profile locked by "another computer". The rename in
+# scripts/provision-hostname.sh points a running kiosk's lock at the new
+# name; this covers a lock it could not reach, or a hostname changed any
+# other way. This script starts the session's only Chromium, so a lock here
+# is stale, unless a Chromium of this user is still running (one that has
+# not finished exiting): its lock is then left alone. The profile is passed
+# as --user-data-dir below, so the files removed are those of the profile
+# Chromium opens.
+PROFILE_DIR="$HOME/.config/chromium"
+if pgrep -u "$(id -u)" -x 'chromium|chromium-browse' >/dev/null 2>&1; then
+  echo "A Chromium of this user is still running; its profile lock is left in place."
+else
+  rm -f "$PROFILE_DIR/SingletonLock" "$PROFILE_DIR/SingletonCookie" "$PROFILE_DIR/SingletonSocket"
+fi
+
 # Cage automatically makes the app fullscreen
 exec cage -- chromium-browser \
+  --user-data-dir="$PROFILE_DIR" \
   --kiosk \
   --noerrdialogs \
   --disable-infobars \
@@ -33,4 +57,4 @@ exec cage -- chromium-browser \
   --disable-background-networking \
   --disable-default-apps \
   --disable-extensions \
-  http://localhost:3000
+  "$KIOSK_URL"
