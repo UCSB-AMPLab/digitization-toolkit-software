@@ -450,6 +450,26 @@ CASE="repair, pending, names not resolving yet: the next start"
 run --repair --advisory --wait 3
 eq "$(marker_state)" done "recorded as done once both names resolve"
 
+# Pending, then named by hand (--name captua-2) before the names resolved:
+# the next start keeps that name.
+new_unit "repair, pending, then named by hand"
+with_avahi
+prepared
+mkdir -p "$R/etc/dtk"
+printf 'state=pending\nfrom=digitool\nto=captua\n' > "$R/etc/dtk/hostname-switch"
+printf 'captua\n' > "$R/etc/hostname"
+FAKE_UNRESOLVED="captua.local digitool.local" run --name captua-2 --advisory --wait 1
+hostname_is captua-2
+CASE="repair, pending, then named by hand: the next start"
+: > "$R/log"
+run --repair --advisory --wait 1
+eq "$RC" 0 "exit status"
+hostname_is captua-2
+eq "$(env_line HOST_IP)" "HOST_IP=captua-2.local" "HOST_IP kept"
+eq "$(marker_state)" "" "the record is removed"
+unlogged "hostnamectl"
+has "the name kept"
+
 # A record whose data a power cut lost (empty), and one with a state this
 # script does not know: the hostname decides.
 for rec in empty garbled; do

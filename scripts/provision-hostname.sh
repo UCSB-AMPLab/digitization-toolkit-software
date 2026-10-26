@@ -617,11 +617,17 @@ repair() {
                 || echo "  ⚠ $MARKER records no known state ('$state'); the hostname decides."
             if [ "$host" = "$NEW_NAME" ]; then
                 finish_forward
-            else
+            elif [ "$host" = "$OLD_NAME" ]; then
                 # Cut before the hostname changed: nothing depends on the
                 # switch yet, so it is undone and the next update tries again.
                 echo "→ Unit name: a rename to $NEW_NAME was interrupted before it took effect."
                 undo_from_repair
+            else
+                # Named since by hand (--name): that name stands, and the
+                # record no longer describes this unit.
+                echo "→ Unit name: the hostname is '$host', set after the rename to $NEW_NAME"
+                echo "  began; the record of that rename is removed and the name kept."
+                rm -f "$MARKER" "$HOSTS_BACKUP"
             fi
             ;;
     esac
