@@ -1,15 +1,15 @@
 #!/bin/sh
 # NetworkManager dispatcher hook, installed as
 # /etc/NetworkManager/dispatcher.d/90-dtk-mdns-alias by
-# scripts/provision-hostname.sh. dtk-mdns-alias publishes one fixed address;
-# when the unit's addresses change (a new DHCP lease, a cable plugged in, the
-# wi-fi joining another network) it has to publish the new one.
+# scripts/provision-hostname.sh. dtk-mdns-alias publishes fixed addresses
+# (IPv4 and IPv6); when the unit's addresses change (a new DHCP lease, a cable
+# plugged in, the wi-fi joining another network) it has to publish the new ones.
 #
 # Only on a unit where the alias is enabled, which is a unit renamed from
 # digitool; elsewhere this does nothing.
 
 case "$2" in
-    up|down|dhcp4-change|connectivity-change) ;;
+    up|down|dhcp4-change|dhcp6-change|connectivity-change) ;;
     *) exit 0 ;;
 esac
 
