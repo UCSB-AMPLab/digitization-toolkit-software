@@ -19,6 +19,7 @@
 #                  also while the alias is enabled. Names in FAKE_UNRESOLVED
 #                  never resolve; names in FAKE_FOREIGN resolve to another
 #                  device's address.
+#                  `getent passwd pi` names <root>/home/pi as pi's home.
 #   ip             `-o addr show` lists 127.0.0.1, 192.0.2.10 and fe80::1.
 #   apt-get        records the call; installs a fake avahi-publish when
 #                  FAKE_APT_OK is set, and fails otherwise.
@@ -78,6 +79,10 @@ esac
 EOF
 cat > "$FAKEBIN/getent" <<'EOF'
 #!/bin/sh
+if [ "$1" = passwd ]; then
+    [ "$2" = pi ] && echo "pi:x:1000:1000::$R/home/pi:/bin/bash" && exit 0
+    exit 2
+fi
 echo "getent $*" >> "$R/log"
 for n in ${FAKE_UNRESOLVED:-}; do [ "$n" = "$2" ] && exit 2; done
 for n in ${FAKE_FOREIGN:-}; do [ "$n" = "$2" ] && { echo "198.51.100.7    $2"; exit 0; }; done
@@ -635,6 +640,54 @@ TRIES="$(grep -c 'getent hosts captua.local' "$R/log")"
 if [ "$TRIES" -gt 2 ]; then ok "tried $TRIES times, not --wait times"; else fail "tried $TRIES times"; fi
 has "Within 2s"
 hostname_is digitool
+
+# ── The kiosk's Chromium profile lock follows the hostname ─────────────────
+# with_kiosk: a tty1 autologin for pi, and a running kiosk's lock.
+with_kiosk() {
+    mkdir -p "$R/etc/systemd/system/getty@tty1.service.d" "$R/home/pi/.config/chromium"
+    printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin pi --noclear %%I $TERM\n' \
+        > "$R/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+    ln -s digitool-3437 "$R/home/pi/.config/chromium/SingletonLock"
+}
+lock_is() { eq "$(readlink "$R/home/pi/.config/chromium/SingletonLock")" "$1" "the kiosk's lock names $1"; }
+
+new_unit "kiosk lock, renamed"
+with_avahi
+with_kiosk
+run --advisory --wait 3
+hostname_is captua
+lock_is captua-3437
+
+new_unit "kiosk lock, rename undone"
+with_avahi
+with_kiosk
+FAKE_FOREIGN="captua.local" run --advisory --wait 1
+hostname_is digitool
+lock_is digitool-3437
+
+new_unit "kiosk lock, cut after the hostname changed"
+with_avahi
+with_kiosk
+prepared
+mkdir -p "$R/etc/dtk"
+printf 'state=pending\nfrom=digitool\nto=captua\n' > "$R/etc/dtk/hostname-switch"
+printf 'captua\n' > "$R/etc/hostname"
+run --repair --advisory --wait 3
+lock_is captua-3437
+
+new_unit "kiosk lock of another host is left alone"
+with_avahi
+with_kiosk
+ln -sfn otherbox-77 "$R/home/pi/.config/chromium/SingletonLock"
+run --advisory --wait 3
+hostname_is captua
+lock_is otherbox-77
+
+new_unit "no kiosk"
+with_avahi
+run --advisory --wait 3
+eq "$RC" 0 "exit status"
+hostname_is captua
 
 # ── --name, setup.sh on a new card ──────────────────────────────────────────
 EXAMPLE_ENV="$(cat "$(dirname "$(dirname "$HERE")")/.env.example")"

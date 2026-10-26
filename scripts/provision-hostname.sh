@@ -174,6 +174,7 @@ ALIAS_BIN="$PREFIX/usr/local/sbin/dtk-mdns-alias"
 ALIAS_UNIT="$PREFIX/etc/systemd/system/$ALIAS_UNIT_NAME"
 DISPATCHER="$PREFIX/etc/NetworkManager/dispatcher.d/90-dtk-mdns-alias"
 REPAIR_DROPIN="$PREFIX/etc/systemd/system/dtk.service.d/hostname-repair.conf"
+KIOSK_AUTOLOGIN="$PREFIX/etc/systemd/system/getty@tty1.service.d/autologin.conf"
 
 # Temporary files this run created, removed on any exit. A signal ends the
 # run through exit, so that the EXIT trap runs; a power cut leaves them, and
@@ -388,6 +389,39 @@ alias_installed() {
     command -v avahi-publish >/dev/null 2>&1 && [ -x "$ALIAS_BIN" ] && [ -f "$ALIAS_UNIT" ]
 }
 
+# The kiosk's Chromium profile: that of the user the tty1 autologin runs
+# the kiosk as (install-kiosk-service.sh), the directory start-kiosk.sh
+# passes as --user-data-dir. Empty on a unit without the kiosk.
+kiosk_profile() {
+    local user home
+    user="$(sed -n 's/.*--autologin[ =]\([^ ]*\).*/\1/p' "$KIOSK_AUTOLOGIN" 2>/dev/null | head -n 1)"
+    [ -n "$user" ] || return 0
+    home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)"
+    [ -n "$home" ] && [ -d "$home/.config/chromium" ] && printf '%s' "$home/.config/chromium"
+}
+
+# repoint_kiosk_lock FROM TO: Chromium's profile lock, SingletonLock, is a
+# symlink to <hostname>-<pid>, and Chromium refuses a profile whose lock
+# names another host. When the hostname changes under a running kiosk, its
+# lock is pointed at the new name with the same pid, so that the next
+# Chromium, launched by whichever start-kiosk.sh is on disk (a restore or a
+# rollback brings back one without the cleanup in the current one), finds a
+# lock of this host and a pid that is no longer running, which it takes over.
+repoint_kiosk_lock() {
+    local from="$1" to="$2" profile target pid
+    profile="$(kiosk_profile)"
+    [ -n "$profile" ] && [ -L "$profile/SingletonLock" ] || return 0
+    target="$(readlink "$profile/SingletonLock")"
+    pid="${target#"$from"-}"
+    [ "$pid" != "$target" ] && [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+    if ln -sfn "$to-$pid" "$profile/SingletonLock"; then
+        chown -h --reference="$profile" "$profile/SingletonLock" 2>/dev/null || true
+        echo "  Kiosk profile lock now names $to."
+    else
+        echo "  ⚠ Could not point the kiosk's profile lock at $to; start-kiosk.sh removes it."
+    fi
+}
+
 # ── --prepare ───────────────────────────────────────────────────────────────
 
 prepare() {
@@ -475,6 +509,7 @@ revert_switch() {
         FAILED=1
         return 1
     fi
+    repoint_kiosk_lock "$NEW_NAME" "$OLD_NAME"
     systemctl disable --now "$ALIAS_UNIT_NAME" >/dev/null 2>&1 \
         || echo "  ⚠ Could not stop and disable $ALIAS_UNIT_NAME."
     if [ -f "$HOSTS_BACKUP" ]; then
@@ -547,6 +582,7 @@ undo_from_repair() {
 finish_forward() {
     local resolved=0
     echo "→ Unit name: finishing the rename to $NEW_NAME..."
+    repoint_kiosk_lock "$OLD_NAME" "$NEW_NAME"
     if [ "$(hosts_names)" != "$NEW_NAME $OLD_NAME" ]; then
         write_hosts "$NEW_NAME $OLD_NAME" \
             || { echo "  ✗ Could not write $ETC_HOSTS."; FAILED=1; }
@@ -693,6 +729,7 @@ switch_name() {
         echo "  ✗ hostnamectl set-hostname $NEW_NAME failed."
         revert_switch; FAILED=1; return 0
     fi
+    repoint_kiosk_lock "$OLD_NAME" "$NEW_NAME"
     if ! systemctl restart avahi-daemon; then
         echo "  ✗ Could not restart avahi-daemon."
         revert_switch; FAILED=1; return 0
@@ -741,6 +778,7 @@ set_name() {
         if ! hostnamectl set-hostname "$name"; then
             echo "  ✗ hostnamectl set-hostname $name failed."; FAILED=1; return
         fi
+        repoint_kiosk_lock "$host" "$name"
         systemctl restart avahi-daemon >/dev/null 2>&1 \
             || echo "  ⚠ Could not restart avahi-daemon; the name is published after a reboot."
     fi
