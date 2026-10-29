@@ -1,6 +1,6 @@
 # Captua
 
-![Version](https://img.shields.io/badge/version-0.1.0--beta-orange)
+![Version](https://img.shields.io/badge/version-0.2.0-orange)
 
 **Captua** is the software of the **Digitization Toolkit**, an integrated toolkit of hardware, software, and documentation that allows lower-resourced institutions, collectives, and communities to digitize their archival collections at low cost.
 
@@ -15,7 +15,7 @@ The project builds on a decade of community-based digitization work in the Globa
 
 ## Status
 
-> Captua is in active development. Current release: [0.1.0-beta](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.1.0-beta), the first release built to be tested in day-to-day operation in an archive. It is tested on one configuration: a Captua unit with two Canon EOS Rebel T7 cameras connected over gphoto2, and a monitor, keyboard and mouse.
+> Captua is in active development. Current release: [0.2.0](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.2.0), which brings an archive's digitisation lists and the records waiting to be retaken onto the unit. [0.1.0-beta](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.1.0-beta) was the first release built to be tested in day-to-day operation in an archive. It is tested on one configuration: a Captua unit with two Canon EOS Rebel T7 cameras connected over gphoto2, and a monitor, keyboard and mouse.
 
 ## Release History
 
