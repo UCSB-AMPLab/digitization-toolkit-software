@@ -4,6 +4,80 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses pre-1.0 semantic versioning.
 
+## [0.2.0] - 2026-10-31
+
+0.2.0 keeps the archive's digitisation lists on the unit, lists the records waiting to be retaken, and puts retakes ahead of new volumes. It can also rebuild a volume digitised before Captua from images already in the bucket.
+
+### Digitisation lists (Cola)
+- Lists imported from Fisqua are now kept on the unit. The Cola screen shows them one at a time, with each list's items in the list's order.
+- Admins and operators import from Cola. If a list's project does not exist yet, only an admin can import it, and Captua creates the project.
+- After an import, Cola reports how many volumes Captua created, and each item it set aside, with the reason.
+- Each item shows:
+  - its title and reference code;
+  - what the list asks for: a full digitisation, a full rescan, a spot recapture, or the completion of a volume;
+  - the list's instructions, in full;
+  - the stage and progress of its volume.
+- The list can be filtered by what each item asks for.
+- **Siguiente** marks the first item that is not yet done and can be opened for capture. While retakes are pending, items whose volumes have retakes come first.
+- A full digitisation counts as done once every record in its volume is approved. An admin or reviewer can mark any item done, and remove the mark. Captua records who marked it and when.
+- Lists imported before 0.2.0 show their items once they are imported again.
+
+### The instruction on the capture screen
+- When you capture into a volume named in a list, the instruction from the newest list naming it appears at the top of the capture screen. An example is the openings to recapture.
+- By default the screen shows two lines. If the text is longer, **Mostrar todo** opens the rest, and the preview, the capture button and the thumbnail strip stay clear of it.
+
+### Retakes
+- **Por recapturar** lists every record rejected in review, whether on the unit or in Fisqua, oldest rejection first.
+  - Each row shows the volume, the reason with its explanation, the reviewer's note, and who rejected it and when.
+  - The list can be filtered by volume.
+  - The side menu shows how many records are rejected.
+- For admins and operators, **Volver a capturar** starts a guided recapture through the volume's pending records, in order.
+  - After each retake, Captua opens the next record.
+  - **Saltar por ahora** moves a record to the end.
+  - The retake window shows why the record was rejected.
+- The overview shows how many openings are waiting, in how many volumes, and which volume has the most.
+- A record is pending while it is rejected. It stays pending after it has been prepared for retake, until a new capture replaces its image.
+
+### The recapture turn
+- While any record on the unit is pending, an operator can't start an empty volume.
+  - Finishing the retakes of one volume allows one new volume.
+  - The first capture into that new volume hands the turn back to retakes. Turns don't accumulate.
+  - Captures into volumes that already have records are never blocked, and neither are retakes.
+- The capture screen explains the block and links to a volume to retake. An admin can capture anyway. Cola shows whose turn it is.
+- No one can send a volume with pending records to review. The volume page shows how many retakes are left.
+
+### Volumes digitised before Captua
+- With shell access to the unit, an admin can rebuild a volume digitised with two cameras before Captua, using `python -m app.core.rebuild_volume <stem> <bundle> --apply`.
+  - The command reads a prepared bundle: the plan of records, plus each source image's digests and thumbnail.
+  - The masters must already be copied to the bucket under Captua names.
+  - Each opening becomes a paired record, with each camera's rotation from the plan. An image without a partner becomes a single record.
+  - The masters stay in the bucket. Only thumbnails and metadata are kept on the unit.
+  - Without `--apply`, the command only reports what it would do.
+  - A rerun keeps finished records only if they match the plan.
+- A rebuilt volume is handed over like any other. Openings rejected in Fisqua come back to Por recapturar.
+
+### Rotation sent to Fisqua (optional)
+- With `CAPTUA_FISQUA_ROTATE_DEG=true`, Captua writes the capture manifest as version 1.5, and each image carries its rotation as `rotateDeg`.
+- The default is false, which leaves the manifest at version 1.1, unchanged. Turn it on only for a Fisqua that reads contract 1.5.
+
+### Other changes
+- A project's volume list shows each volume's real stage. Before, it showed placeholder states.
+- On a freed record, the note that the master is in the bucket no longer covers the thumbnail.
+
+### Fixes
+- An import refuses a list containing a number too large to read, as it already refused `NaN`, instead of writing the value into the volume.
+- An item whose stem ends in a line break is set aside as an invalid stem before it reaches the database.
+- A record's rejection history starts with the rejection Por recapturar shows, also when two rejections were made at the same moment.
+
+### For integrators
+- New routes:
+  - `GET /imports/digitisation-lists`
+  - `PUT /imports/digitisation-lists/{list_id}/items/{position}/done`
+  - `GET /records/to-retake`, `/to-retake/count`, `/to-retake/summary`
+- New 409 responses: `recapture_turn` on `POST /cameras/capture` and `/capture/dual`, and `recaptures_pending` on `POST /collections/{id}/promote`.
+- New setting: `CAPTUA_FISQUA_ROTATE_DEG` (or `DTK_`), default false.
+- New CLI: `app.core.rebuild_volume`.
+
 ## [0.1.0-beta] - 2026-10-25
 
 0.1.0-beta is the first release built to be tested in day-to-day operation in an archive. It is tested on one configuration: a Captua unit (the Raspberry Pi scanner) with two Canon EOS Rebel T7 cameras connected over gphoto2, and a monitor, keyboard and mouse.
