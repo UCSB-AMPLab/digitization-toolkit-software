@@ -1015,7 +1015,7 @@ The offsite image upload, the catalogue dump, and restore (section 3 and section
 | `DTK_FISQUA_RETRY_MAX` | `FISQUA_RETRY_MAX_SECONDS` | `21600` | The longest backoff between attempts; a longer `Retry-After` from Fisqua wins. |
 | `DTK_FISQUA_POLL_INTERVAL` | `FISQUA_POLL_INTERVAL_SECONDS` | `600` | Seconds between status polls. |
 | `DTK_FISQUA_TIMEOUT` | `FISQUA_TIMEOUT_SECONDS` | `60` | Read and write timeout of each call to Fisqua, in seconds; connecting has 10. |
-| `DTK_FISQUA_ROTATE_DEG` | `FISQUA_ROTATE_DEG` | `false` | When `true`, each image of the capture manifest with a recorded `rotate_deg` carries it as `rotateDeg`; when `false`, no image carries `rotateDeg`. The manifest declares contract `1.9` either way (section 3). Fisqua staging reads `rotateDeg` and production does not yet, so it stays `false` on production units. Part of the configuration fingerprint (`config_fingerprint`, `app/core/fisqua_outbox.py:212-231`). |
+| `DTK_FISQUA_ROTATE_DEG` | `FISQUA_ROTATE_DEG` | `false` | When `true`, each image of the capture manifest with a recorded `rotate_deg` carries it as `rotateDeg`; when `false`, no image carries `rotateDeg`. The manifest declares contract `1.9` either way (section 3). Part of the configuration fingerprint (`config_fingerprint`, `app/core/fisqua_outbox.py:212-231`). |
 | `APP_VERSION` | `app_version` | unset | Overrides the release read from `VERSION` (section 3, Version reporting). |
 | `DTK_RCLONE_BIN` | `RCLONE_BIN` | `rclone` | The rclone executable. |
 | `DTK_RCLONE_CONFIG` | `RCLONE_CONFIG` | empty | When set, passed to rclone as `--config`. |
