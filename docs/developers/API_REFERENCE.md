@@ -923,8 +923,8 @@ the backend sets at login (`set_session_cookie`, `auth.py:77-87`): `HttpOnly`,
 and `Secure` only when the browser's request was HTTPS: nginx's
 `X-Forwarded-Proto` says `https`, or, without that header, the request's own
 scheme is `https` (`_request_is_https`, `auth.py:62-74`). nginx listens on
-port 80 only, so on the appliance the cookie has no `Secure` flag. No script on the page can read the
-cookie, and no URL carries the token. Every authenticated route reads the
+port 80 only, so on the appliance the cookie has no `Secure` flag. No script
+on the page can read the cookie, and no URL carries the token. Every authenticated route reads the
 `Authorization: Bearer` header first and the cookie second; the backend reads no
 `?token=` query parameter (`_session_token`, `auth.py:106-122`). The steps below
 are the browser app's flow.
