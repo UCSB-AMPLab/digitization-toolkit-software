@@ -152,7 +152,7 @@ Units set up before 0.1.0 were called `digitool`. `update.sh` renames them to `c
 
 **CORS errors in the browser**
 
-The browser calls the API on the page's own origin, so the production stack has no cross-origin calls and this error should not occur there. On the development stack (Vite on `:5173` calling the backend on `:8000`), the page's origin must be in `CORS_ORIGINS` in `.env`; update that list and restart the backend.
+The browser calls the API on the page's own origin, so the production stack has no cross-origin calls and this error should not occur there. On the development stack (Vite on `:5173` calling the backend on `:8000`), the page's origin must be in `CORS_ORIGINS` in `.env`; update that list and restart the backend. The page and the API must also be on the same site, because the session cookie is `SameSite=Strict`: open the page on `localhost` when `PUBLIC_API_BASE` names `localhost`, and on `127.0.0.1` when it names `127.0.0.1`. With a mismatch the browser shows no CORS error: the backend answers the login with 200 and refuses the next request with 401. `docs/developers/API_REFERENCE.md`, section 8, CORS Configuration, has the details.
 
 **Two Pis on the same network**
 
