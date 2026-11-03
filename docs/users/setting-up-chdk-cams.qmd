@@ -100,13 +100,13 @@ If you have just re-flashed a card, or changed a parity by hand, ask the applian
 There is no dashboard control for this yet — a future release is expected to add one. Today, assigning a page parity is an administrator action taken directly against the appliance's API.
 
 ::: {.callout-warning appearance="simple"}
-Logging into the appliance's ordinary web interface does not authorise this. The API's interactive explorer needs its own, separate login, and it is not reachable from a laptop on the venue network at all — port 8000 is open only from the appliance itself and over Tailscale, never from the venue LAN.
+Logging into the appliance's ordinary web interface does not authorise this. In a browser signed in to the web interface at the same address — the appliance's own browser, which opens `http://localhost`, for instance — the appliance accepts the read-only calls of the API's interactive explorer on that session, but refuses every change it sends, the parity assignment included, with 403 and `"Missing X-Requested-With header"`, until you log in inside the explorer as below. The explorer is not reachable from a laptop on the venue network at all — port 8000 is open only from the appliance itself and over Tailscale, never from the venue LAN.
 :::
 
 1. **Open the API explorer** — a different address from the one the ordinary interface runs on:
    - On the appliance itself: `http://localhost:8000/docs`.
    - From elsewhere over Tailscale: the appliance's own Tailscale address (not `localhost`, which on a remote machine means that machine, not the appliance), port 8000, `/docs` — e.g. `http://<the appliance's Tailscale hostname or IP>:8000/docs`.
-2. **Log in as an administrator, inside that explorer.** This is several steps, and skipping any of them leaves every later call rejected with no visible reason:
+2. **Log in as an administrator, inside that explorer.** This is several steps. If you skip any of them, the appliance refuses the assignment in step 4: with 401 and `"Not authenticated"` when the browser holds no session, or with 403 and `"Missing X-Requested-With header"` when it holds one, from the web interface or from the login in this step. Logging in here also replaces the web interface's session in this browser, so the web interface is then signed in as the administrator; sign out with **Salir** when you have finished.
    - Expand `POST /auth/login`, click **Try it out**, fill in the administrator's credentials, and click **Execute**.
    - Copy the `access_token` value out of the response body.
    - Click the green **Authorize** button near the top of the page — this opens a dialog.
