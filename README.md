@@ -127,7 +127,7 @@ From another machine on the network, the unit answers at `http://captua.local`.
 
 > **Do the first run camera-less.** Complete steps 0–5 and pass the health
 > checks above with no cameras attached, then connect the cameras (see the
-> camera setup guides under `docs/`) and re-verify. When something fails,
+> camera guides at [captua.org/docs/cameras](https://captua.org/docs/cameras/)) and re-verify. When something fails,
 > this isolates the fault to the camera layer instead of the whole build.
 
 ### Creating an SD card image
@@ -181,13 +181,13 @@ git pull
 git submodule update --init --recursive
 ```
 
-Do not use `--remote` here: it moves the submodules to their branch tips instead of the tested commits the superproject records. `--remote` belongs only to the deliberate pointer bump — see the [Git workflow](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki/Git-workflow) wiki.
+Do not use `--remote` here: it moves the submodules to their branch tips instead of the tested commits the superproject records. `--remote` belongs only to the deliberate pointer bump — see the [Git workflow](https://captua.org/docs/developers/git-workflow/) guide.
 
 ***
 
 ## Development Documentation
 
-See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki) for detailed developer guides and API references.
+The guides for operators, deployment and development, and the API reference, are at [captua.org/docs](https://captua.org/docs/) (in Spanish at [captua.org/guia](https://captua.org/guia/)).
 
 ## Credits and Acknowledgments
 
@@ -197,7 +197,7 @@ Captua has been made possible in part by a major grant from the National Endowme
 
 Any views, findings, conclusions, or recommendations expressed in this software do not necessarily represent those of the National Endowment for the Humanities.
 
-<img src="docs/_static/imgs/neh-preferred-seal.jpg" alt="National Endowment for the Humanities" width="250">
+<img src="assets/neh-preferred-seal.jpg" alt="National Endowment for the Humanities" width="250">
 
 ## License
 
