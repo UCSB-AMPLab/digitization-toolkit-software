@@ -134,7 +134,7 @@ DB_NAME="$(get_env DATABASE_NAME || true)"; DB_NAME="${DB_NAME:-digitization_too
 # Every value the repo ships or has shipped, so a card set up from any of them
 # gets its own secrets instead of keeping one known to every unit. SECRET_KEY:
 # .env.example now and before 2026-07-25, the backend's built-in default, and
-# the example in docs/developers/API_REFERENCE.md. DATABASE_PASSWORD:
+# the example in the API reference (https://captua.org/docs/developers/api-reference/). DATABASE_PASSWORD:
 # .env.example now and before 2026-01-10, which is also the compose default.
 # The backend's _INSECURE_SECRET_KEYS and _INSECURE_DB_PASSWORDS
 # (app/core/config.py) are the other half of this and should hold the same set.
