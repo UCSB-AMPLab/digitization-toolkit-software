@@ -78,7 +78,7 @@
 #
 # Tailscale. A unit's Tailscale name is pinned by hand with
 # `tailscale set --hostname=<name>` before the rename; otherwise Tailscale
-# follows the new hostname (docs/developers/updating_a_unit.qmd).
+# follows the new hostname (https://captua.org/docs/deployment/updating-a-unit/).
 #
 # It does not start, stop or restart dtk.
 #

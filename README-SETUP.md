@@ -169,7 +169,7 @@ source ~/.bashrc
 
 ## 5. Configurar acceso SSH a GitHub
 
-Los submódulos del repo (`backend`, `frontend`, `wiki`) están registrados con URLs SSH — necesitas una llave SSH asociada a tu cuenta de GitHub antes de clonar.
+Los submódulos del repo (`backend` y `frontend`) están registrados con URLs SSH — necesitas una llave SSH asociada a tu cuenta de GitHub antes de clonar.
 
 **Generar la llave:**
 
