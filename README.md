@@ -101,7 +101,9 @@ sudo usermod -aG docker $USER          # re-login for this to take effect
 # (keep in lockstep with PIXI_VERSION in scripts/setup.sh)
 curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.73.0 bash
 
-# 1. Clone the repository
+# 1. Clone the repository. The submodules are registered over SSH; this makes
+#    git fetch them over HTTPS, so the clone needs no GitHub key
+git config --global url."https://github.com/".insteadOf "git@github.com:"
 git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
 cd ~/dtk
 
