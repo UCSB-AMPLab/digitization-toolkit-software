@@ -2216,6 +2216,27 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4e. Wi-Fi permissions: the polkit rule that lets pi, the user the backend
+#     runs as, scan, join and forget Wi-Fi networks through NetworkManager.
+#     setup.sh runs once, at first provisioning, so an appliance already in
+#     the field receives the rule from update.sh. Without the rule, joining a
+#     network from Captua's settings is refused on such a unit.
+#     update.sh keeps running its old copy after it pulls (NEH-337), so a unit
+#     updated from a version without this section receives the rule on the
+#     next update, or from one run of
+#     `sudo scripts/install-network-permissions.sh`. New units receive it
+#     from setup.sh.
+#     Idempotent, needs no network, and restarts nothing. Not advisory: the
+#     script exits non-zero on a bad argument, when mktemp or the write of the
+#     temporary file fails, when the write into /etc fails, and when a
+#     directory sits at the rule's path. A missing rules directory is a
+#     warning with exit 0.
+# ---------------------------------------------------------------------------
+echo "→ Configuring Wi-Fi permissions..."
+"$SCRIPT_DIR/install-network-permissions.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 5. Trial backup, while the old stack is STILL RUNNING. pg_dump takes one
 #    transactional snapshot, so this is safe on a live database, and a backup
 #    that cannot be written (no space, a broken pg_dump) then aborts the update
