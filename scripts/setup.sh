@@ -149,6 +149,15 @@ echo "→ Configuring storage mount permissions..."
 echo ""
 
 # ---------------------------------------------------------------------------
+# 2b-i. Wi-Fi permissions rule. The backend runs as pi and joins or forgets
+#       Wi-Fi networks through nmcli; NetworkManager refuses those calls from
+#       a process outside a local session unless polkit grants them.
+# ---------------------------------------------------------------------------
+echo "→ Configuring Wi-Fi permissions..."
+"$SCRIPT_DIR/install-network-permissions.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 2c. Docker group membership (no sudo needed for docker after re-login)
 # ---------------------------------------------------------------------------
 echo "→ Adding $DTK_USER to docker group..."

@@ -390,6 +390,7 @@ sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-upd
 cp "$SCRIPTS/captua-env.sh" "$UP/super/scripts/captua-env.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-rclone.sh"
+printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/install-network-permissions.sh"
 # Records its calls. The switch writes what the real one writes inside the
 # unit's reach: HOST_IP in the checkout's .env (when there is one) and the
 # record in /etc/dtk, both places a restore or rollback works in, so a
