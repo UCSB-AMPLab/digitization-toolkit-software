@@ -57,7 +57,10 @@ set +x
 #   2. Write the per-unit rclone remote, IF and ONLY IF key material was
 #      supplied, and record the settings in /var/lib/dtk/offsite.env. No key
 #      material means no remote. It never invents, guesses or defaults a
-#      credential, and it never replaces an existing one.
+#      credential, and it never replaces an existing one unless the run is
+#      given --replace-credential together with complete key material (see
+#      2.3a): then the config it would inspect is moved aside, kept, and put
+#      back if the run fails before recording the new settings.
 #
 #      It does NOT read or write the project .env, in either direction, for
 #      any purpose — not for settings, and not for a read-only report. That
@@ -215,15 +218,24 @@ RECIPIENT_ARG=""
 CHANGE_TENANT=0
 # --fisqua-env, production or staging. Empty means "not given", as above.
 FISQUA_ENV_ARG=""
+# --replace-credential: replace an existing credential with the key material
+# given to this run. See 2.3a.
+REPLACE_CREDENTIAL=0
 usage() {
     echo "  Usage: provision-rclone.sh [--advisory] [--prefix DIR]"
     echo "                             [--config-path FILE]"
     echo "                             [--tenant NAME [--change-tenant]]"
     echo "                             [--dump-recipient AGE1_PUBLIC_KEY]"
     echo "                             [--fisqua-env production|staging]"
+    echo "                             [--replace-credential]"
     echo "  Key material, for the write key, the optional read key and the"
     echo "  optional Fisqua token, comes from the file named by"
     echo "  DTK_OFFSITE_KEY_FILE; run with no key material to see its format."
+    echo "  --replace-credential, with complete key material only, moves the"
+    echo "  rclone config this run inspects to <path>.replaced-<UTC time> and"
+    echo "  writes a new one. The moved file holds the previous credential: it"
+    echo "  is kept there, mode 0600, until someone removes it. A run that"
+    echo "  fails before recording the new settings puts it back."
 }
 # An age private key, in either case. Checked wherever a value might be
 # echoed, so that the one secret this script is most likely to be handed by
@@ -245,6 +257,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --advisory) ADVISORY=1 ;;
         --change-tenant) CHANGE_TENANT=1 ;;
+        --replace-credential) REPLACE_CREDENTIAL=1 ;;
         --tenant)
             if [ $# -lt 2 ] || [ -z "$2" ]; then
                 echo "✗ provision-rclone.sh: --tenant needs a tenant prefix."
@@ -1145,7 +1158,18 @@ write_offsite_env() {   # <bin> <config-path> <remote> <read-remote> <tenant> <r
         echo "  $DTK_USER. Nothing was written."
         return 1
     fi
-    if ! mv "$tmp" "$OFFSITE_ENV_PATH"; then
+    # Under --replace-credential, publishing these settings is also what makes
+    # the replacement final (see 2.3a), and the two must happen as one step:
+    # signals are held across the rename, the replacement is made final the
+    # moment the temporary name is gone, and only then is a held signal acted
+    # on. A rename is atomic, so the temporary name being gone is the test of
+    # publication, whatever mv's own status says. Outside --replace-credential
+    # the three calls do nothing.
+    replace_hold_signals
+    if mv "$tmp" "$OFFSITE_ENV_PATH"; then MV_ST=0; else MV_ST=1; fi
+    [ -e "$tmp" ] || replace_published
+    replace_release_signals
+    if [ "$MV_ST" -ne 0 ]; then
         rm -f "$tmp"
         echo "✗ rclone: could not put the new $OFFSITE_ENV_PATH in place. The"
         echo "  existing file, if any, was left exactly as it was."
@@ -1925,6 +1949,9 @@ run_report() {
     echo "    read key     $RUN_READ_CRED"
     echo "    read probe   $RUN_READ_PROBE"
     echo "    settings     $RUN_SETTINGS"
+    if [ "$REPLACE_CREDENTIAL" -eq 1 ]; then
+        echo "    replaced     $RUN_REPLACED"
+    fi
     note_options_not_recorded
     echo ""
     echo "  That is an account of this run, not a verdict on the unit. This"
@@ -1939,6 +1966,84 @@ run_report() {
     echo ""
 }
 
+# --replace-credential's state (see 2.3a). REPLACE_PENDING is 1 from the
+# moment the inspected config is moved aside until the new settings are
+# recorded; while it is 1, any failure puts the moved file back.
+REPLACED_PATH=""
+REPLACED_MODE=""
+REPLACE_PENDING=0
+REPLACE_FINAL=0
+REPLACE_SIGNAL=0
+RUN_REPLACED="not asked for"
+# The two renames that change what --replace-credential would undo — the move
+# aside, and the publication of offsite.env — run with signals held: a signal
+# is recorded, not acted on, until the state matches what the rename did.
+replace_hold_signals() {
+    [ "$REPLACE_CREDENTIAL" -eq 1 ] || return 0
+    REPLACE_SIGNAL=0
+    trap 'REPLACE_SIGNAL=1' INT TERM HUP
+}
+replace_release_signals() {
+    [ "$REPLACE_CREDENTIAL" -eq 1 ] || return 0
+    if [ "$REPLACE_PENDING" -eq 1 ]; then
+        trap 'replace_interrupted' INT TERM HUP
+    else
+        trap - INT TERM HUP
+    fi
+    if [ "$REPLACE_SIGNAL" -eq 1 ]; then
+        replace_interrupted
+    fi
+}
+# offsite.env now names the new credential: nothing may restore the old one.
+replace_published() {
+    [ "$REPLACE_PENDING" -eq 1 ] || return 0
+    REPLACE_PENDING=0
+    REPLACE_FINAL=1
+    RUN_REPLACED="moved the previous config to $REPLACED_PATH and kept it there (it holds the previous credential; not printed)"
+}
+# The permission bits, as chmod takes them; empty when stat cannot say.
+file_mode_of() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1" 2>/dev/null || true; }
+# Put the moved-aside config back where it was, replacing whatever this run
+# put there (a new file, complete or partial). The content and owner are the
+# moved file's own, since it is renamed back; the mode it had is re-applied.
+undo_replacement() {
+    [ "$REPLACE_PENDING" -eq 1 ] || return 0
+    REPLACE_PENDING=0
+    trap - INT TERM HUP
+    if mv -f -- "$REPLACED_PATH" "$RCLONE_CONFIG_PATH" \
+            && { [ -z "$REPLACED_MODE" ] || chmod "$REPLACED_MODE" "$RCLONE_CONFIG_PATH"; }; then
+        echo "  --replace-credential: this run failed before recording the new"
+        echo "    settings, so the previous config was put back at"
+        echo "    $RCLONE_CONFIG_PATH as it was. No new credential is left there."
+        RUN_REPLACED="put the previous config back at $RCLONE_CONFIG_PATH after the failure"
+    else
+        echo "✗ rclone: --replace-credential could not put the previous config"
+        echo "  back. It is still at $REPLACED_PATH"
+        echo "  and holds the previous credential. Put it back by hand:"
+        echo "    sudo mv $REPLACED_PATH $RCLONE_CONFIG_PATH"
+        RUN_REPLACED="could not put the previous config back; it is at $REPLACED_PATH"
+    fi
+}
+# The new settings are recorded: from here the replacement stands, and the
+# moved file is kept.
+replacement_final() {
+    [ "$REPLACE_FINAL" -eq 1 ] || return 0
+    echo "  --replace-credential: the new settings are recorded. The previous"
+    echo "    config is kept at $REPLACED_PATH"
+    echo "    (it holds the previous credential, which is not printed). Remove it"
+    echo "    once the new credential is known to work."
+}
+replace_interrupted() {
+    trap - INT TERM HUP
+    echo "✗ rclone: interrupted by a signal."
+    if [ "$REPLACE_FINAL" -eq 1 ]; then
+        echo "  The new settings were already recorded, so the new credential"
+        echo "  stays; the previous config is kept at $REPLACED_PATH."
+    fi
+    undo_replacement
+    exit 1
+}
+
 # Leave after a failure to provision. Every caller has already printed its own
 # diagnosis; this decides only whether the surrounding script dies with us. In
 # advisory mode it says plainly that it is not failing the caller, so a reader
@@ -1949,6 +2054,7 @@ run_report() {
 # several of the paths that reach here have inspected no configuration at all
 # (a lock that could not be taken, an architecture with no pinned build).
 provision_failed() {
+    undo_replacement
     note_options_not_recorded
     if [ "$ADVISORY" -eq 1 ]; then
         echo ""
@@ -2193,7 +2299,48 @@ fi
 # config that already exists is different: it renames a rebuilt file over the
 # old one, which a second run could race, so that path refuses to run without
 # the lock (provision_read_remote, LOCK_HELD).
+#
+# WHO OWNS THE LOCK FILE. setup.sh and update.sh run this script as root; the
+# backend runs it as the appliance user ($DTK_USER) when a unit is paired with
+# Fisqua by a code (NEH-345). A lock file created by root would be owned by
+# root and closed to that user, so a root run hands it over once it holds the
+# lock: owner $DTK_USER, mode 0600. It does so through the open descriptor and
+# never through the path, because the directory belongs to $DTK_USER, and a
+# path that user can replace must not be what root changes the owner of. For
+# the same reason root refuses a lock path that is a symlink, opens it for
+# append rather than truncating it, and hands over only a descriptor that is
+# the singly linked regular file at that path. The exclusion itself does not
+# change: flock(1) locks the open file, whoever owns it.
 LOCK_PATH="${PREFIX}/var/lib/dtk/provision-rclone.lock"
+IS_ROOT=0
+if [ "$(id -u 2>/dev/null || true)" = 0 ]; then
+    IS_ROOT=1
+fi
+# Whether fd 9 is the regular file at LOCK_PATH itself, with one link: what a
+# root run checks before it changes that file's owner. python3 is needed for
+# the config classification below anyway.
+lock_fd_is_lock_path() {
+    [ "$(python3 -I -c '
+import os, stat, sys
+a = os.fstat(9)
+b = os.lstat(sys.argv[1])
+print("same" if stat.S_ISREG(b.st_mode) and b.st_nlink == 1
+      and (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino) else "differ")
+' "$LOCK_PATH" 2>/dev/null || true)" = "same" ]
+}
+hand_lock_to_dtk_user() {
+    if ! lock_fd_is_lock_path; then
+        echo "  ⚠ the run lock $LOCK_PATH was not handed to $DTK_USER: the file"
+        echo "    open as the lock could not be confirmed to be the single regular"
+        echo "    file at that path. A run as $DTK_USER may be unable to open it."
+        return 0
+    fi
+    if ! chown "$DTK_USER:$DTK_USER" /dev/fd/9 || ! chmod 0600 /dev/fd/9; then
+        echo "  ⚠ the run lock $LOCK_PATH could not be handed to $DTK_USER"
+        echo "    (owner $DTK_USER, mode 0600). A run as $DTK_USER may be unable"
+        echo "    to open it."
+    fi
+}
 if ! mkdir -p "$(dirname "$LOCK_PATH")"; then
     echo "✗ rclone: could not create $(dirname "$LOCK_PATH"), so the run lock"
     echo "  cannot be taken. Nothing was changed."
@@ -2208,11 +2355,28 @@ if command -v flock >/dev/null 2>&1; then
     # remedy worth naming, and the trap's generic "this command failed" would
     # bury it under bash's own redirection error. A failing redirection on a
     # bare `exec` would otherwise end the shell.
-    if ! exec 9>"$LOCK_PATH"; then
+    if [ "$IS_ROOT" -eq 1 ] && [ -L "$LOCK_PATH" ]; then
+        echo "✗ rclone: the run lock $LOCK_PATH is a symlink. This script never"
+        echo "  creates one there, and as root it does not open or change the"
+        echo "  owner of a file reached through one. Nothing was changed."
+        echo "  Remove the link and re-run:"
+        echo "    sudo rm $LOCK_PATH"
+        provision_failed
+    fi
+    if ! exec 9>>"$LOCK_PATH"; then
         echo "✗ rclone: could not open the run lock $LOCK_PATH, so this run"
         echo "  cannot be serialised against another copy of itself. Nothing"
-        echo "  was changed. Check that $(dirname "$LOCK_PATH") is writable by"
-        echo "  root and mounted read-write."
+        if [ "$IS_ROOT" -eq 1 ]; then
+            echo "  was changed. Check that $(dirname "$LOCK_PATH") is writable by"
+            echo "  root and mounted read-write."
+        else
+            echo "  was changed. This run is not running as root, so it can open"
+            echo "  the lock only if $(id -un 2>/dev/null || echo this user) may write to it. A lock"
+            echo "  left owned by root by an earlier run as root is the likely"
+            echo "  cause; a run as root now hands it over. Either re-run this"
+            echo "  script once as root, or hand the lock over directly:"
+            echo "    sudo chown $DTK_USER:$DTK_USER $LOCK_PATH"
+        fi
         provision_failed
     fi
     # TWO DIFFERENT THINGS, with different messages.
@@ -2263,6 +2427,9 @@ if command -v flock >/dev/null 2>&1; then
         provision_failed
     fi
     LOCK_HELD=1
+    if [ "$IS_ROOT" -eq 1 ]; then
+        hand_lock_to_dtk_user
+    fi
 else
     echo "  ⚠ flock is not installed, so this run is NOT serialised against"
     echo "    another copy of this script running at the same time. The"
@@ -2774,6 +2941,25 @@ HAVE_KEY=0
 if [ -n "$B2_KEY_ID" ] && [ -n "$B2_APP_KEY" ] && [ -n "$B2_BUCKET" ]; then
     HAVE_KEY=1
 fi
+# --replace-credential replaces a credential with the one given to this run,
+# so it means nothing without one. And it renames the config this run
+# inspects, which only the run lock keeps another run from racing.
+if [ "$REPLACE_CREDENTIAL" -eq 1 ] && [ "$HAVE_KEY" -ne 1 ]; then
+    echo "✗ rclone: --replace-credential needs key material for this run:"
+    echo "  KEY_ID, APP_KEY and BUCKET together, from the key file named by"
+    echo "  DTK_OFFSITE_KEY_FILE. It replaces a credential only with one given"
+    echo "  to the same run. No credential was moved or written and"
+    echo "  $OFFSITE_ENV_PATH was not changed."
+    provision_failed
+fi
+if [ "$REPLACE_CREDENTIAL" -eq 1 ] && [ "$LOCK_HELD" -ne 1 ]; then
+    echo "✗ rclone: --replace-credential needs the run lock, and this run does"
+    echo "  not hold it: flock is not installed. Moving the config aside and"
+    echo "  writing a new one must not race another run. No credential was"
+    echo "  moved or written and $OFFSITE_ENV_PATH was not changed. Install"
+    echo "  util-linux and re-run."
+    provision_failed
+fi
 
 # ── 2.2b The read key ───────────────────────────────────────────────────────
 # From the key file ONLY (READ_KEY_ID, READ_APP_KEY), never from the
@@ -2976,6 +3162,70 @@ CHECK_NAME="$SELECTED_NAME"
 if [ "$HAVE_KEY" -eq 1 ] || [ -z "$CHECK_NAME" ]; then
     CHECK_NAME="$RCLONE_REMOTE_NAME"
 fi
+
+# ── 2.3a --replace-credential ───────────────────────────────────────────────
+# A unit paired again with Fisqua (NEH-345) is handed NEW keys for the same
+# workspace, and 2b would preserve the credential it already holds. With
+# --replace-credential, and only with complete key material (refused above
+# otherwise), the config this run would inspect — RCLONE_CONFIG_PATH, chosen
+# by the same rule as always: --config-path, else the recorded
+# DTK_RCLONE_CONFIG, else the default — is moved aside, under the lock, to
+# <path>.replaced-<UTC time>, and the run goes on as for a unit with no
+# credential: 2b writes the new file whole.
+#
+# The moved file holds the previous credential, so it keeps its owner, loses
+# any group and other access, and is never printed. Until the new settings
+# are recorded in offsite.env, a failure anywhere puts it back exactly
+# (provision_failed calls undo_replacement), replacing any new file this run
+# left at the path. Once they are recorded, the replacement stands and the
+# moved file is kept. A symlink at the path is moved aside as a link; its
+# target is not touched.
+if [ "$REPLACE_CREDENTIAL" -eq 1 ]; then
+    if [ -e "$RCLONE_CONFIG_PATH" ] || [ -L "$RCLONE_CONFIG_PATH" ]; then
+        REPLACED_PATH="$RCLONE_CONFIG_PATH.replaced-$(date -u +%Y%m%dT%H%M%SZ)"
+        if [ -e "$REPLACED_PATH" ] || [ -L "$REPLACED_PATH" ]; then
+            echo "✗ rclone: --replace-credential would move $RCLONE_CONFIG_PATH"
+            echo "  to $REPLACED_PATH, and something is already there."
+            echo "  No credential was moved or written and $OFFSITE_ENV_PATH was"
+            echo "  not changed. Re-run in a moment."
+            provision_failed
+        fi
+        if [ ! -L "$RCLONE_CONFIG_PATH" ]; then
+            REPLACED_MODE="$(file_mode_of "$RCLONE_CONFIG_PATH")"
+        fi
+        # Signals held across the rename, as for the publication of
+        # offsite.env: REPLACE_PENDING becomes 1 exactly when the file is
+        # aside, so a signal at any point either finds nothing to undo or
+        # puts it back.
+        replace_hold_signals
+        if mv -- "$RCLONE_CONFIG_PATH" "$REPLACED_PATH"; then MV_ST=0; else MV_ST=1; fi
+        if [ -e "$REPLACED_PATH" ] || [ -L "$REPLACED_PATH" ]; then
+            REPLACE_PENDING=1
+        fi
+        replace_release_signals
+        if [ "$REPLACE_PENDING" -ne 1 ]; then
+            echo "✗ rclone: --replace-credential could not move $RCLONE_CONFIG_PATH"
+            echo "  aside. No credential was written and $OFFSITE_ENV_PATH was"
+            echo "  not changed."
+            provision_failed
+        fi
+        if [ ! -L "$REPLACED_PATH" ] && ! chmod go-rwx "$REPLACED_PATH"; then
+            echo "✗ rclone: --replace-credential could not remove group and other"
+            echo "  access from $REPLACED_PATH."
+            provision_failed
+        fi
+        echo "  --replace-credential: moved $RCLONE_CONFIG_PATH aside to"
+        echo "    $REPLACED_PATH"
+        echo "    It holds the previous credential (not printed). It is kept,"
+        echo "    owner unchanged, with no access for group or others. If this"
+        echo "    run fails before it records the new settings, it is put back."
+        RUN_REPLACED="moved the previous config to $REPLACED_PATH; the run did not reach the point of recording the new settings"
+    else
+        echo "  --replace-credential: $RCLONE_CONFIG_PATH does not exist, so there"
+        echo "    is nothing to move aside."
+        RUN_REPLACED="nothing to move aside: $RCLONE_CONFIG_PATH did not exist"
+    fi
+fi
 CONFIG_STATE="$(config_remote_state "$RCLONE_USE_BIN" "$RCLONE_CONFIG_PATH" "$CHECK_NAME")"
 
 # ── 2.4 The classification could not be run ─────────────────────────────────
@@ -3091,7 +3341,9 @@ fi
 if [ "$HAVE_KEY" -eq 1 ]; then
     # ONLY a config file that does not exist authorises writing one. Every
     # other state — complete, incomplete, foreign, unreadable — preserves what
-    # is there, and `undetermined` never gets this far.
+    # is there, and `undetermined` never gets this far. Under
+    # --replace-credential, 2.3a has already moved the existing file aside,
+    # so the state here is `missing` and the rule is unchanged.
     #
     # `missing` rather than "no section of ours" because the write below
     # produces the config file WHOLE: on a file that exists and holds another
@@ -3296,6 +3548,7 @@ RCLONE_CONF
         echo "  note: replacing the recorded remote $SELECTED_REMOTE"
     fi
     offsite_write_or_fail "$RCLONE_REMOTE_NAME:$B2_BUCKET"
+    replacement_final
     sync
 
     probe_listing_once
