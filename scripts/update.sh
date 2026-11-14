@@ -2237,6 +2237,26 @@ echo "→ Configuring Wi-Fi permissions..."
 echo ""
 
 # ---------------------------------------------------------------------------
+# 4f. Privileged helper: /usr/local/bin/dtk-system-helper and its sudoers
+#     entry. setup.sh installs them once, at first provisioning, so a unit
+#     already in the field receives a helper with new verbs from update.sh.
+#     Without it such a unit keeps the helper it was installed with: pairing
+#     with Fisqua needs the restart-backend verb and is refused there.
+#     update.sh keeps running its old copy after it pulls (NEH-337), so a unit
+#     updated from a version without this section receives the helper on the
+#     next update, or from one run of `sudo scripts/install-system-helper.sh`.
+#     Runs while the old backend still serves. The helper only gains verbs
+#     between versions, so the old backend works with the new helper, and a
+#     restored update keeps it.
+#     Idempotent, needs no network, and restarts nothing. Not advisory: the
+#     script exits non-zero when the helper source is missing, when a copy
+#     into place fails, and when visudo rejects the sudoers file, which is
+#     then not installed.
+# ---------------------------------------------------------------------------
+"$SCRIPT_DIR/install-system-helper.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 5. Trial backup, while the old stack is STILL RUNNING. pg_dump takes one
 #    transactional snapshot, so this is safe on a live database, and a backup
 #    that cannot be written (no space, a broken pg_dump) then aborts the update

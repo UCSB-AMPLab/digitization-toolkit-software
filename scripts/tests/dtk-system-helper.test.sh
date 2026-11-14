@@ -123,6 +123,29 @@ expect_status 1
 expect_out "unknown verb: restart"
 expect_calls ""
 
+# ── Who installs the helper ────────────────────────────────────────────────
+# setup.sh and install-service.sh install it on a new unit. update.sh
+# reinstalls it, so a unit already in the field receives new verbs.
+SCRIPTS="$(dirname "$HERE")"
+CALL_RE='^[[:space:]]*"\$SCRIPT_DIR/install-system-helper\.sh"$'
+for f in setup.sh install-service.sh update.sh; do
+  case_ "$f calls install-system-helper.sh, bare"
+  if grep -E "$CALL_RE" "$SCRIPTS/$f" >/dev/null 2>&1; then
+    ok
+  else
+    bad "$f has no bare, uncommented call to install-system-helper.sh"
+  fi
+done
+
+case_ "update.sh reinstalls the helper before it stops the service"
+CALL_LINE="$(grep -nE "$CALL_RE" "$SCRIPTS/update.sh" | head -n 1 | cut -d: -f1)"
+STOP_LINE="$(grep -nE '^[[:space:]]*SERVICE_STOPPED=1' "$SCRIPTS/update.sh" | head -n 1 | cut -d: -f1)"
+if [ -n "$CALL_LINE" ] && [ -n "$STOP_LINE" ] && [ "$CALL_LINE" -lt "$STOP_LINE" ]; then
+  ok
+else
+  bad "update.sh call line '$CALL_LINE' is not before the first SERVICE_STOPPED=1 '$STOP_LINE'"
+fi
+
 echo ""
 echo "dtk-system-helper tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
