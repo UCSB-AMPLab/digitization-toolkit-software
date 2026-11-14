@@ -173,6 +173,34 @@ cmd_reboot() {
     systemctl reboot
 }
 
+# Restart the Captua backend service and nothing else, so that settings read
+# once at startup (offsite.env after a unit is paired with Fisqua, NEH-345)
+# take effect. --no-block: the caller is the dtk service itself, and a
+# blocking restart would wait on the stop of the very process waiting for it.
+# The unit name is fixed; no argument is accepted.
+cmd_restart_backend() {
+    [ "$#" -eq 0 ] || die "usage: restart-backend"
+    systemctl --no-block restart dtk
+}
+
+usage() {
+    cat <<'EOF'
+usage: dtk-system-helper <verb> [args...]
+
+Run only through the scoped sudoers rule (see install-system-helper.sh).
+Verbs:
+  mount <device> <mountpoint>   mount a removable partition under /var/lib/dtk/mounts
+  umount <mountpoint>           unmount it and remove the mountpoint
+  prepare-projects <path>       create <mount>/dtk-projects for the invoking user
+  poweroff                      power the unit off
+  reboot                        reboot the unit
+  restart-backend               restart the dtk service (systemctl --no-block
+                                restart dtk); takes no arguments
+Exit status: 0 on success; 1 on a refused or malformed request; otherwise
+the status of the command the verb ran.
+EOF
+}
+
 main() {
     [ "$#" -ge 1 ] || die "usage: dtk-system-helper <verb> [args...]"
     local verb="$1"
@@ -183,6 +211,8 @@ main() {
         prepare-projects) cmd_prepare_projects "$@" ;;
         poweroff)         cmd_poweroff "$@" ;;
         reboot)           cmd_reboot "$@" ;;
+        restart-backend)  cmd_restart_backend "$@" ;;
+        -h|--help)        usage ;;
         *)                die "unknown verb: $verb" ;;
     esac
 }

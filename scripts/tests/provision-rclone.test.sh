@@ -17,6 +17,8 @@
 #            download is attempted. Nothing here touches the network.
 #   timeout  runs the command unbounded (macOS has no timeout(1)).
 #   chown    does nothing, so the cases run as an ordinary user.
+#   id       `id -u` reports FAKE_UID when a case sets it, so a case can run
+#            the script as if as root; the real id(1) otherwise.
 #
 # No real key appears anywhere: the key ids and application keys are made-up
 # strings in B2's alphabet, and the age recipients are encodings of fixed byte
@@ -110,6 +112,19 @@ if [ -n "${FAKE_CHOWN_LOG:-}" ]; then
     printf '%s\n' "$*" >> "$FAKE_CHOWN_LOG"
 fi
 exit 0
+EOF
+cat > "$FAKEBIN/id" <<'EOF'
+#!/bin/sh
+# FAKE_UID=<n>: `id -u` reports it, so a case can run the script as if as
+# root. Every other call goes to the real id(1).
+if [ -n "${FAKE_UID:-}" ] && [ "$#" -eq 1 ] && [ "$1" = "-u" ]; then
+    echo "$FAKE_UID"
+    exit 0
+fi
+for d in /usr/bin /bin; do
+    [ -x "$d/id" ] && exec "$d/id" "$@"
+done
+exit 1
 EOF
 cat > "$WORK/fake-rclone.py" <<'EOF'
 import json, os, sys
@@ -1410,6 +1425,272 @@ case_ "fisqua: the usage text names --fisqua-env"
 run -- --no-such-flag
 expect_status 1
 expect_out "[--fisqua-env production|staging]"
+
+# ── The run lock and the appliance user ─────────────────────────────────────
+# A root run (setup.sh, update.sh) hands the lock file to the appliance user,
+# so that a later run as that user (the backend's pairing) can open it. The
+# owner is set through the open descriptor, never through the path. chown is
+# a fake here, so the real change of owner is not exercised; what is checked
+# is that the root run asks for it, on the descriptor, and sets the mode.
+LOCK_REL="var/lib/dtk/provision-rclone.lock"
+ME="$(id -un)"
+
+case_ "lock: a root run hands the lock to the appliance user"
+new_unit
+rm -f "$WORK/chown.log"
+run FAKE_UID=0 FAKE_CHOWN_LOG="$WORK/chown.log" --
+expect_status 0
+if [ -f "$WORK/chown.log" ] && grep -qxF "$ME:$ME /dev/fd/9" "$WORK/chown.log"; then ok; else
+    bad "the lock was not handed to $ME through its descriptor"; fi
+if [ -f "$ROOT/$LOCK_REL" ] && [ "$(mode_of "$ROOT/$LOCK_REL")" = "0o600" ]; then ok; else
+    bad "lock mode is not 0600"; fi
+
+case_ "lock: an ordinary run does not try to hand it over"
+new_unit
+rm -f "$WORK/chown.log"
+run FAKE_CHOWN_LOG="$WORK/chown.log" --
+expect_status 0
+if [ -f "$WORK/chown.log" ] && grep -qF "/dev/fd/9" "$WORK/chown.log"; then bad "a non-root run chowned the lock"; else ok; fi
+
+case_ "lock: a root run refuses a lock path that is a symlink"
+new_unit
+: > "$ROOT/elsewhere"
+ln -s "$ROOT/elsewhere" "$ROOT/$LOCK_REL"
+rm -f "$WORK/chown.log"
+run FAKE_UID=0 FAKE_CHOWN_LOG="$WORK/chown.log" --
+expect_status 1
+expect_out "is a symlink"
+expect_absent "$(env_file)"
+if [ -f "$WORK/chown.log" ] && grep -qF "/dev/fd/9" "$WORK/chown.log"; then bad "chowned through a symlinked lock"; else ok; fi
+
+# A run as the appliance user that cannot open the lock (left owned by root
+# by a run from before the hand-over) stops at once and says what to do. The
+# mode stands in for the owner; it blocks nothing for root, so the case is
+# skipped there.
+if [ "$(id -u)" != 0 ]; then
+    case_ "lock: a non-root run with an unopenable lock fails clearly"
+    new_unit
+    : > "$ROOT/$LOCK_REL"
+    chmod 0444 "$ROOT/$LOCK_REL"
+    run --
+    chmod 0644 "$ROOT/$LOCK_REL"
+    expect_status 1
+    expect_out "could not open the run lock"
+    expect_out "not running as root"
+    expect_out "sudo chown $ME:$ME $ROOT/$LOCK_REL"
+    expect_not_out "writable by root"
+    expect_absent "$(env_file)"
+fi
+
+# ── --replace-credential ────────────────────────────────────────────────────
+NEW_ID="000fakeupload0000000000003"
+NEW_KEY="K000FAKEuploadAppKeyNotReal03"
+NEW_BUCKET="captua-new-bucket"
+replaced_files() { ls -d "$1".replaced-* 2>/dev/null; }
+
+case_ "replace-credential: the usage text names it"
+new_unit
+run -- --no-such-flag
+expect_out "[--replace-credential]"
+
+case_ "replace-credential: without the flag a different key is not replaced"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+cp "$(env_file)" "$WORK/saved.env"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF" --
+expect_status 1
+expect_out "already exists and was NOT replaced"
+expect_not_out "replaced-"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+expect_same "$(env_file)" "$WORK/saved.env"
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "a file was moved aside without the flag"; fi
+
+case_ "replace-credential: refused without key material"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+cp "$(env_file)" "$WORK/saved.env"
+run -- --replace-credential
+expect_status 1
+expect_out "--replace-credential needs key material"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+expect_same "$(env_file)" "$WORK/saved.env"
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "moved aside without key material"; fi
+
+case_ "replace-credential: refused with incomplete key material"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file half.key "KEY_ID=$NEW_ID" "BUCKET=$NEW_BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+expect_status 1
+expect_out "--replace-credential needs key material"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+
+case_ "replace-credential: refused without the run lock"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+RUN_PATH="$FAKEBIN:$NOLOCKBIN"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+RUN_PATH="$DEFAULT_PATH"
+expect_status 1
+expect_out "--replace-credential needs the run lock"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+
+case_ "replace-credential: moves the inspected config aside and writes the new one"
+legacy_unit
+chmod 0644 "$(conf_file)"
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET" "READ_KEY_ID=$RD_ID" "READ_APP_KEY=$RD_KEY")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential --tenant ahr
+expect_status 0
+expect_no_secrets
+expect_not_out "$NEW_KEY"
+ASIDE="$(replaced_files "$(conf_file)")"
+case "$ASIDE" in
+    *.replaced-[0-9]*Z) ok ;;
+    *) bad "no single <path>.replaced-<UTC> file: '$ASIDE'" ;;
+esac
+if [ -n "$ASIDE" ] && [ "$(printf '%s\n' "$ASIDE" | wc -l | tr -d ' ')" = 1 ]; then
+    expect_same "$ASIDE" "$WORK/saved.conf"
+    if [ "$(mode_of "$ASIDE")" = "0o600" ]; then ok; else bad "moved-aside file mode $(mode_of "$ASIDE")"; fi
+    expect_out "$ASIDE"
+fi
+expect_out "kept"
+expect_line "$(conf_file)" "account = $NEW_ID"
+expect_line "$(conf_file)" "[b2read]"
+if grep -qF "$UP_ID" "$(conf_file)"; then bad "the new config still holds the old key id"; else ok; fi
+if [ "$(mode_of "$(conf_file)")" = "0o600" ]; then ok; else bad "new config mode $(mode_of "$(conf_file)")"; fi
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$NEW_BUCKET"
+expect_line "$(env_file)" "DTK_OFFSITE_READ_REMOTE=b2read:$NEW_BUCKET"
+expect_line "$(env_file)" "DTK_RCLONE_CONFIG=$(conf_file)"
+expect_out "replaced     "
+
+case_ "replace-credential: the path named by --config-path is the one moved"
+new_unit
+mkdir -p "$ROOT/mnt"
+cat > "$ROOT/mnt/live.conf" <<EOF
+[b2unit]
+type = b2
+account = $UP_ID
+key = $UP_KEY
+EOF
+printf '[b2unit]\ntype = b2\naccount = %s\nkey = %s\n' "$RD_ID" "$RD_KEY" > "$(conf_file)"
+cp "$ROOT/mnt/live.conf" "$WORK/saved-live.conf"
+cp "$(conf_file)" "$WORK/saved.conf"
+printf 'DTK_RCLONE_BIN=%s\nDTK_OFFSITE_REMOTE=b2unit:%s\n' "$ROOT/usr/local/bin/rclone" "$BUCKET" > "$(env_file)"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --config-path "$ROOT/mnt/live.conf" --replace-credential
+expect_status 0
+ASIDE="$(replaced_files "$ROOT/mnt/live.conf")"
+if [ -n "$ASIDE" ]; then expect_same "$ASIDE" "$WORK/saved-live.conf"; else bad "live.conf was not moved aside"; fi
+expect_line "$ROOT/mnt/live.conf" "account = $NEW_ID"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "the default path was moved aside"; fi
+expect_line "$(env_file)" "DTK_RCLONE_CONFIG=$ROOT/mnt/live.conf"
+
+case_ "replace-credential: restores the original when a later step fails"
+legacy_unit
+chmod 0640 "$(conf_file)"
+cp "$(conf_file)" "$WORK/saved.conf"
+cp "$(env_file)" "$WORK/saved.env"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+run FAKE_CHOWN_FAIL="offsite.env." DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+expect_status 1
+expect_out "put back"
+expect_no_secrets
+expect_not_out "$NEW_KEY"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+expect_same "$(env_file)" "$WORK/saved.env"
+if [ "$(mode_of "$(conf_file)")" = "0o640" ]; then ok; else bad "restored mode $(mode_of "$(conf_file)")"; fi
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "the moved-aside file was left after the restore"; fi
+LEFT=0
+for f in "$ROOT"/var/lib/dtk/rclone.conf.*; do [ -e "$f" ] && LEFT=1; done
+if [ "$LEFT" -eq 0 ]; then ok; else bad "a temporary or partial config was left behind"; fi
+
+case_ "replace-credential: restores when the new file cannot be written"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+run FAKE_CHOWN_FAIL="rclone.conf." DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+expect_status 1
+expect_out "put back"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "the moved-aside file was left after the restore"; fi
+
+case_ "replace-credential: restores under --advisory too"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+run FAKE_CHOWN_FAIL="offsite.env." DTK_OFFSITE_KEY_FILE="$KF" -- --advisory --replace-credential
+expect_status 0
+expect_out "put back"
+expect_same "$(conf_file)" "$WORK/saved.conf"
+
+case_ "replace-credential: a unit with no config writes one and moves nothing"
+new_unit
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+run DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+expect_status 0
+expect_out "nothing to move aside"
+expect_line "$(conf_file)" "account = $NEW_ID"
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "something was moved aside"; fi
+
+# A signal at a chosen point. SIGBIN's mv runs the real mv and then, when its
+# arguments contain FAKE_MV_TERM_ON, sends SIGTERM to the script (its parent):
+# the signal lands right after that rename, before the script's next command.
+# Once per run only, marked by FAKE_MV_TERM_MARK, so that the rename back is
+# not interrupted in turn.
+SIGBIN="$WORK/sigbin"
+mkdir -p "$SIGBIN"
+cat > "$SIGBIN/mv" <<'EOF'
+#!/bin/sh
+/bin/mv "$@"
+st=$?
+if [ -n "${FAKE_MV_TERM_ON:-}" ]; then
+    case "$*" in
+        *"$FAKE_MV_TERM_ON"*)
+            if [ ! -e "$FAKE_MV_TERM_MARK" ]; then
+                : > "$FAKE_MV_TERM_MARK"
+                kill -TERM "$PPID"
+            fi
+            ;;
+    esac
+fi
+exit "$st"
+EOF
+chmod +x "$SIGBIN/mv"
+
+case_ "replace-credential: a signal right after offsite.env is published keeps the new credential"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+KF="$(key_file new.key "KEY_ID=$NEW_ID" "APP_KEY=$NEW_KEY" "BUCKET=$NEW_BUCKET")"
+RUN_PATH="$SIGBIN:$DEFAULT_PATH"
+rm -f "$WORK/term.mark"
+run FAKE_MV_TERM_ON="offsite.env." FAKE_MV_TERM_MARK="$WORK/term.mark" DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+RUN_PATH="$DEFAULT_PATH"
+if [ "$STATUS" -ne 0 ]; then ok; else bad "the interrupted run exited 0"; fi
+expect_line "$(env_file)" "DTK_OFFSITE_REMOTE=b2unit:$NEW_BUCKET"
+expect_line "$(conf_file)" "account = $NEW_ID"
+ASIDE="$(replaced_files "$(conf_file)")"
+if [ -n "$ASIDE" ]; then expect_same "$ASIDE" "$WORK/saved.conf"; else bad "the previous config was not kept aside"; fi
+expect_not_out "was put back at"
+expect_out "the new credential"
+expect_not_out "$NEW_KEY"
+
+case_ "replace-credential: a signal right after the move aside puts it back"
+legacy_unit
+cp "$(conf_file)" "$WORK/saved.conf"
+cp "$(env_file)" "$WORK/saved.env"
+RUN_PATH="$SIGBIN:$DEFAULT_PATH"
+rm -f "$WORK/term.mark"
+run FAKE_MV_TERM_ON=".replaced-" FAKE_MV_TERM_MARK="$WORK/term.mark" DTK_OFFSITE_KEY_FILE="$KF" -- --replace-credential
+RUN_PATH="$DEFAULT_PATH"
+if [ "$STATUS" -ne 0 ]; then ok; else bad "the interrupted run exited 0"; fi
+expect_same "$(conf_file)" "$WORK/saved.conf"
+expect_same "$(env_file)" "$WORK/saved.env"
+if [ -z "$(replaced_files "$(conf_file)")" ]; then ok; else bad "the moved-aside file was left"; fi
+expect_out "was put back at"
+
 
 # ── Nothing read was ever passed to rclone on its command line ──────────────
 case_ "no key on any rclone argument list"
