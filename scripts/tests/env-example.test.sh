@@ -9,7 +9,7 @@
 # DTK_X, and either name in .env.example counts. Any other field is read under
 # its own name, in capitals. The backend submodule must be checked out.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 

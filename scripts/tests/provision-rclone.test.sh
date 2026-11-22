@@ -25,7 +25,7 @@
 # patterns that no one holds a private key for. The "secret key" is a string
 # of the right shape that is not a key.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 

@@ -13,7 +13,7 @@
 # secret .env.example ships must read as a placeholder, and so must every value
 # it has shipped before, since an older card can still carry one.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 

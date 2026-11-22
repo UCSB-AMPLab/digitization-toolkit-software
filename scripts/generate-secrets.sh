@@ -26,7 +26,7 @@
 # anywhere in between leaves a state this script converges from on next boot.
 # Production startup requires valid SECRET_KEY, DATABASE_PASSWORD and BOOTSTRAP_TOKEN to be present in .env when APP_ENV is set to production
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
