@@ -8,7 +8,7 @@
 # Each case runs the real script under --prefix against a fresh temporary
 # root. Nothing touches the machine's own /etc.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 

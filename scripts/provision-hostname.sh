@@ -90,7 +90,7 @@
 # arguments, not environment variables, because update.sh exports every .env
 # key before calling this script.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 

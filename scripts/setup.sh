@@ -16,7 +16,7 @@
 # Usage: sudo ./scripts/setup.sh
 #        sudo CAPTUA_HOSTNAME=captua-2 ./scripts/setup.sh   (a second unit at a site)
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -e
 

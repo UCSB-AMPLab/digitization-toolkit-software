@@ -75,7 +75,7 @@
 # start, default 300) and CAPTUA_UPDATE_HEALTH_POLL (seconds between tries,
 # default 5). Both also answer to their DTK_ names.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -e
 

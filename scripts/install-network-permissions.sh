@@ -30,7 +30,7 @@
 # standalone:
 #   sudo ./scripts/install-network-permissions.sh
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -e
 

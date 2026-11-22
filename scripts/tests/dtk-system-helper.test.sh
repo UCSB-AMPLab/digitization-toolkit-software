@@ -11,7 +11,7 @@
 # the helper as shipped. The stub systemctl records its arguments and runs
 # nothing. The mount verbs are not covered here.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 
