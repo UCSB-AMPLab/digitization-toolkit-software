@@ -1,0 +1,173 @@
+<!doctype html>
+<!--
+  The page served on port 80 while Captua's stack is down for an update
+  (scripts/update-page/serve.py, started by dtk-system-helper's
+  update-page-start). Self-contained: no external file, font or script, since
+  nothing else on the unit answers while it is shown.
+
+  Spanish first, then English, both always visible. Which message shows is
+  set by state.json beside this file ({"state":"updating"} or
+  {"state":"failed"}), which the helper writes and this page re-reads on each
+  poll. Every 5 s the script asks /api/health: serve.py answers 503, nginx
+  answers 502 until the backend is up, and only a 200 makes the script call
+  location.replace("/"). Anything else, an error or a timeout included,
+  keeps the message and waits for the next poll, so there is no reload loop.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Captua</title>
+<style>
+  :root {
+    --bg: #f5f3ef;
+    --fg: #1f1d1a;
+    --muted: #5c5750;
+    --rule: #d8d3ca;
+    --accent: #2f5d7c;
+    --note-bg: #ebe6dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1a18;
+      --fg: #ece8e1;
+      --muted: #aaa298;
+      --rule: #3a3732;
+      --accent: #8fb8d6;
+      --note-bg: #26241f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+    line-height: 1.45;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  main { max-width: 40rem; width: 100%; }
+  .brand {
+    font-size: 0.85rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 1rem;
+  }
+  section { display: none; }
+  body[data-current="updating"] section[data-state="updating"],
+  body[data-current="failed"] section[data-state="failed"] { display: block; }
+  section + section { border-top: 1px solid var(--rule); margin-top: 1.25rem; padding-top: 1.25rem; }
+  h1 { font-size: 1.5rem; line-height: 1.2; margin: 0 0 0.5rem; }
+  p { margin: 0 0 0.5rem; font-size: 1.05rem; }
+  .note { color: var(--muted); font-size: 0.95rem; }
+  .warning {
+    font-weight: 600;
+    border: 2px solid var(--fg);
+    background: var(--note-bg);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    margin: 0.25rem 0 0.75rem;
+  }
+  .spinner {
+    width: 1.1rem; height: 1.1rem;
+    border: 3px solid var(--rule);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    display: inline-block;
+    vertical-align: -0.15rem;
+    margin-right: 0.5rem;
+    animation: spin 1.2s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+  @media (max-height: 520px) {
+    h1 { font-size: 1.3rem; }
+    p { font-size: 1rem; }
+    section + section { margin-top: 0.9rem; padding-top: 0.9rem; }
+  }
+</style>
+</head>
+<body data-current="updating">
+<main>
+  <p class="brand">Captua</p>
+
+  <section data-state="updating" lang="es">
+    <h1><span class="spinner" aria-hidden="true"></span>Captua se está actualizando en este equipo</h1>
+    <p class="warning">No apagues el equipo ni desconectes la corriente hasta que Captua vuelva, para no dañar la tarjeta de memoria.</p>
+    <p>Captua volverá a funcionar solo cuando termine de actualizarse; no hace falta hacer nada.</p>
+    <p class="note">No hace falta recargar: verás Captua aquí cuando vuelva.</p>
+  </section>
+  <section data-state="updating" lang="en">
+    <h1>Captua is being updated on this unit</h1>
+    <p class="warning">Do not turn off or unplug the unit until Captua is back, so that the memory card is not damaged.</p>
+    <p>Captua will be back on its own when it has finished updating. Nothing needs to be done.</p>
+    <p class="note">There is no need to reload: you will see Captua here when it is back.</p>
+  </section>
+
+  <section data-state="failed" lang="es" role="alert">
+    <h1>Captua no pudo terminar la actualización</h1>
+    <p>Captua quedó detenido en este equipo.</p>
+    <p>Un administrador tiene que revisar el equipo. Hasta entonces, Captua no se puede usar. Avisa al administrador.</p>
+  </section>
+  <section data-state="failed" lang="en">
+    <h1>Captua could not finish the update</h1>
+    <p>Captua is stopped on this unit.</p>
+    <p>An administrator has to look at the unit. Until then, Captua cannot be used. Tell the administrator.</p>
+  </section>
+</main>
+<script>
+(function () {
+  "use strict";
+  var POLL_MS = 5000;
+  var REQUEST_MS = 4000;
+
+  function fetchWithin(url) {
+    var opts = { cache: "no-store", credentials: "same-origin" };
+    var timer = null;
+    if (typeof AbortController === "function") {
+      var ctrl = new AbortController();
+      opts.signal = ctrl.signal;
+      timer = setTimeout(function () { ctrl.abort(); }, REQUEST_MS);
+    }
+    return fetch(url, opts).then(function (res) {
+      if (timer) clearTimeout(timer);
+      return res;
+    }, function (err) {
+      if (timer) clearTimeout(timer);
+      throw err;
+    });
+  }
+
+  function readState() {
+    return fetchWithin("/state.json").then(function (res) {
+      return res.ok ? res.json() : null;
+    }).then(function (data) {
+      if (data && (data.state === "updating" || data.state === "failed")) {
+        document.body.setAttribute("data-current", data.state);
+      }
+    }, function () { /* keep the message already shown */ });
+  }
+
+  function poll() {
+    fetchWithin("/api/health").then(function (res) {
+      if (res.status === 200) {
+        window.location.replace("/");
+        return;
+      }
+      return readState().then(schedule);
+    }, function () {
+      readState().then(schedule);
+    });
+  }
+
+  function schedule() { setTimeout(poll, POLL_MS); }
+
+  readState().then(schedule);
+})();
+</script>
+</body>
+</html>

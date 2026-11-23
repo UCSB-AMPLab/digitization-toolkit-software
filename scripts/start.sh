@@ -25,6 +25,11 @@ echo "→ Starting database and frontend containers..."
 # a stale one blocks network reconciliation and detaches the db (NEH-214).
 # If clearing fails, the unit fails VISIBLY (systemd marks it failed) rather
 # than serving with a silently degraded stack.
+# The update page must give port 80 back to nginx. update.sh and
+# rollback-update.sh, the only scripts that start it, stop it before they
+# start dtk, so this is a precaution and normally does nothing. A helper
+# older than the verb refuses it, which is ignored.
+sudo -n /usr/local/bin/dtk-system-helper update-page-stop || true
 docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d --pull never --wait --remove-orphans
 
 echo ""

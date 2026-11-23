@@ -215,6 +215,8 @@ UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
 UNRESOLVED_FLAG_DIR="/etc/dtk"
 UNRESOLVED_FLAG="$UNRESOLVED_FLAG_DIR/unresolved-deployment"
 UNRESOLVED_DROPIN="/etc/systemd/system/dtk.service.d/unresolved.conf"
+SYSTEM_HELPER="/usr/local/bin/dtk-system-helper"
+UPDATE_PAGE_MARKER="/run/dtk-update-page.wanted"
 # Frontend image that was serving when LAST_DEPLOYED_SHA_FILE's commit was
 # successfully deployed ("sha:" and "image:" lines; written only on success).
 LAST_DEPLOYED_FRONTEND_FILE="$BACKUP_DIR/last-deployed-frontend"
@@ -901,6 +903,47 @@ clear_unresolved_marker() {
     rm -f "$UNRESOLVED_FILE" "$UNRESOLVED_FLAG" 2>/dev/null || true
 }
 
+# The update page (scripts/update-page), served on port 80 by
+# dtk-system-helper while update.sh has the stack down. This script owns
+# it; nothing else starts it. mark_update_page writes the marker the helper
+# requires (root's, in /run) immediately before the deliberate stop of dtk,
+# so a crash of the backend before then, and systemd's restart of it, show
+# nothing. show_update_page asks for the page once the stack is down.
+# end_update_page stops it and removes the marker, immediately before every
+# start of dtk, so port 80 is free for nginx. show_update_page_if_unresolved
+# runs on exit: with the unresolved flag left, the page stays up (or comes
+# up) saying the update failed; otherwise a page this run wanted is stopped.
+#
+# Each call tolerates a helper without the verbs, or none, and never changes
+# how the script ends. Since the update.sh that runs an update is the copy
+# from before its pull, the page first appears on the update after the one
+# that installs this code: from then on this script, the helper and start.sh
+# all know the page, and so does any version a failed update restores.
+mark_update_page() {
+    ( umask 022; : > "$UPDATE_PAGE_MARKER" ) 2>/dev/null || true
+}
+show_update_page() {
+    if [ -x "$SYSTEM_HELPER" ]; then
+        "$SYSTEM_HELPER" update-page-start >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+end_update_page() {
+    if [ -x "$SYSTEM_HELPER" ]; then
+        "$SYSTEM_HELPER" update-page-stop >/dev/null 2>&1 || true
+    fi
+    rm -f "$UPDATE_PAGE_MARKER" 2>/dev/null || true
+}
+show_update_page_if_unresolved() {
+    if [ -e "$UNRESOLVED_FLAG" ]; then
+        rm -f "$UPDATE_PAGE_MARKER" 2>/dev/null || true
+        show_update_page
+    elif [ -e "$UPDATE_PAGE_MARKER" ]; then
+        end_update_page
+    fi
+    return 0
+}
+
 # write_unresolved_marker [started-failed|restore-failed|restore-refused|migrated-not-restored]
 # Record the unresolved state (see UNRESOLVED_FILE): root's alone, 0600 from
 # the start, written to a temporary name and renamed.
@@ -1134,6 +1177,7 @@ restore_after_stop() {
         return
     fi
     echo "→ Starting the previous version..."
+    end_update_page
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
     if wait_for_health "$HEALTH_TIMEOUT"; then
@@ -1301,6 +1345,7 @@ on_exit() {
     fi
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
         restore_after_stop
+        show_update_page_if_unresolved
         end_trap "$rc"
     fi
     if [ "$RESTORE_ARMED" -eq 1 ]; then
@@ -1460,9 +1505,11 @@ resolve_forward() {
         echo "  --no-start: the unit is left stopped. Deploy the fixed version with an"
         echo "  ordinary update now:"
         echo "      sudo $SCRIPT_DIR/update.sh"
+        end_update_page
         return 0
     fi
     echo "→ Starting the service..."
+    end_update_page
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
     local healthy=0 img
@@ -2376,6 +2423,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Stopping service to apply migrations..."
 SERVICE_STOPPED=1
+mark_update_page
 systemctl stop dtk 2>/dev/null || true
 # systemd runs ExecStop (stop.sh) only for an ACTIVE unit. If dtk was already
 # failed or inactive, the containers can still be up under their
@@ -2396,6 +2444,8 @@ if ! wait_backend_stopped; then
     echo "  Aborting before the backup and the migration; the database is untouched."
     exit 1   # EXIT trap: no migration ran, so it restores code and image and starts the previous version
 fi
+# The stack is down: the update page answers on port 80 until the start.
+show_update_page
 echo ""
 fail_point stopped
 
@@ -2519,6 +2569,7 @@ fi
 rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
 echo "→ Starting service..."
 NEW_STARTED_AT="$(date +%s)"
+end_update_page
 systemctl start dtk
 fail_point started
 echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
