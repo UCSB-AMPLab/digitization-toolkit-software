@@ -31,6 +31,27 @@
 # The backend depends on the verb contract; do not alter verb names, argument
 # order, or exit semantics without updating both.
 #
+# update-page-start and update-page-stop are not the backend's. They put a
+# static page on port 80 while update.sh or rollback-update.sh has the stack
+# down (scripts/update-page), and those two scripts are the only callers that
+# start it: they write a root-owned marker in /run just before they stop dtk,
+# call update-page-start once the stack is down, and call update-page-stop
+# before every start of dtk; dtk.service's update-page drop-in runs
+# update-page-stop as an ExecStartPre of every start, and start.sh calls it
+# too, as a precaution. The page is served by a transient systemd unit as a dynamic
+# user holding only CAP_NET_BIND_SERVICE, from a root-owned copy under /run
+# made from the copy install-system-helper.sh puts in /usr/local/share, never
+# from the checkout. Neither verb takes an argument, and both exit 0 whatever
+# happens to the page: it must never fail a stop, a start or an update.
+#
+# pi may call either verb at any time. update-page-start does nothing unless
+# the marker (which only root can create in /run) or the unresolved flag
+# (in root's 0700 /etc/dtk) exists, and nothing while dtk is running; with
+# one of them it can only (re)start the page or rewrite its state to the one
+# those files already say. update-page-stop can take the page down early,
+# which leaves port 80 empty until dtk starts: what pi could already do by
+# stopping dtk during an update. Neither verb touches dtk.
+#
 # Version: 0.3.0
 
 set -euf
@@ -41,6 +62,21 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
 readonly MOUNTS_ROOT="/var/lib/dtk/mounts"
+
+# The update page (update-page-start, update-page-stop). The marker and the
+# flag are update.sh's and rollback-update.sh's; keep these paths in sync.
+# The marker counts only as a regular file owned by this uid (root).
+readonly UPDATE_PAGE_MARKER="/run/dtk-update-page.wanted"
+readonly UPDATE_PAGE_MARKER_UID="0"
+readonly UNRESOLVED_FLAG="/etc/dtk/unresolved-deployment"
+readonly UPDATE_PAGE_SRC="/usr/local/share/dtk-update-page"
+readonly UPDATE_PAGE_RUN="/run/dtk-update-page"
+readonly UPDATE_PAGE_PYTHON="/usr/bin/python3"
+readonly UPDATE_PAGE_UNIT="dtk-update-page"
+# update-page-start and update-page-stop exclude each other through this
+# lock, waiting this many seconds at most for it.
+readonly UPDATE_PAGE_LOCK="/run/dtk-update-page.lock"
+readonly UPDATE_PAGE_LOCK_WAIT=20
 readonly DEVICE_RE='^/dev/(sd[a-z][0-9]+|mmcblk[0-9]+p[0-9]+|nvme[0-9]+n[0-9]+p[0-9]+)$'
 
 die() {
@@ -183,6 +219,158 @@ cmd_restart_backend() {
     systemctl --no-block restart dtk
 }
 
+page_log() {
+    printf 'dtk-system-helper: update page: %s\n' "$1" >&2
+}
+
+# Whether update.sh or rollback-update.sh has stopped the stack on purpose:
+# its marker exists, is a regular file (not a symlink, not a directory) and
+# belongs to root. find -P does not follow a symlink, so -type f rejects one.
+update_page_wanted() {
+    [ -n "$(find "$UPDATE_PAGE_MARKER" -maxdepth 0 -type f -user "$UPDATE_PAGE_MARKER_UID" 2>/dev/null)" ]
+}
+
+write_page_state() {
+    ( umask 022
+      printf '{"state":"%s"}\n' "$1" > "$UPDATE_PAGE_RUN/state.json.tmp" ) \
+        && mv -f "$UPDATE_PAGE_RUN/state.json.tmp" "$UPDATE_PAGE_RUN/state.json"
+}
+
+# The state the page should show, or nothing: failed while the unresolved
+# flag exists (it wins over the marker: it is what is left when an update
+# ends with the unit stopped), updating while the marker does.
+page_state() {
+    if [ -e "$UNRESOLVED_FLAG" ]; then
+        echo failed
+    elif update_page_wanted; then
+        echo updating
+    fi
+}
+
+# dtk is stopped only when systemd says inactive or failed. activating (a
+# start is under way, its ExecStartPre stop of the page possibly waiting for
+# the lock), active, deactivating, reloading, and any error all mean the
+# page must not start.
+dtk_stopped() {
+    local st
+    st="$(systemctl is-active dtk.service 2>/dev/null)" || true
+    [ "$st" = inactive ] || [ "$st" = failed ]
+}
+
+# Take the lock that makes update-page-start and update-page-stop exclusive,
+# on fd 8, for the rest of the verb; it goes when the helper exits. Fails if
+# it cannot be had within UPDATE_PAGE_LOCK_WAIT seconds. Without flock(1)
+# (util-linux, always present on the unit) the verbs run unserialised.
+take_page_lock() {
+    if ! command -v flock >/dev/null 2>&1; then
+        page_log "flock not found; start and stop are not serialised"
+        return 0
+    fi
+    ( umask 077; : >> "$UPDATE_PAGE_LOCK" ) 2>/dev/null || return 1
+    { exec 8>>"$UPDATE_PAGE_LOCK"; } 2>/dev/null || return 1
+    flock -w "$UPDATE_PAGE_LOCK_WAIT" 8
+}
+
+# Serve the update page on port 80 while the marker says an update or
+# rollback has the stack down (state updating) or a deployment is unresolved
+# (state failed). With neither, nothing happens, so a plain stop, restart,
+# crash, reboot or shutdown shows no page. With the page already up, only the
+# state is rewritten.
+#
+# Everything after the first look runs under the page lock, so a stop cannot
+# run in the middle of a start. The decision is taken again at the last
+# moment, just before systemd-run: the marker or flag must still be there and
+# dtk must be inactive or failed. A start of dtk is activating from the moment
+# its job runs, and its ExecStartPre (the update-page drop-in) waits for this
+# lock to stop the page; so a start that was held up refuses, and that stop
+# then finds nothing. A start that cannot have the lock in time does nothing.
+#
+# The unit has no dependency on dtk.service. It does not restart, and its
+# memory and task counts are capped (serve.py also caps its connections).
+cmd_update_page_start() {
+    [ "$#" -eq 0 ] || die "usage: update-page-start"
+    local state f
+    state="$(page_state)"
+    [ -n "$state" ] || return 0
+    if ! take_page_lock; then
+        page_log "the page lock is busy; not shown"
+        return 0
+    fi
+    state="$(page_state)"
+    [ -n "$state" ] || return 0
+    if systemctl is-active --quiet "$UPDATE_PAGE_UNIT.service"; then
+        write_page_state "$state" || page_log "could not write $UPDATE_PAGE_RUN/state.json"
+        return 0
+    fi
+    if ! dtk_stopped; then
+        page_log "dtk is not stopped; not shown"
+        return 0
+    fi
+    if [ ! -x "$UPDATE_PAGE_PYTHON" ]; then
+        page_log "$UPDATE_PAGE_PYTHON not found; not shown"
+        return 0
+    fi
+    for f in index.html serve.py; do
+        if [ ! -f "$UPDATE_PAGE_SRC/$f" ] || [ -L "$UPDATE_PAGE_SRC/$f" ]; then
+            page_log "$UPDATE_PAGE_SRC/$f is missing or not a regular file; not shown"
+            return 0
+        fi
+    done
+    if command -v ss >/dev/null 2>&1 && [ -n "$(ss -Hltn 'sport = :80' 2>/dev/null)" ]; then
+        page_log "port 80 is already in use; not shown"
+        return 0
+    fi
+    rm -rf -- "$UPDATE_PAGE_RUN"
+    if ! { install -d -m 0755 "$UPDATE_PAGE_RUN" \
+            && install -m 0644 "$UPDATE_PAGE_SRC/index.html" "$UPDATE_PAGE_RUN/index.html" \
+            && write_page_state "$state"; } 2>/dev/null; then
+        page_log "could not prepare $UPDATE_PAGE_RUN; not shown"
+        rm -rf -- "$UPDATE_PAGE_RUN"
+        return 0
+    fi
+    # The last moment: decide again, with everything ready.
+    state="$(page_state)"
+    if [ -z "$state" ] || ! dtk_stopped; then
+        page_log "no longer wanted, or dtk is starting; not shown"
+        rm -rf -- "$UPDATE_PAGE_RUN"
+        return 0
+    fi
+    write_page_state "$state" || true
+    if ! systemd-run --unit="$UPDATE_PAGE_UNIT" --collect --quiet \
+            --description="Captua update page on port 80" \
+            --property=DynamicUser=yes \
+            --property=AmbientCapabilities=CAP_NET_BIND_SERVICE \
+            --property=CapabilityBoundingSet=CAP_NET_BIND_SERVICE \
+            --property=NoNewPrivileges=yes \
+            --property=ProtectSystem=strict \
+            --property=ProtectHome=yes \
+            --property=PrivateDevices=yes \
+            --property=MemoryMax=64M \
+            --property=TasksMax=48 \
+            "$UPDATE_PAGE_PYTHON" -I -B "$UPDATE_PAGE_SRC/serve.py" \
+            --root "$UPDATE_PAGE_RUN" --port 80 >/dev/null 2>&1; then
+        page_log "systemd-run could not start $UPDATE_PAGE_UNIT; not shown"
+    fi
+    return 0
+}
+
+# Stop the update page if it runs and remove its runtime copy. Blocking, so
+# that port 80 is free for the start of dtk that follows: dtk's ExecStartPre
+# runs this (the update-page drop-in), and so do update.sh, rollback-update.sh
+# and start.sh. It waits for the page lock, so it never runs in the middle of
+# a start; if the lock is not had in time it stops the page anyway, since
+# freeing port 80 for nginx matters more than the courtesy page, and a start
+# still holding the lock refuses at its last check once dtk is activating.
+cmd_update_page_stop() {
+    [ "$#" -eq 0 ] || die "usage: update-page-stop"
+    if ! take_page_lock; then
+        page_log "the page lock is busy; stopping the page anyway"
+    fi
+    systemctl stop "$UPDATE_PAGE_UNIT.service" >/dev/null 2>&1 || true
+    rm -rf -- "$UPDATE_PAGE_RUN" 2>/dev/null || true
+    return 0
+}
+
 usage() {
     cat <<'EOF'
 usage: dtk-system-helper <verb> [args...]
@@ -196,6 +384,11 @@ Verbs:
   reboot                        reboot the unit
   restart-backend               restart the dtk service (systemctl --no-block
                                 restart dtk); takes no arguments
+  update-page-start             with update.sh's marker or an unresolved
+                                deployment, serve the update page on port 80;
+                                otherwise nothing. Takes no arguments; exits 0
+  update-page-stop              stop the update page and remove its runtime
+                                copy. Takes no arguments; exits 0
 Exit status: 0 on success; 1 on a refused or malformed request; otherwise
 the status of the command the verb ran.
 EOF
@@ -212,6 +405,8 @@ main() {
         poweroff)         cmd_poweroff "$@" ;;
         reboot)           cmd_reboot "$@" ;;
         restart-backend)  cmd_restart_backend "$@" ;;
+        update-page-start) cmd_update_page_start "$@" ;;
+        update-page-stop)  cmd_update_page_stop "$@" ;;
         -h|--help)        usage ;;
         *)                die "unknown verb: $verb" ;;
     esac

@@ -110,6 +110,8 @@ UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
 UNRESOLVED_FLAG="/etc/dtk/unresolved-deployment"
 UNRESOLVED_FLAG_DIR="/etc/dtk"
 UNRESOLVED_DROPIN="/etc/systemd/system/dtk.service.d/unresolved.conf"
+SYSTEM_HELPER="/usr/local/bin/dtk-system-helper"
+UPDATE_PAGE_MARKER="/run/dtk-update-page.wanted"
 # Set when this run found a record before it began. A record this run writes
 # itself (before its DROP) is cleared when its own load is verified.
 HAD_RECORD=0
@@ -1109,10 +1111,53 @@ fi
 # Confirmed: step 2 below takes the containers down itself.
 trap - EXIT
 
+# The update page (scripts/update-page), served on port 80 by
+# dtk-system-helper while rollback-update.sh has the stack down. This script owns
+# it; nothing else starts it. mark_update_page writes the marker the helper
+# requires (root's, in /run) immediately before the deliberate stop of dtk,
+# so a crash of the backend before then, and systemd's restart of it, show
+# nothing. show_update_page asks for the page once the stack is down.
+# end_update_page stops it and removes the marker, immediately before every
+# start of dtk, so port 80 is free for nginx. show_update_page_if_unresolved
+# runs on exit: with the unresolved flag left, the page stays up (or comes
+# up) saying the update failed; otherwise a page this run wanted is stopped.
+#
+# Each call tolerates a helper without the verbs, or none, and never changes
+# how the script ends. Since the update.sh that runs an update is the copy
+# from before its pull, the page first appears on the update after the one
+# that installs this code: from then on this script, the helper and start.sh
+# all know the page, and so does any version a failed update restores.
+mark_update_page() {
+    ( umask 022; : > "$UPDATE_PAGE_MARKER" ) 2>/dev/null || true
+}
+show_update_page() {
+    if [ -x "$SYSTEM_HELPER" ]; then
+        "$SYSTEM_HELPER" update-page-start >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+end_update_page() {
+    if [ -x "$SYSTEM_HELPER" ]; then
+        "$SYSTEM_HELPER" update-page-stop >/dev/null 2>&1 || true
+    fi
+    rm -f "$UPDATE_PAGE_MARKER" 2>/dev/null || true
+}
+show_update_page_if_unresolved() {
+    if [ -e "$UNRESOLVED_FLAG" ]; then
+        rm -f "$UPDATE_PAGE_MARKER" 2>/dev/null || true
+        show_update_page
+    elif [ -e "$UPDATE_PAGE_MARKER" ]; then
+        end_update_page
+    fi
+    return 0
+}
+trap 'show_update_page_if_unresolved' EXIT
+
 # ---------------------------------------------------------------------------
 # 2. Stop the appliance.
 # ---------------------------------------------------------------------------
 echo "→ Stopping the appliance..."
+mark_update_page
 systemctl stop dtk 2>/dev/null || true
 $COMPOSE down --remove-orphans >/dev/null 2>&1 || true
 # The database is about to be replaced: nothing may still be writing to it.
@@ -1121,6 +1166,8 @@ if ! wait_backend_stopped; then
     echo "  Nothing has been restored; the code and the database are as they were."
     exit 1
 fi
+# The stack is down: the update page answers on port 80 until the start.
+show_update_page
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -1189,6 +1236,7 @@ stop_before_restore() {
             exit 1
         fi
         echo "→ Starting the appliance..."
+        end_update_page
         systemctl start dtk || true
         sleep 5
         if systemctl is-active --quiet dtk; then
@@ -1652,6 +1700,7 @@ fi
 # 5. Restart the service.
 # ---------------------------------------------------------------------------
 echo "→ Starting the appliance..."
+end_update_page
 systemctl start dtk
 # The kiosk keeps the address it was launched with; relaunch it from the
 # restored start-kiosk.sh, as update.sh does after an update. Before 0.1.0
