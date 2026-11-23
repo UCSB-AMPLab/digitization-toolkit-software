@@ -983,8 +983,11 @@ write_unresolved_marker() {
              echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
          } > "$UNRESOLVED_FILE.tmp" ) 2>/dev/null \
          && mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE" 2>/dev/null; then
-        [ "$guard_ok" -eq 1 ]
-        return
+        # An explicit status: this runs inside the EXIT trap, where bash 5 gives a
+        # `return` with no argument the status from before the trap (the failed
+        # update's), not the status of the line above it.
+        [ "$guard_ok" -eq 1 ] && return 0
+        return 1
     fi
     rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true
     return 1
@@ -1075,7 +1078,7 @@ restore_after_stop() {
         else
             report_started_failure running
         fi
-        return
+        return 0
     fi
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -1123,7 +1126,7 @@ restore_after_stop() {
             echo "      sudo systemctl start dtk"
         fi
         echo ""
-        return
+        return 0
     fi
     if ! restore_frontend_image; then
         # The previous version will start with whatever the tag holds now, not
@@ -1164,7 +1167,7 @@ restore_after_stop() {
         fi
         warn_if_restored_update_ignores_record
         echo ""
-        return
+        return 0
     fi
 
     if [ -e "$UNRESOLVED_FLAG" ]; then
@@ -1174,7 +1177,7 @@ restore_after_stop() {
         echo "    and while it does systemd does not start dtk. ${UNRESOLVED_KIND:+(record: $UNRESOLVED_KIND)}"
         echo "    Check $UNRESOLVED_FILE before removing it."
         echo ""
-        return
+        return 0
     fi
     echo "→ Starting the previous version..."
     end_update_page
