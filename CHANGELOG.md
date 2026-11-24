@@ -6,7 +6,7 @@ The format is based on Keep a Changelog, and this project uses pre-1.0 semantic 
 
 ## [0.3.0]
 
-This release adds unit modes, which decide what a unit sends outside, and pairing a unit with Fisqua from Settings. It adds Fisqua's queue to Queue, openings and pages that were never captured, a step that records which camera photographs which page, and a check of the cameras. It adds Canon PowerShot A2500 bodies under CHDK, with RAW+JPEG capture on them and on the T7. It adds a Network section to Settings and a testing space with its own account. Operators can free space on the card, and Captua keeps a reserve for its own work. An administrator can set a user's password, and everyone can change their own. The browser session moves into a cookie, so everyone signs in again after the update.
+This release adds unit modes, which decide what a unit sends outside, and pairing a unit with Fisqua from Settings. It adds Fisqua's queue to Queue, openings and pages that were never captured, a step that records which camera photographs which page, and a check of the cameras. It adds Canon PowerShot A2500 bodies under CHDK, with RAW+JPEG capture on them and on the T7. It adds a Network section to Settings and a testing space with its own account. Operators can free space on the card, and Captua keeps a reserve for its own work. An administrator can set a user's password, and everyone can change their own. The browser session moves into a cookie, so everyone signs in again after the update. A new unit is set up from its own screen with a wizard, a unit can ask for colour card shots for each volume, an admin chooses the kind of camera in Settings, and each capture carries an id, so that a capture that timed out is neither lost nor taken twice.
 
 ### Unit modes
 - **Unit mode** in Settings lets an admin choose one of three modes: **Scanner only**, **Offsite copy only** or Fisqua.
@@ -88,16 +88,37 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
   - **Continue** waits until both lenses read MF, and **Continue anyway** is offered after two failed readings.
 - A camera whose orientation was never saved takes a default from its page: 270 degrees for the camera that photographs the even/verso page and 90 degrees for the camera that photographs the odd/recto page, and 90 degrees when the camera has no stored page. The default applies on the capture screen, in the default capture settings and in the device list, and the capture screen applies it as soon as the pages are saved. Saved orientations and stored captures do not change.
 - When a gphoto2 camera is connected but sends no image, the capture screen and the overview say "The camera is connected but is not sending an image" and tell the operator to turn the camera off and on again, and to unplug and replug its USB cable if that does not help. Captua shows the notice 30 seconds after the first answer without an image. Before, the camera was shown as not connected. The backend tries a failed frame once more, and closes the camera's session after ten seconds of failed frames.
+- Captua works out which kind of camera a unit has from what is connected: Pi cameras, Canon DSLR cameras or Canon A2500 cameras (CHDK). An admin can choose the kind in **Settings › Cameras**, or go back to detection. A change that needs it restarts Captua, after a confirmation. `CAMERA_BACKEND` is still read when it is set, and a choice made in Settings comes before it.
+- When the connected cameras are of another kind than the one the unit is set for, the capture screen says so and tells the operator to ask the admin. Diagnostics lists the kind in use, why, the drivers installed and what is connected.
+- After the backend stops in the middle of a capture, a Canon body that does not open gets one USB reset and one more attempt, with no action by the operator. The reset goes to that body's own USB socket. No body was left in that state in any bench run with this change, so the reset has run in tests and not yet on a camera that needed it.
+- Canon bodies are opened one at a time. Right after a body is opened, Captua discards the events the camera had queued for the process that stopped; a file announced among them is never taken as a page, and is not fetched or deleted.
+- Messages about a Canon body name the camera by its number, and by **left** or **right** when the unit knows it, and say what to do at the unit: wait and try again, switch the camera off and on, or ask the admin.
+- When a camera's image is turned 180 degrees from the default of its page, a notice says that the two cameras' pages are probably swapped and offers the camera step. **Check cameras** says which page the image marked odd/recto must show.
+
+### Colour card shots
+- A unit can ask for a photograph of a colour card with each camera, so that a volume's colours can be corrected later. The capture screen asks before a volume's first page, for a volume that already has pages and no shots, and after the ISO, shutter speed, aperture or zoom step of a camera is changed.
+- The step takes one shot per camera, shows each, and offers **Take again**. **Skip** records that the shots were skipped, after one confirmation. No page can be captured while shots are needed.
+- An admin turns the asking on and off with **Ask for colour card shots** in **Settings › Cameras**. It is off on a unit that updates to 0.3.0, and on for a unit set up with 0.3.0.
+- Shots are kept in the volume's `calibration` folder, outside the page sequence: page numbers, pairs, review and retakes are unaffected. They go to the offsite copy and to Fisqua with the volume, and are counted by export, by the free-space check, by freeing space and by the integrity check.
+- A volume that lacks its shots carries a flag in the lists of volumes and on its own page, where admins and operators can open the list of its groups of shots, with each group's delivery to the offsite copy.
+- On a camera set to automatic exposure, Captua cannot tell that the exposure changed, and does not ask again for that reason.
 
 ### The capture screen
 - On a unit that cannot show a continuous preview (T7 through gphoto2, A2500 through CHDK), the capture screen shows one frame per camera on entry and the pair just captured after each capture. **Refresh preview** fetches one frame per camera on request, and waits while a retake or a capture from the image window is in progress. Each pane is labelled **Last capture** or **Preview (not saved)**.
-- The capture key has its own dialog, **Capture pedal and key**, opened from a new keyboard button after the grid button. It is no longer in **Grid and guides**.
+- The capture key is assigned in Settings, in **Capture key** (see Settings and the network). It is no longer in **Grid and guides**.
 - With no key assigned, the space bar and `b` both start a capture. The foot pedal the project uses sends `b`. Assigning a key replaces both defaults, and Reset restores them. Letter case is ignored, so Caps Lock does not disable the pedal.
 - Camera orientation that fails to save is reported under the viewer, with the camera's name and a retry. Before, the failure went only to the console and the next visit showed the earlier orientation.
 - Captua records the camera model with each capture. A T7 is recorded as "Canon EOS Rebel T7". Before, every capture recorded "CameraConfig". Rows already written keep it.
 - A capture that takes longer than 10 seconds shows a line saying the camera is taking longer than usual and to wait. When the request gets no answer in time, the screen keeps every capture control locked and reads the volume's records again every 5 seconds, for up to 3 minutes, and then says either that the capture was saved or that none was. Before, it showed an error and freed the controls while the backend went on to store the capture, so a second press made a duplicate.
 - While any capture or test capture is running or being checked, no other can start, from the button, the pedal, the image window, **Capture another here**, **Check cameras** or **Refocus**. Thumbnails cannot be opened during a capture.
 - No capture can start until the volume's records have been read. If that read fails, the screen says so and offers **Retry**.
+- Each capture carries an id that the screen generates. When a capture request times out, the screen asks the unit about that capture and reports that it was saved, that it was not saved, or that Captua could not find out. A capture reported as not saved cannot be stored afterwards, so capturing again cannot make a duplicate.
+- When Captua cannot find out, the message names what to check for that kind of capture. The screen reads the volume's records again before it allows a capture, and blocks capture with **Retry** if that read fails. It keeps asking about the capture in the background for up to 15 minutes. A capture found saved that way updates the records, the last capture and the images, and moves nothing on the screen.
+- The capture screen opens in the mode of the volume's last record: one camera or two. An empty volume opens with two cameras. A retake or a fill is sent in the mode of the record being retaken.
+- The camera panel remembers, in the browser, whether it is open and which of its sections are open.
+- The capture screen opens with no volume, to check the cameras. In that view it shows the preview and **Check cameras**, has no capture button, and the capture key captures nothing. The Overview links to it for admins and operators.
+- A button beside the capture button retakes the last opening captured or retaken on this screen, after a confirmation. Captua reads the volume again first and retakes only if the record is unchanged; if it was changed on another screen, the screen says so and retakes nothing.
+- A capture writes to the notice at the top only while it is the latest capture started and the screen is still on the same volume. Before, a capture that finished late could clear a later capture's error.
 
 ### Canon PowerShot A2500 bodies (CHDK)
 - Captua keeps A2500 bodies awake and in shooting mode through a session.
@@ -127,6 +148,9 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - A join can take the unit off the network the browser uses. The dialog follows the join, and says when the unit went back to its previous network, when it cannot tell how the join ended, and when it cannot reach the unit.
 - On the overview, the storage warning links to **Storage** for admins. For other roles it tells them to ask the administrator.
 - The storage note in Settings says that every new image goes to the active drive, including for volumes started on internal storage, and that drives should be switched only between volumes, because a volume in progress would have its images split across two disks. The Spanish text of that section is reworded.
+- Settings has three more sections: **Cameras**, **Capture key** and **Language**.
+- The capture key is a setting of the unit: the key or pedal assigned in **Capture key** works from every browser. Admins and operators assign it. A key that a browser had assigned before the update is carried over once, if the unit has none.
+- Each person has a language, stored with their account and applied on any device they sign in from. **Language** in Settings sets it, and an admin sets the unit's language there. The sign-in page no longer has a language picker; it has a link to the credits.
 
 ### Storage
 - Operators can free space on the card. They could not before, and at a unit whose only administrator is the project's own account, nobody on site could act when the card filled. Restoring a volume to the card stays with administrators.
@@ -143,6 +167,11 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - A testing project has a capture format, JPEG unless **RAW and JPEG** is chosen. Real project names, stems and reference codes cannot begin with the reserved prefix `captua-testing-`. The backend gives each testing volume its stem, and a testing volume has no reference code.
 - The testing account can download a volume's pictures, and copy them to a USB drive with **Copy to USB drive**. The drive has to be an unmounted FAT32 or exFAT partition that shares no disk with the system or the projects. Each copy goes into a new folder, a copy that is running is found again after its dialog is closed, and the unit says when the drive can be removed.
 - When a user signs out of the testing account, the sessions of the others who use it continue. Deactivating the account or changing its password ends them all.
+
+### Setting up a new unit
+- On a unit with no account, the screen attached to the unit opens a set-up wizard: the language, the first admin's account, then the network. At the unit itself no bootstrap token is asked for. From another device, the form with the token remains.
+- The language chosen in the wizard becomes the unit's language, which the sign-in page uses.
+- When creating the account gets no answer, the wizard checks whether an account now exists and signs in with the name and password just entered. If the unit has an account that is not that one, the wizard says so.
 
 ### Sign-in
 - Captua keeps the sign-in in an httpOnly cookie instead of in the browser's storage and in addresses. A token an earlier version left in the browser is deleted, and the browser starts signed out. A page opened before the update shows no thumbnails, previews or downloads until it is reloaded.
@@ -172,6 +201,8 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - When a project cannot be deleted because it still holds volumes or files, an admin reads the reason in the interface language, with the number of volumes and records. Before, the English sentence from the backend was shown in Spanish too.
 - An error answer no longer repeats what was sent. A request with a missing or wrong field was answered with the values it carried, a password included.
 - A database error no longer puts a statement's values in the log.
+- A failed update could end as if it had succeeded and leave the previous version not restored. A `return` with no status in a function run from the script's exit handler took the status from before the handler on the Pi's bash 5.2. Every `return` in the scripts now states its status.
+- A retake or a fill could be stored against a record whose images had changed since the screen read them. The request names the images it expects, and Captua refuses it if they differ.
 
 ### Installing and updating
 - `update.sh` installs a polkit rule, `/etc/polkit-1/rules.d/40-captua-network.rules`, that lets the user `pi` scan, join and forget Wi-Fi networks through NetworkManager. It grants three actions and no others. **Network** uses it.
@@ -182,6 +213,9 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - A stop or restart of `dtk.service` is no longer logged as a failure. A crash still restarts the unit. The change reaches a unit only when `scripts/install-service.sh` runs.
 - nginx allows the two capture routes 300 seconds; every other route keeps 120. An update recreates the nginx container, so the new file is read.
 - `DTK_STORAGE_RESERVE_GB` sets the space Captua keeps for itself, in GB. The default is 2, and 0 keeps none.
+- From the second update to this version on, a unit shows a page saying that Captua is stopped for an update while `update.sh` or `rollback-update.sh` has the stack down, and an open screen reloads when Captua is back. On a short update the page covers only part of the time: on the bench, 4 of 18 seconds.
+- When a unit stops answering for any other reason, a banner on every page says so after three failed checks and offers **Reload**. Captua does not reload the page for that.
+- `.env.example` leaves `CAMERA_BACKEND` unset, so a new unit detects its cameras.
 
 ### For maintainers
 - The README sets the HTTPS rewrite for GitHub before cloning, so a fresh Pi without a GitHub key can fetch the submodules.
@@ -220,6 +254,11 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - A 422 for a request that failed validation carries `type`, `loc` and `msg` for each error, and no longer `input` or `ctx`.
 - The free plan, the free job's result, a volume's offsite state, the 410 for a freed file and the export refusal carry `restorable`.
 - The free routes (`GET` and `POST /collections/{id}/offsite/free`, `GET .../offsite/jobs/{job_id}`) admit operators.
+- The Fisqua manifest is version 1.12. It carries `calibrationStatus` (`present` or `skipped`) and `calibration`, the list of colour card shots with their camera, settings and digests. A unit with colour card shots off sends `calibrationStatus: "skipped"`.
+- Capture requests accept `client_capture_id`, a UUID. A repeated id is answered from the stored capture with `replayed: true`. `GET /cameras/capture-requests/{id}` answers the stored capture, `{"in_progress": true}`, 404 `not_found` or 410 `capture_no_longer_stored`. New refusals on capture: 409 `capture_in_progress`, `client_capture_id_in_use`, `capture_abandoned`, `capture_no_longer_stored`.
+- More new routes: `GET`, `PUT` and `DELETE /system/camera-kind`; `PUT /system/unit/capture-key`; `PUT /users/me/language`; `GET /collections/{id}/colour-card`, `POST …/colour-card/sets`, `POST …/sets/{set_id}/shots`, `POST …/sets/{set_id}/complete`, `POST …/colour-card/skip`, `GET …/shots/{shot_id}/preview`. `GET /auth/setup/status` also returns `local` and `default_language`. `GET /system/unit` also returns `defaultLanguage`, `captureKey` and `colourCardShots`.
+- Retake and fill requests accept `expected_image_ids` and are refused with 409 `record_changed` when the record's images differ.
+- `GET /cameras/devices` adds `default_orientation`, the rotation a camera has by default for the page it photographs.
 
 ## [0.2.0] - 2026-10-31
 
