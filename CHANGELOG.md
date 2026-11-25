@@ -6,13 +6,13 @@ The format is based on Keep a Changelog, and this project uses pre-1.0 semantic 
 
 ## [0.3.0]
 
-This release adds unit modes, which decide what a unit sends outside, and pairing a unit with Fisqua from Settings. It adds Fisqua's queue to Queue, openings and pages that were never captured, a step that records which camera photographs which page, and a check of the cameras. It adds Canon PowerShot A2500 bodies under CHDK, with RAW+JPEG capture on them and on the T7. It adds a Network section to Settings and a testing space with its own account. Operators can free space on the card, and Captua keeps a reserve for its own work. An administrator can set a user's password, and everyone can change their own. The browser session moves into a cookie, so everyone signs in again after the update. A new unit is set up from its own screen with a wizard, a unit can ask for colour card shots for each volume, an admin chooses the kind of camera in Settings, and each capture carries an id, so that a capture that timed out is neither lost nor taken twice.
+This release adds unit modes, which decide what a unit sends outside, and pairing a unit with Fisqua from Settings. It adds Fisqua's queue to Queue, openings and pages that were never captured, a step that records which camera photographs which page, and a check of the cameras. It adds Canon PowerShot A2500 bodies under CHDK, with RAW+JPEG capture on them and on the T7. It adds a Network section to Settings and a testing space with its own account. Operators can free space on the card, and Captua keeps a reserve for its own work. An administrator can set a user's password, and everyone can change their own. The browser session moves into a cookie, so everyone signs in again after the update. A new unit is set up from its own screen with a wizard, a unit can ask for color card shots for each volume, an admin chooses the kind of camera in Settings, and each capture carries an id, so that a capture that timed out is neither lost nor taken twice.
 
 ### Unit modes
 - **Unit mode** in Settings lets an admin choose one of three modes: **Scanner only**, **Offsite copy only** or Fisqua.
-- In **Scanner only**, Captua copies nothing to the bucket and makes no call to Fisqua. In **Offsite copy only**, Captua copies the images and the catalogue to the bucket and makes no call to Fisqua. In Fisqua mode, everything is on. Switching to a lower mode changes no data. Handovers queued at that moment go out after the unit returns to Fisqua mode.
-- At the first start after the update, Captua sets the mode the unit's configuration allows. Fisqua mode needs the offsite copy of the images, the offsite copy of the catalogue with a valid recipient, and the Fisqua link. **Offsite copy only** needs the first two. A unit with less starts in **Scanner only**.
-- A switch is refused, with the reason for each problem, when its prerequisites are missing. **Offsite copy only** needs the offsite copy and a catalogue copy with a valid recipient. Fisqua mode also needs the link and a reachable Fisqua. Leaving Fisqua mode asks for confirmation.
+- In **Scanner only**, Captua copies nothing to the bucket and makes no call to Fisqua. In **Offsite copy only**, Captua copies the images and the catalog to the bucket and makes no call to Fisqua. In Fisqua mode, everything is on. Switching to a lower mode changes no data. Handovers queued at that moment go out after the unit returns to Fisqua mode.
+- At the first start after the update, Captua sets the mode the unit's configuration allows. Fisqua mode needs the offsite copy of the images, the offsite copy of the catalog with a valid recipient, and the Fisqua link. **Offsite copy only** needs the first two. A unit with less starts in **Scanner only**.
+- A switch is refused, with the reason for each problem, when its prerequisites are missing. **Offsite copy only** needs the offsite copy and a catalog copy with a valid recipient. Fisqua mode also needs the link and a reachable Fisqua. Leaving Fisqua mode asks for confirmation.
 - Projects are hidden on every unit after the update, including units that already have projects. An admin can show them with **Use projects**, in **Scanner only** only. While they are hidden, the side menu has **Volumes** in place of **Projects**: one list of every volume, searchable by title, stem and reference code, and filterable by stage. A new volume goes into the unit's default project.
 - In Fisqua mode, operators cannot create volumes, change a stem or a reference code, or import a list. An admin can. Captua checks each reference code an admin gives with Fisqua and refuses one Fisqua does not know.
 - A volume can be kept on the unit: Captua does not copy its images to the bucket or send it to Fisqua until an admin includes it.
@@ -20,8 +20,8 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
   - In any mode, an admin can keep a volume with **Keep on this unit**, a box meant for test volumes, as long as no file of the volume has left the unit and it has not been sent to Fisqua.
   - Keeping and including apply to the volumes inside a volume.
   - Leaving **Scanner only** lists the kept volumes and asks whether to include them or keep them on the unit.
-  - The records of a kept volume still go to the bucket with the daily catalogue copy in **Offsite copy only** and in Fisqua mode. Its images stay on the unit.
-- The volume lines and the offsite and catalogue boxes in Settings say where Captua keeps the images and the catalogue in the current mode. In **Scanner only**, the catalogue shows **Catalogue on the scanner only** and is not marked late or overdue. The Fisqua box is hidden in modes that do not use the link.
+  - The records of a kept volume still go to the bucket with the daily catalog copy in **Offsite copy only** and in Fisqua mode. Its images stay on the unit.
+- The volume lines and the offsite and catalog boxes in Settings say where Captua keeps the images and the catalog in the current mode. In **Scanner only**, the catalog shows **Catalog on the scanner only** and is not marked late or overdue. The Fisqua box is hidden in modes that do not use the link.
 - In Fisqua mode, when an admin creates a volume with **Keep on this unit** unticked, the stem field searches Fisqua's descriptions once three characters are typed.
   - It lists up to 20 matches, each with its code, dates, level and full title.
   - Choosing a match fills the stem, and fills an empty name from the title.
@@ -54,22 +54,31 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - An opening that was never captured is shown as a placeholder: two empty pages under a dashed frame, with the label **Opening not captured**. Operators and admins can mark an opening as missing from the toolbar or from the gap between two tiles.
 - **To retake** is grouped by volume, in each volume's order. Placeholder rows offer **Capture** and "No opening here". Missing-page rows offer "No page here".
   - A record can be closed without capturing, for one of four reasons: a skip in the foliation, a leaf missing from the volume, captured elsewhere, or other. Other needs a note.
-  - A closed record turns grey, shows **Closed** and its reason, and is no longer pending.
+  - A closed record turns gray, shows **Closed** and its reason, and is no longer pending.
 - Capturing into a placeholder shows where the capture goes, between its neighbours, and the note from Fisqua's review. After the capture, **Capture another here** inserts the next opening after it, and **That was the last one** moves the guide on.
 - Before a volume is sent, Captua refuses a record that has an image on a side marked missing.
 - The retake window shows thumbnails first. **View full size** shows the full-size image, with pan and zoom, and **View thumbnails** returns to the thumbnails. The guided retake loads the thumbnails of the next two pending records ahead of time.
 - A retake of an opening with two cameras sends the camera swap. Before, a unit whose cameras were swapped recorded the retaken pages the wrong way round.
-- The retake band on the overview says the records were rejected in review or not captured in full, and that the turn is per volume. It said the digitisation list asked for them to be captured again.
+- The retake band on the overview says the records were rejected in review or not captured in full, and that the turn is per volume. It said the digitization list asked for them to be captured again.
 
-### Volumes digitised before Captua
+### Volumes digitized before Captua
 - A line of a rebuild bundle's `images.jsonl` can name the bucket of its source image: `zasqua-transition` or `zasqua-preservation`. Any other value is refused. A line without it names `zasqua-transition`, as before.
 - A bundle's `plan.json` can carry `indexOffset`, from 0 to 9999. The rebuilt volume's files are then numbered after the records they replace, so no bucket key is reused.
 - A plan record can mark an opening with one image as missing a side, with `{"mode": "dual", "missingSide": ...}`.
 
 ### Moving captures into the volume Fisqua assigned
-- An administrator can move the captures of a volume made by hand into the empty volume that Fisqua assigned. Captua renames the files, moves the records and the colour card shots, and uploads the files again under the new names. This release has no screen for it yet: it is available through the API.
+- An administrator can move the captures of a volume made by hand into the empty volume that Fisqua assigned. Captua renames the files, moves the records and the color card shots, and uploads the files again under the new names.
 - If the move is interrupted, Captua finishes it or undoes it when the unit next starts. If it can do neither, an administrator can ask Captua to fetch the missing file again from the offsite copy and settle the move.
 - The emptied volume takes no new captures and can be deleted.
+- An administrator starts the move from the hand-made volume's page: Captua shows the plan, or each reason the move cannot run, before anything changes.
+- If the answer to a move is lost, for example on a slow connection, Captua asks the unit what became of it and shows that. It does not offer a second move until the first is settled.
+- A notice on the Overview and on the two volumes tells administrators when a move was interrupted and could not be finished or undone. Repair fetches the missing file from the offsite copy and settles the move.
+
+### The Overview
+- The Overview is rebuilt for the unit's own screen and for a large monitor: one column on the unit, two on a monitor.
+- A "Needs attention" block lists what needs someone: a camera that is not detected or cannot capture, cameras of another kind than the unit is set up for, storage that is nearly full, and volumes with retakes.
+- The camera preview, Focus and Test capture are no longer on the Overview. "Check cameras" opens the camera check, which does all three.
+- The storage notice says how much space can be freed.
 
 ### Cameras and set-up
 - Cameras are named by where each stands, **Left camera** and **Right camera**, and pages by **odd/recto** and **even/verso**. The left camera photographs the odd/recto page. Every image of a page shows both names, in short form where space is small. Before, the interface called the pages left and right and named each camera after its page, so "left camera" was the camera on the right.
@@ -100,16 +109,16 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - Messages about a Canon body name the camera by its number, and by **left** or **right** when the unit knows it, and say what to do at the unit: wait and try again, switch the camera off and on, or ask the admin.
 - When a camera's image is turned 180 degrees from the default of its page, a notice says that the two cameras' pages are probably swapped and offers the camera step. **Check cameras** says which page the image marked odd/recto must show.
 
-### Colour card shots
-- A unit can ask for a photograph of a colour card with each camera, so that a volume's colours can be corrected later. The capture screen asks before a volume's first page, for a volume that already has pages and no shots, and after the ISO, shutter speed, aperture or zoom step of a camera is changed.
+### Color card shots
+- A unit can ask for a photograph of a color card with each camera, so that a volume's colors can be corrected later. The capture screen asks before a volume's first page, for a volume that already has pages and no shots, and after the ISO, shutter speed, aperture or zoom step of a camera is changed.
 - The step takes one shot per camera, shows each, and offers **Take again**. **Skip** records that the shots were skipped, after one confirmation. No page can be captured while shots are needed.
-- An admin turns the asking on and off with **Ask for colour card shots** in **Settings › Cameras**. It is off on a unit that updates to 0.3.0, and on for a unit set up with 0.3.0.
+- An admin turns the asking on and off with **Ask for color card shots** in **Settings › Cameras**. It is off on a unit that updates to 0.3.0, and on for a unit set up with 0.3.0.
 - Shots are kept in the volume's `calibration` folder, outside the page sequence: page numbers, pairs, review and retakes are unaffected. They go to the offsite copy and to Fisqua with the volume, and are counted by export, by the free-space check, by freeing space and by the integrity check.
 - A volume that lacks its shots carries a flag in the lists of volumes and on its own page, where admins and operators can open the list of its groups of shots, with each group's delivery to the offsite copy.
 - On a camera set to automatic exposure, Captua cannot tell that the exposure changed, and does not ask again for that reason.
 
 ### The capture screen
-- On a unit that cannot show a continuous preview (T7 through gphoto2, A2500 through CHDK), the capture screen shows one frame per camera on entry and the pair just captured after each capture. **Refresh preview** fetches one frame per camera on request, and waits while a retake or a capture from the image window is in progress. Each pane is labelled **Last capture** or **Preview (not saved)**.
+- On a unit that cannot show a continuous preview (T7 through gphoto2, A2500 through CHDK), the capture screen shows one frame per camera on entry and the pair just captured after each capture. **Refresh preview** fetches one frame per camera on request, and waits while a retake or a capture from the image window is in progress. Each pane is labeled **Last capture** or **Preview (not saved)**.
 - The capture key is assigned in Settings, in **Capture key** (see Settings and the network). It is no longer in **Grid and guides**.
 - With no key assigned, the space bar and `b` both start a capture. The foot pedal the project uses sends `b`. Assigning a key replaces both defaults, and Reset restores them. Letter case is ignored, so Caps Lock does not disable the pedal.
 - Camera orientation that fails to save is reported under the viewer, with the camera's name and a retry. Before, the failure went only to the console and the next visit showed the earlier orientation.
@@ -196,8 +205,11 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
   - In Fisqua mode, an operator has five steps: **Choose a volume** in Queue; **Capture** beside the volume in Queue; sending to review; following the review, with the Fisqua status in the volume's top bar; and export. An admin has the steps for **Volumes**.
 
 ### Fixes
+- After a start, the Overview no longer says that no camera is detected while the unit is still finding its cameras.
+- On the unit's screen in Spanish, the buttons in a volume's top bar overlapped. The title is now shortened to make room.
+- Storage sizes are counted the same way on the Overview and in Settings, in the units that drives are labeled with. A disk that read 466 GB / 507 GB now reads 500 GB / 544 GB.
 - An empty `CAPTUA_<X>` setting no longer hides `DTK_<X>`, and a bare `CAPTUA_X` line in an env file counts as unset. Before, an empty number or boolean setting stopped the backend from starting.
-- The banners for a missing stem, a capture error and a lost connection are centred without halving their width. On the unit's narrow feed, the missing-stem banner wrapped a word per line.
+- The banners for a missing stem, a capture error and a lost connection are centered without halving their width. On the unit's narrow feed, the missing-stem banner wrapped a word per line.
 - At 800x480, the floating controls on the capture screen fold into a grid, and every button stays on screen.
 - Live settings changed within the same 200 ms are all sent, to the camera they were made for. Before, a pending change of another kind was dropped.
 - Every button on the capture screen has an accessible name, including the grid and guide-line toggles.
@@ -229,6 +241,7 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - The frontend is formatted with Prettier, and CI checks the formatting. Run `npx prettier --write .` before pushing.
 
 ### For integrators
+- `POST /collections/{source}/adopt-into/{target}` accepts `client_request_id`. `GET /system/adoption/requests/{id}` reports what became of that request. `GET /system/adoption` reports what holds the adoption lock, and the repair accepts `run_id`.
 - New routes:
   - `GET` and `PUT /system/unit`
   - `GET /system/pairing`, `POST /system/pairing`, `POST /system/pairing/renew`, `DELETE /system/pairing`
@@ -259,7 +272,7 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 - A 422 for a request that failed validation carries `type`, `loc` and `msg` for each error, and no longer `input` or `ctx`.
 - The free plan, the free job's result, a volume's offsite state, the 410 for a freed file and the export refusal carry `restorable`.
 - The free routes (`GET` and `POST /collections/{id}/offsite/free`, `GET .../offsite/jobs/{job_id}`) admit operators.
-- The Fisqua manifest is version 1.12. It carries `calibrationStatus` (`present` or `skipped`) and `calibration`, the list of colour card shots with their camera, settings and digests. A unit with colour card shots off sends `calibrationStatus: "skipped"`.
+- The Fisqua manifest is version 1.12. It carries `calibrationStatus` (`present` or `skipped`) and `calibration`, the list of color card shots with their camera, settings and digests. A unit with color card shots off sends `calibrationStatus: "skipped"`.
 - Capture requests accept `client_capture_id`, a UUID. A repeated id is answered from the stored capture with `replayed: true`. `GET /cameras/capture-requests/{id}` answers the stored capture, `{"in_progress": true}`, 404 `not_found` or 410 `capture_no_longer_stored`. New refusals on capture: 409 `capture_in_progress`, `client_capture_id_in_use`, `capture_abandoned`, `capture_no_longer_stored`.
 - More new routes: `GET`, `PUT` and `DELETE /system/camera-kind`; `PUT /system/unit/capture-key`; `PUT /users/me/language`; `GET /collections/{id}/colour-card`, `POST …/colour-card/sets`, `POST …/sets/{set_id}/shots`, `POST …/sets/{set_id}/complete`, `POST …/colour-card/skip`, `GET …/shots/{shot_id}/preview`. `GET /auth/setup/status` also returns `local` and `default_language`. `GET /system/unit` also returns `defaultLanguage`, `captureKey` and `colourCardShots`.
 - Retake and fill requests accept `expected_image_ids` and are refused with 409 `record_changed` when the record's images differ.
