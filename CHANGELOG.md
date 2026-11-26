@@ -206,6 +206,7 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 
 ### Fixes
 - After a start, the Overview no longer says that no camera is detected while the unit is still finding its cameras.
+- On a volume's page, the row and the notice under the top bar now have their margins, the bar no longer cuts off its second status line, and the notice about an interrupted move shows its heading first.
 - On the unit's screen in Spanish, the buttons in a volume's top bar overlapped. The title is now shortened to make room.
 - Storage sizes are counted the same way on the Overview and in Settings, in the units that drives are labeled with. A disk that read 466 GB / 507 GB now reads 500 GB / 544 GB.
 - An empty `CAPTUA_<X>` setting no longer hides `DTK_<X>`, and a bare `CAPTUA_X` line in an env file counts as unset. Before, an empty number or boolean setting stopped the backend from starting.
