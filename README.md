@@ -1,6 +1,6 @@
 # Captua
 
-![Version](https://img.shields.io/badge/version-0.2.0-orange)
+![Version](https://img.shields.io/badge/version-0.3.0-orange)
 
 **Captua** is the software of the **Digitization Toolkit**, an integrated toolkit of hardware, software, and documentation that allows lower-resourced institutions, collectives, and communities to digitize their archival collections at low cost.
 
@@ -15,7 +15,7 @@ The project builds on a decade of community-based digitization work in the Globa
 
 ## Status
 
-> Captua is in active development. Current release: [0.2.0](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.2.0), which brings an archive's digitisation lists and the records waiting to be retaken onto the unit. [0.1.0-beta](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.1.0-beta) was the first release built to be tested in day-to-day operation in an archive. It is tested on one configuration: a Captua unit with two Canon EOS Rebel T7 cameras connected over gphoto2, and a monitor, keyboard and mouse.
+> Captua is in active development. Current release: [0.3.0](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.3.0), which lets an administrator choose what a unit sends outside, pair a unit with Fisqua from Settings, and work from Fisqua's queue. [0.1.0-beta](https://github.com/UCSB-AMPLab/digitization-toolkit-software/releases/tag/0.1.0-beta) was the first release built to be tested in day-to-day operation in an archive. It is tested on one configuration: a Captua unit with two Canon EOS Rebel T7 cameras connected over gphoto2, and a monitor, keyboard and mouse.
 
 ## Release History
 
@@ -101,7 +101,9 @@ sudo usermod -aG docker $USER          # re-login for this to take effect
 # (keep in lockstep with PIXI_VERSION in scripts/setup.sh)
 curl -fsSL https://pixi.sh/install.sh | PIXI_VERSION=v0.73.0 bash
 
-# 1. Clone the repository
+# 1. Clone the repository. The submodules are registered over SSH; this makes
+#    git fetch them over HTTPS, so the clone needs no GitHub key
+git config --global url."https://github.com/".insteadOf "git@github.com:"
 git clone --recurse-submodules https://github.com/UCSB-AMPLab/digitization-toolkit-software.git ~/dtk
 cd ~/dtk
 
@@ -127,7 +129,7 @@ From another machine on the network, the unit answers at `http://captua.local`.
 
 > **Do the first run camera-less.** Complete steps 0–5 and pass the health
 > checks above with no cameras attached, then connect the cameras (see the
-> camera setup guides under `docs/`) and re-verify. When something fails,
+> camera guides at [captua.org/docs/cameras](https://captua.org/docs/cameras/)) and re-verify. When something fails,
 > this isolates the fault to the camera layer instead of the whole build.
 
 ### Creating an SD card image
@@ -181,13 +183,13 @@ git pull
 git submodule update --init --recursive
 ```
 
-Do not use `--remote` here: it moves the submodules to their branch tips instead of the tested commits the superproject records. `--remote` belongs only to the deliberate pointer bump — see the [Git workflow](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki/Git-workflow) wiki.
+Do not use `--remote` here: it moves the submodules to their branch tips instead of the tested commits the superproject records. `--remote` belongs only to the deliberate pointer bump — see the [Git workflow](https://captua.org/docs/developers/git-workflow/) guide.
 
 ***
 
 ## Development Documentation
 
-See the [wiki](https://github.com/UCSB-AMPLab/digitization-toolkit-software/wiki) for detailed developer guides and API references.
+The guides for operators, deployment and development, and the API reference, are at [captua.org/docs](https://captua.org/docs/) (in Spanish at [captua.org/guia](https://captua.org/guia/)).
 
 ## Credits and Acknowledgments
 
@@ -197,7 +199,7 @@ Captua has been made possible in part by a major grant from the National Endowme
 
 Any views, findings, conclusions, or recommendations expressed in this software do not necessarily represent those of the National Endowment for the Humanities.
 
-<img src="docs/_static/imgs/neh-preferred-seal.jpg" alt="National Endowment for the Humanities" width="250">
+<img src="assets/neh-preferred-seal.jpg" alt="National Endowment for the Humanities" width="250">
 
 ## License
 

@@ -19,6 +19,20 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# The update page (dtk-system-helper's update-page-start), which may be up
+# after a failed update with dtk stopped. Stopped first, while the helper and
+# the drop-in still exist: through the helper, then directly, in case the
+# helper or its verb is missing. Its runtime copy, marker and lock in /run go
+# with it. The helper is not removed here, so neither is the installed page
+# in /usr/local/share/dtk-update-page beside it.
+echo "→ Stopping the update page..."
+if [ -x /usr/local/bin/dtk-system-helper ]; then
+    /usr/local/bin/dtk-system-helper update-page-stop >/dev/null 2>&1 || true
+fi
+systemctl stop dtk-update-page.service >/dev/null 2>&1 || true
+rm -rf /run/dtk-update-page
+rm -f /run/dtk-update-page.wanted /run/dtk-update-page.lock
+
 if systemctl is-active --quiet dtk.service; then
     echo "→ Stopping service..."
     systemctl stop dtk.service
@@ -54,6 +68,12 @@ fi
 if [ -e "$SYSTEMD_DIR/dtk.service.d/unresolved.conf" ]; then
     echo "→ Removing the unresolved-update start condition..."
     rm -f "$SYSTEMD_DIR/dtk.service.d/unresolved.conf"
+    rmdir "$SYSTEMD_DIR/dtk.service.d" 2>/dev/null || true
+fi
+# The update page's stop before every start (install-system-helper.sh).
+if [ -e "$SYSTEMD_DIR/dtk.service.d/update-page.conf" ]; then
+    echo "→ Removing the update page's start hook..."
+    rm -f "$SYSTEMD_DIR/dtk.service.d/update-page.conf"
     rmdir "$SYSTEMD_DIR/dtk.service.d" 2>/dev/null || true
 fi
 if [ -d /etc/dtk ]; then

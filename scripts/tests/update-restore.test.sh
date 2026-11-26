@@ -25,13 +25,16 @@
 #   curl       answers /health when the unit is active and the version
 #              started is one the case calls healthy.
 #   chown, sleep, ss   do nothing (ss reports the db port listening).
+#   dtk-system-helper  (the update page's verbs) records each call; systemctl
+#              also logs "page-marker present" after any call made while
+#              update.sh's or rollback-update.sh's update-page marker exists.
 #   install    GNU-style install -D, which macOS lacks.
 #   pgrep      finds no backend process, unless a case says one is stuck.
 #
 # Each case states the failure it injects, through the fakes or through
 # update.sh's test-only DTK_UPDATE_FAIL_AT.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 
@@ -106,6 +109,7 @@ printf '#!/bin/sh\n[ "$1" = -D ] && shift\nmkdir -p "$(dirname "$2")" && cp "$1"
 cat > "$FAKEBIN/systemctl" <<'EOF'
 #!/bin/bash
 echo "systemctl $*" >> "$CASE_DIR/log"
+[ ! -e "$DTK_TEST_STATE/dtk-update-page.wanted" ] || echo "page-marker present" >> "$CASE_DIR/log"
 S="$CASE_DIR/sys"
 case "$1" in
     is-active) [ -f "$S/active" ] ;;
@@ -384,12 +388,18 @@ git init -q "$UP/super"
 mkdir -p "$UP/super/scripts"
 # /var/lib/dtk, /etc/dtk and /etc/systemd/system all point into the case's
 # state directory.
-TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g; s#/run/dtk-update.lock#$DTK_TEST_STATE/dtk-update.lock#g'
+TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g; s#/run/dtk-update.lock#$DTK_TEST_STATE/dtk-update.lock#g; s#/run/dtk-update-page.wanted#$DTK_TEST_STATE/dtk-update-page.wanted#g'
+# The update page's helper: a fake that records each call.
+TESTPATHS="$TESTPATHS; s#/usr/local/bin/dtk-system-helper#$FAKEBIN/dtk-system-helper#g"
+printf '#!/bin/sh\necho "helper $*" >> "$CASE_DIR/log"\nexit 0\n' > "$FAKEBIN/dtk-system-helper"
+chmod +x "$FAKEBIN/dtk-system-helper"
 sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
 sed "$TESTPATHS" "$SCRIPTS/rollback-update.sh" > "$UP/super/scripts/rollback-update.sh"
 cp "$SCRIPTS/captua-env.sh" "$UP/super/scripts/captua-env.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-chdk-usb.sh"
 printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/provision-rclone.sh"
+printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/install-network-permissions.sh"
+printf '#!/bin/sh\nexit 0\n' > "$UP/super/scripts/install-system-helper.sh"
 # Records its calls. The switch writes what the real one writes inside the
 # unit's reach: HOST_IP in the checkout's .env (when there is one) and the
 # record in /etc/dtk, both places a restore or rollback works in, so a
@@ -521,6 +531,44 @@ before()  {  # before <a> <b>: a is logged, b is logged, a first
     if [ -n "$a" ] && [ -n "$b" ] && [ "$a" -lt "$b" ]; then ok "'$1' before '$2'"; else fail "'$1' (line ${a:-none}) not before '$2' (line ${b:-none})"; fi
 }
 
+# page_checks <stopped|failed> [after-stop]: the update page across the run.
+# The marker first appears at update.sh's (or the rollback's) stop of dtk;
+# the page is asked for after the stack is torn down; every start of dtk
+# after that is preceded, immediately, by update-page-stop; at the end the
+# page is stopped, or (failed) its last call is update-page-start; and the
+# marker is gone. With after-stop the run did not stop an active dtk (its
+# stop is a no-op), so only the order after the stop is checked.
+page_checks() {
+    local stop down first l prev last bad=0
+    stop="$(line_of "systemctl stop dtk")"
+    if [ "${2:-}" != after-stop ]; then
+        eq "$(line_of "page-marker present")" "$(( ${stop:-0} + 1 ))" "the page marker first exists at the stop of dtk"
+    fi
+    down="$(awk -v s="${stop:-0}" 'NR > s && /compose .*down/ { print NR; exit }' "$CASE_DIR/log")"
+    first="$(grep -n -x 'helper update-page-start' "$CASE_DIR/log" | head -n 1 | cut -d: -f1)"
+    if [ -n "$stop" ] && [ -n "$down" ] && [ -n "$first" ] && [ "$first" -gt "$down" ]; then
+        ok "the page is asked for after the stop and the teardown"
+    else
+        fail "page start at ${first:-none}, stop at ${stop:-none}, teardown at ${down:-none}"
+    fi
+    for l in $(grep -n '^systemctl start dtk' "$CASE_DIR/log" | cut -d: -f1); do
+        [ "$l" -gt "${stop:-0}" ] || continue
+        prev="$(sed -n "$((l - 1))p" "$CASE_DIR/log")"
+        [ "$prev" = "helper update-page-stop" ] || { bad=1; fail "start of dtk at line $l follows '$prev', not update-page-stop"; }
+    done
+    [ "$bad" -eq 1 ] || ok "every start of dtk follows update-page-stop"
+    last="$(grep '^helper ' "$CASE_DIR/log" | tail -n 1)"
+    case "$1" in
+        stopped) eq "$last" "helper update-page-stop" "the page is stopped at the end" ;;
+        failed)  eq "$last" "helper update-page-start" "the page is left up, in its failed state" ;;
+    esac
+    if [ -e "$DTK_TEST_STATE/dtk-update-page.wanted" ]; then fail "the page marker remains"; else ok "no page marker"; fi
+}
+no_page() {
+    unlogged "helper update-page"
+    unlogged "page-marker present"
+}
+
 echo "update.sh restore paths"
 
 # ── Success path ────────────────────────────────────────────────────────────
@@ -539,6 +587,7 @@ has "Service running and the backend answers /health"
 hasnt "UPDATE FAILED"
 hasnt "Restored to the previous version"
 no_marker
+page_checks stopped
 eq "$(cat "$DTK_TEST_STATE/backups/last-deployed-SHA")" "$SHA_B" "last-deployed-SHA names B"
 eq "$(sed -n 's/^image: //p' "$DTK_TEST_STATE/backups/last-deployed-frontend")" "$NEW_IMG" "last-deployed-frontend names the new image"
 eq "$(cat "$CASE_DIR/docker/tag_dtk-frontend_pre-update-"* 2>/dev/null)" "$OLD_IMG" "the old image is kept under a pre-update tag"
@@ -550,6 +599,9 @@ if gunzip -c "$(dump_name)" | grep -q "^-- dump 2 "; then ok "the kept dump is t
 # ── Failure in the frontend build (before the stop) ─────────────────────────
 FAKE_BUILD_FAIL=1 run_case "build fails" --yes
 eq "$RC" 1 "exit status"
+# A failure, or a backend crash and systemd's restart of it, before the
+# deliberate stop shows no page.
+no_page
 head_is "$SHA_A" A
 backend_is "$BACKEND_A" A
 tag_is "$OLD_IMG" "the old image"
@@ -622,6 +674,8 @@ g -C "$PROJECT_ROOT" checkout -q dev
 CASE="resolve forward: accepted"
 FAKE_KIOSK=1 run_again "$PROJECT_ROOT/scripts/update.sh" --resolve-forward
 eq "$RC" 0 "exit status"
+before "helper update-page-stop" "systemctl start dtk"
+eq "$(sed -n "$(( $(line_of "systemctl start dtk") - 1 ))p" "$CASE_DIR/log")" "helper update-page-stop" "the page is stopped right before the start"
 has "Recorded $SHA_B as the deployed version"
 has "online on $SHA_B"
 before "systemctl start dtk" "pkill -u $(whoami) -x cage"
@@ -729,6 +783,7 @@ hasnt "Nothing changed."
 # ── Failure in the migration ────────────────────────────────────────────────
 FAKE_MIGRATE_FAIL=1 FAKE_WRITE_BEFORE_STOP=1 run_case "migration fails" --yes
 eq "$RC" 1 "exit status"
+page_checks stopped
 head_is "$SHA_A" A
 backend_is "$BACKEND_A" A
 tag_is "$OLD_IMG" "the old image"
@@ -781,6 +836,7 @@ started_failure_checks() {
 }
 FAKE_HEALTHY_VERSIONS="A" run_case "health fails after start" --yes
 started_failure_checks
+page_checks failed
 has "did not become healthy"
 
 CASE="then update.sh again"
@@ -1166,6 +1222,7 @@ CASE="rollback whose load fails: the rollback"
 FAKE_RESTORE_FAIL=1 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
 eq "$RC" 1 "exit status"
 marker_has "kind: restore-failed"
+page_checks failed
 has "update.sh refuses to run and dtk will"
 inactive
 CASE="rollback whose load fails: update.sh refuses"
@@ -1181,6 +1238,7 @@ run_case "rollback that succeeds leaves nothing" --yes
 CASE="rollback that succeeds leaves nothing: the rollback"
 run_again "$PROJECT_ROOT/scripts/rollback-update.sh" --yes "$(dump_name)"
 eq "$RC" 0 "exit status"
+page_checks stopped
 no_marker
 if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "a start flag remains"; else ok "no start flag"; fi
 active

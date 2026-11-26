@@ -13,7 +13,7 @@
 # secret .env.example ships must read as a placeholder, and so must every value
 # it has shipped before, since an older card can still carry one.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -u
 
@@ -79,7 +79,7 @@ expect_placeholder is_placeholder_bootstrap "$(get_env BOOTSTRAP_TOKEN)" "BOOTST
 
 # ── What the repo has shipped before ────────────────────────────────────────
 # SECRET_KEY: .env.example until 2026-07-25, the backend's built-in default,
-# and the example block in docs/developers/API_REFERENCE.md.
+# and the example block in the API reference (https://captua.org/docs/developers/api-reference/).
 CASE="SECRET_KEY placeholders"
 for v in "" \
          "your-secret-key-here-change-in-production" \

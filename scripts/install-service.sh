@@ -2,7 +2,7 @@
 # Install Digitization Toolkit as a systemd service
 # This enables auto-start on boot and proper service management
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -e
 
@@ -76,6 +76,12 @@ echo "→ Configuring storage mount permissions..."
 # install-system-helper.sh also creates /var/lib/dtk/mounts (root:root 0755);
 # it must NOT be chowned to pi — see the ownership invariant in that script.
 "$SCRIPT_DIR/install-system-helper.sh"
+
+echo "→ Configuring Wi-Fi permissions..."
+# The backend runs as pi and joins or forgets Wi-Fi networks through nmcli;
+# NetworkManager refuses those calls from a process outside a local session
+# unless a polkit rule grants them.
+"$SCRIPT_DIR/install-network-permissions.sh"
 
 echo "→ Reloading systemd daemon..."
 systemctl daemon-reload

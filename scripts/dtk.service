@@ -41,6 +41,12 @@ ExecStartPost=/home/pi/dtk/scripts/check-stack-health.sh
 
 Restart=on-failure
 RestartSec=10s
+# stop.sh ends the backend with SIGTERM, `pixi run start` then returns 143
+# (128 + SIGTERM), and start.sh exits with it as its last command. Without this
+# line every ordinary stop or restart is logged as "Failed with result
+# 'exit-code'", which hides a real failure among the routine ones. A crash
+# exits with another code and still restarts the unit.
+SuccessExitStatus=143
 
 StandardOutput=journal
 StandardError=journal
