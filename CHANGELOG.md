@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, and this project uses pre-1.0 semantic versioning.
 
-## [0.3.0]
+## [0.3.0] - 2026-11-25
 
 This release adds unit modes, which decide what a unit sends outside, and pairing a unit with Fisqua from Settings. It adds Fisqua's queue to Queue, openings and pages that were never captured, a step that records which camera photographs which page, and a check of the cameras. It adds Canon PowerShot A2500 bodies under CHDK, with RAW+JPEG capture on them and on the T7. It adds a Network section to Settings and a testing space with its own account. Operators can free space on the card, and Captua keeps a reserve for its own work. An administrator can set a user's password, and everyone can change their own. The browser session moves into a cookie, so everyone signs in again after the update. A new unit is set up from its own screen with a wizard, a unit can ask for color card shots for each volume, an admin chooses the kind of camera in Settings, and each capture carries an id, so that a capture that timed out is neither lost nor taken twice.
 
@@ -77,7 +77,7 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 ### The Overview
 - The Overview is rebuilt for the unit's own screen and for a large monitor: one column on the unit, two on a monitor.
 - A "Needs attention" block lists what needs someone: a camera that is not detected or cannot capture, cameras of another kind than the unit is set up for, storage that is nearly full, and volumes with retakes.
-- The camera preview, Focus and Test capture are no longer on the Overview. "Check cameras" opens the camera check, which does all three.
+- The camera preview and the "Focus" and "Test" buttons are no longer on the Overview. They are in the camera check. Press "Check cameras" to open it.
 - The storage notice says how much space can be freed.
 
 ### Cameras and set-up
