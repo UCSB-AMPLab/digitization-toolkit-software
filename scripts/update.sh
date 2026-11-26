@@ -75,7 +75,7 @@
 # start, default 300) and CAPTUA_UPDATE_HEALTH_POLL (seconds between tries,
 # default 5). Both also answer to their DTK_ names.
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -e
 
@@ -215,6 +215,8 @@ UNRESOLVED_FILE="$BACKUP_DIR/unresolved-deployment"
 UNRESOLVED_FLAG_DIR="/etc/dtk"
 UNRESOLVED_FLAG="$UNRESOLVED_FLAG_DIR/unresolved-deployment"
 UNRESOLVED_DROPIN="/etc/systemd/system/dtk.service.d/unresolved.conf"
+SYSTEM_HELPER="/usr/local/bin/dtk-system-helper"
+UPDATE_PAGE_MARKER="/run/dtk-update-page.wanted"
 # Frontend image that was serving when LAST_DEPLOYED_SHA_FILE's commit was
 # successfully deployed ("sha:" and "image:" lines; written only on success).
 LAST_DEPLOYED_FRONTEND_FILE="$BACKUP_DIR/last-deployed-frontend"
@@ -901,6 +903,47 @@ clear_unresolved_marker() {
     rm -f "$UNRESOLVED_FILE" "$UNRESOLVED_FLAG" 2>/dev/null || true
 }
 
+# The update page (scripts/update-page), served on port 80 by
+# dtk-system-helper while update.sh has the stack down. This script owns
+# it; nothing else starts it. mark_update_page writes the marker the helper
+# requires (root's, in /run) immediately before the deliberate stop of dtk,
+# so a crash of the backend before then, and systemd's restart of it, show
+# nothing. show_update_page asks for the page once the stack is down.
+# end_update_page stops it and removes the marker, immediately before every
+# start of dtk, so port 80 is free for nginx. show_update_page_if_unresolved
+# runs on exit: with the unresolved flag left, the page stays up (or comes
+# up) saying the update failed; otherwise a page this run wanted is stopped.
+#
+# Each call tolerates a helper without the verbs, or none, and never changes
+# how the script ends. Since the update.sh that runs an update is the copy
+# from before its pull, the page first appears on the update after the one
+# that installs this code: from then on this script, the helper and start.sh
+# all know the page, and so does any version a failed update restores.
+mark_update_page() {
+    ( umask 022; : > "$UPDATE_PAGE_MARKER" ) 2>/dev/null || true
+}
+show_update_page() {
+    if [ -x "$SYSTEM_HELPER" ]; then
+        "$SYSTEM_HELPER" update-page-start >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+end_update_page() {
+    if [ -x "$SYSTEM_HELPER" ]; then
+        "$SYSTEM_HELPER" update-page-stop >/dev/null 2>&1 || true
+    fi
+    rm -f "$UPDATE_PAGE_MARKER" 2>/dev/null || true
+}
+show_update_page_if_unresolved() {
+    if [ -e "$UNRESOLVED_FLAG" ]; then
+        rm -f "$UPDATE_PAGE_MARKER" 2>/dev/null || true
+        show_update_page
+    elif [ -e "$UPDATE_PAGE_MARKER" ]; then
+        end_update_page
+    fi
+    return 0
+}
+
 # write_unresolved_marker [started-failed|restore-failed|restore-refused|migrated-not-restored]
 # Record the unresolved state (see UNRESOLVED_FILE): root's alone, 0600 from
 # the start, written to a temporary name and renamed.
@@ -940,8 +983,11 @@ write_unresolved_marker() {
              echo "recorded-at: $(date +%Y-%m-%dT%H:%M:%S%z)"
          } > "$UNRESOLVED_FILE.tmp" ) 2>/dev/null \
          && mv -f "$UNRESOLVED_FILE.tmp" "$UNRESOLVED_FILE" 2>/dev/null; then
-        [ "$guard_ok" -eq 1 ]
-        return
+        # An explicit status: this runs inside the EXIT trap, where bash 5 gives a
+        # `return` with no argument the status from before the trap (the failed
+        # update's), not the status of the line above it.
+        [ "$guard_ok" -eq 1 ] && return 0
+        return 1
     fi
     rm -f "$UNRESOLVED_FILE.tmp" 2>/dev/null || true
     return 1
@@ -1032,7 +1078,7 @@ restore_after_stop() {
         else
             report_started_failure running
         fi
-        return
+        return 0
     fi
     echo ""
     echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
@@ -1080,7 +1126,7 @@ restore_after_stop() {
             echo "      sudo systemctl start dtk"
         fi
         echo ""
-        return
+        return 0
     fi
     if ! restore_frontend_image; then
         # The previous version will start with whatever the tag holds now, not
@@ -1121,7 +1167,7 @@ restore_after_stop() {
         fi
         warn_if_restored_update_ignores_record
         echo ""
-        return
+        return 0
     fi
 
     if [ -e "$UNRESOLVED_FLAG" ]; then
@@ -1131,9 +1177,10 @@ restore_after_stop() {
         echo "    and while it does systemd does not start dtk. ${UNRESOLVED_KIND:+(record: $UNRESOLVED_KIND)}"
         echo "    Check $UNRESOLVED_FILE before removing it."
         echo ""
-        return
+        return 0
     fi
     echo "→ Starting the previous version..."
+    end_update_page
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
     if wait_for_health "$HEALTH_TIMEOUT"; then
@@ -1301,6 +1348,7 @@ on_exit() {
     fi
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
         restore_after_stop
+        show_update_page_if_unresolved
         end_trap "$rc"
     fi
     if [ "$RESTORE_ARMED" -eq 1 ]; then
@@ -1460,9 +1508,11 @@ resolve_forward() {
         echo "  --no-start: the unit is left stopped. Deploy the fixed version with an"
         echo "  ordinary update now:"
         echo "      sudo $SCRIPT_DIR/update.sh"
+        end_update_page
         return 0
     fi
     echo "→ Starting the service..."
+    end_update_page
     systemctl start dtk 2>/dev/null || true
     echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."
     local healthy=0 img
@@ -2216,6 +2266,47 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 4e. Wi-Fi permissions: the polkit rule that lets pi, the user the backend
+#     runs as, scan, join and forget Wi-Fi networks through NetworkManager.
+#     setup.sh runs once, at first provisioning, so an appliance already in
+#     the field receives the rule from update.sh. Without the rule, joining a
+#     network from Captua's settings is refused on such a unit.
+#     update.sh keeps running its old copy after it pulls (NEH-337), so a unit
+#     updated from a version without this section receives the rule on the
+#     next update, or from one run of
+#     `sudo scripts/install-network-permissions.sh`. New units receive it
+#     from setup.sh.
+#     Idempotent, needs no network, and restarts nothing. Not advisory: the
+#     script exits non-zero on a bad argument, when mktemp or the write of the
+#     temporary file fails, when the write into /etc fails, and when a
+#     directory sits at the rule's path. A missing rules directory is a
+#     warning with exit 0.
+# ---------------------------------------------------------------------------
+echo "→ Configuring Wi-Fi permissions..."
+"$SCRIPT_DIR/install-network-permissions.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 4f. Privileged helper: /usr/local/bin/dtk-system-helper and its sudoers
+#     entry. setup.sh installs them once, at first provisioning, so a unit
+#     already in the field receives a helper with new verbs from update.sh.
+#     Without it such a unit keeps the helper it was installed with: pairing
+#     with Fisqua needs the restart-backend verb and is refused there.
+#     update.sh keeps running its old copy after it pulls (NEH-337), so a unit
+#     updated from a version without this section receives the helper on the
+#     next update, or from one run of `sudo scripts/install-system-helper.sh`.
+#     Runs while the old backend still serves. The helper only gains verbs
+#     between versions, so the old backend works with the new helper, and a
+#     restored update keeps it.
+#     Idempotent, needs no network, and restarts nothing. Not advisory: the
+#     script exits non-zero when the helper source is missing, when a copy
+#     into place fails, and when visudo rejects the sudoers file, which is
+#     then not installed.
+# ---------------------------------------------------------------------------
+"$SCRIPT_DIR/install-system-helper.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
 # 5. Trial backup, while the old stack is STILL RUNNING. pg_dump takes one
 #    transactional snapshot, so this is safe on a live database, and a backup
 #    that cannot be written (no space, a broken pg_dump) then aborts the update
@@ -2335,6 +2426,7 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Stopping service to apply migrations..."
 SERVICE_STOPPED=1
+mark_update_page
 systemctl stop dtk 2>/dev/null || true
 # systemd runs ExecStop (stop.sh) only for an ACTIVE unit. If dtk was already
 # failed or inactive, the containers can still be up under their
@@ -2355,6 +2447,8 @@ if ! wait_backend_stopped; then
     echo "  Aborting before the backup and the migration; the database is untouched."
     exit 1   # EXIT trap: no migration ran, so it restores code and image and starts the previous version
 fi
+# The stack is down: the update page answers on port 80 until the start.
+show_update_page
 echo ""
 fail_point stopped
 
@@ -2478,6 +2572,7 @@ fi
 rm -f "$UNRESOLVED_FLAG" 2>/dev/null || true
 echo "→ Starting service..."
 NEW_STARTED_AT="$(date +%s)"
+end_update_page
 systemctl start dtk
 fail_point started
 echo "  Waiting up to ${HEALTH_TIMEOUT}s for the backend to answer /health..."

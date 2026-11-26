@@ -16,7 +16,7 @@
 # Usage: sudo ./scripts/setup.sh
 #        sudo CAPTUA_HOSTNAME=captua-2 ./scripts/setup.sh   (a second unit at a site)
 #
-# Version: 0.1.0-beta
+# Version: 0.3.0
 
 set -e
 
@@ -146,6 +146,15 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "→ Configuring storage mount permissions..."
 "$SCRIPT_DIR/install-system-helper.sh"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 2b-i. Wi-Fi permissions rule. The backend runs as pi and joins or forgets
+#       Wi-Fi networks through nmcli; NetworkManager refuses those calls from
+#       a process outside a local session unless polkit grants them.
+# ---------------------------------------------------------------------------
+echo "→ Configuring Wi-Fi permissions..."
+"$SCRIPT_DIR/install-network-permissions.sh"
 echo ""
 
 # ---------------------------------------------------------------------------
