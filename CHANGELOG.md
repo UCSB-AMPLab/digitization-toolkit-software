@@ -77,7 +77,7 @@ This release adds unit modes, which decide what a unit sends outside, and pairin
 ### The Overview
 - The Overview is rebuilt for the unit's own screen and for a large monitor: one column on the unit, two on a monitor.
 - A "Needs attention" block lists what needs someone: a camera that is not detected or cannot capture, cameras of another kind than the unit is set up for, storage that is nearly full, and volumes with retakes.
-- The camera preview, Focus and Test capture are no longer on the Overview. "Check cameras" opens the camera check, which does all three.
+- The camera preview and the "Focus" and "Test" buttons are no longer on the Overview. They are in the camera check. Press "Check cameras" to open it.
 - The storage notice says how much space can be freed.
 
 ### Cameras and set-up
