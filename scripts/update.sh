@@ -71,6 +71,26 @@
 #   served    after the new version has answered /health
 # Never set it on an appliance in service.
 #
+# Test only: CAPTUA_UPDATE_KILL_AT=<point> (DTK_UPDATE_KILL_AT too) kills the
+# script with SIGKILL at one point of a crossing (step 0b), which no trap
+# sees, as a power cut would: cross-recorded (the record says building,
+# nothing made yet), cross-built (cloned and verified), cross-copied (.env
+# and backend/.pixi copied), cross-synced (the record says exchanging and
+# the start guard is set), cross-exchanged (the directories exchanged), cross-renamed
+# (the previous checkout renamed .pre-merge), cross-crossed (the record set
+# to crossed), cross-stopped (the service stopped, before the exchange
+# step), cross-discarding (a discard
+# begun: the record says discarding, part of <root>.new removed),
+# cross-discard-synced (a discard's removal of <root>.new synced, the record
+# not yet removed); and
+# cross-exchange-helper kills the exchange helper alone, just after a
+# successful exchange. term:<point> sends SIGTERM instead, which the usual
+# handler and the EXIT trap see.
+#
+# Exit status 3: the update was a crossing to the merged layout, which ends
+# the run with the checkout holding the new code, not yet installed (see the
+# end of step 0b). Run the script again to install it.
+#
 # Also tunable: CAPTUA_UPDATE_HEALTH_TIMEOUT (seconds to wait for /health after a
 # start, default 300) and CAPTUA_UPDATE_HEALTH_POLL (seconds between tries,
 # default 5). Both also answer to their DTK_ names.
@@ -115,6 +135,16 @@ case "$FAIL_AT" in
     ""|fetched|build|pixi|stopped|dumped|migrate|started|served) ;;
     *) echo "✗ DTK_UPDATE_FAIL_AT='$FAIL_AT' is not a failure point this script knows."
        echo "  Known: fetched build pixi stopped dumped migrate started served (test only)."
+       exit 2 ;;
+esac
+KILL_AT="$(captua_env UPDATE_KILL_AT)"
+case "$KILL_AT" in
+    ""|cross-recorded|cross-built|cross-copied|cross-stopped|cross-synced|cross-exchange-helper|cross-exchanged|cross-renamed|cross-crossed|cross-discarding|cross-discard-synced) ;;
+    term:cross-copied|term:cross-stopped|term:cross-synced|term:cross-exchanged|term:cross-renamed|term:cross-crossed) ;;
+    *) echo "✗ DTK_UPDATE_KILL_AT='$KILL_AT' is not a point this script knows."
+       echo "  Known: cross-recorded cross-built cross-copied cross-stopped cross-synced"
+       echo "  cross-exchange-helper cross-exchanged cross-renamed cross-crossed"
+       echo "  cross-discarding cross-discard-synced, and term:<point> (test only)."
        exit 2 ;;
 esac
 HEALTH_TIMEOUT="$(captua_env UPDATE_HEALTH_TIMEOUT 300)"
@@ -318,7 +348,30 @@ record_field() {
     sed -n "s/^$1: //p" "$UNRESOLVED_FILE" 2>/dev/null | head -n 1
 }
 UNRESOLVED_KIND=""
-if ! { [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; } && [ -e "$UNRESOLVED_FLAG" ]; then
+# A crossing record in the same directory that says the crossing set the
+# flag accounts for it: a crossing sets it before its exchange and keeps it
+# until the install; crossing_settle, below, checks the record and deals
+# with both.
+# The record is checked (lstat: a real 0700 directory and a regular 0600
+# file, both this user's) before anything reads it: a fifo or a symlink
+# there would block a read, or read something else.
+if ! { [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; } && [ -e "$UNRESOLVED_FLAG" ] \
+        && { [ -e "$UNRESOLVED_FLAG_DIR/crossing" ] || [ -L "$UNRESOLVED_FLAG_DIR/crossing" ]; } \
+        && ! python3 -c 'import os, stat, sys
+d, f = os.path.dirname(sys.argv[1]), sys.argv[1]
+st, sf = os.lstat(d), os.lstat(f)
+ok = (stat.S_ISDIR(st.st_mode) and st.st_uid == os.geteuid() and stat.S_IMODE(st.st_mode) == 0o700
+      and stat.S_ISREG(sf.st_mode) and sf.st_uid == os.geteuid() and stat.S_IMODE(sf.st_mode) == 0o600)
+sys.exit(0 if ok else 1)' "$UNRESOLVED_FLAG_DIR/crossing" 2>/dev/null; then
+    echo "✗ $UNRESOLVED_FLAG exists, and $UNRESOLVED_FLAG_DIR/crossing is not a crossing"
+    echo "  record this script can read (it must be a regular file, this user's, mode"
+    echo "  0600, in a 0700 directory: not a symlink, a fifo or anything else). This"
+    echo "  update will not run. Look at both, then remove what does not belong:"
+    echo "      sudo ls -la $UNRESOLVED_FLAG_DIR"
+    exit 1
+fi
+if ! { [ -e "$UNRESOLVED_FILE" ] || [ -L "$UNRESOLVED_FILE" ]; } && [ -e "$UNRESOLVED_FLAG" ] \
+        && ! grep -qx 'flag crossing' "$UNRESOLVED_FLAG_DIR/crossing" 2>/dev/null; then
     echo "✗ $UNRESOLVED_FLAG exists without its record, so this update will not run."
     echo "  An earlier update or rollback could not write $UNRESOLVED_FILE, or it"
     echo "  was removed by hand. While the flag exists systemd does not start dtk."
@@ -444,6 +497,27 @@ DB_STARTED_BY_US=0
 # message must not then say "nothing changed" — same standard as NEH-215.
 TREE_TOUCHED=0
 MODS_DIR=""
+# The crossing (step 0b; see crossing_cross): the submodule paths that become
+# folders; how far this run has taken it (building, which includes copying,
+# then exchanging); the paths and commits its record names; and how the
+# exchange came out. A fresh attempt takes its values from
+# crossing_begin_attempt alone; crossing_settle empties them
+# (crossing_clear_attempt) once it has removed a record.
+CROSSING=""
+CROSS_PATHS=()
+CROSS_STAGE=""
+CROSS_ROOT=""
+CROSS_ROOT_ID=""
+CROSS_NEW=""
+CROSS_NEW_ID=""
+CROSS_PRE_DIR=""
+CROSS_OLD=""
+CROSS_TARGET=""
+CROSS_FLAG=""
+CROSS_RESULT=""
+CROSS_WAS_ACTIVE=0
+CROSS_SERVICE_STOPPED=0
+CROSS_SERVICE=""
 # Set the moment anything changes container state before the service stop —
 # the abort message must never claim "nothing changed" after that (NEH-215).
 STACK_TOUCHED=0
@@ -486,6 +560,17 @@ fail_point() {
     if [ "$FAIL_AT" = "$1" ]; then
         echo "✗ DTK_UPDATE_FAIL_AT=$1: failing here on purpose (test only)."
         exit 1
+    fi
+}
+
+# Test only (see the header): SIGKILL here when DTK_UPDATE_KILL_AT names this point.
+kill_point() {
+    if [ "$KILL_AT" = "$1" ]; then
+        echo "✗ DTK_UPDATE_KILL_AT=$1: killed here on purpose (test only)."
+        kill -KILL $$
+    elif [ "$KILL_AT" = "term:$1" ]; then
+        echo "✗ DTK_UPDATE_KILL_AT=term:$1: SIGTERM here on purpose (test only)."
+        kill -TERM $$
     fi
 }
 
@@ -644,6 +729,1312 @@ tracked_files_modified() {
         [ "$rc" -eq 0 ] || return "$rc"
     done
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# The crossing: an update whose new code holds the frontend and backend
+# submodules as folders of the superproject (detected in step 0b).
+#
+# At every instant the checkout root ($PROJECT_ROOT, /home/pi/dtk on a unit)
+# is a complete checkout, the old one or the new one; the old checkout is
+# not changed until the exchange; every state a stop can leave is named by
+# which directories exist and their markers, and the next run finishes it or
+# undoes it.
+#
+# Threat model. On a unit pi is root-equivalent (sudoers: `(ALL) NOPASSWD:
+# ALL`), so the crossing does not defend against a process running as pi
+# that races it, for instance by swapping a path inside <root>.new between a
+# check and a write while the copy runs. It defends against runs stopped at
+# any point (a signal, SIGKILL, a power cut), stale state, directories made
+# by hand, and unusual configuration; and it checks, cheaply, that its record
+# and the directory holding it are root's alone.
+#
+# What the crossing carries from the old checkout is a closed list:
+#   .env            at the root: the unit's settings
+#   backend/.pixi   the backend's environment
+# copied (no file shared, modes and owners kept, symlinks recreated), with
+# Python's caches (__pycache__ directories, *.pyc files) left out anywhere:
+# Python writes them again. Nothing writes these two while the unit runs (the
+# backend reads them), so no writer has to be stopped and the service keeps
+# running during the copy. Every other untracked or ignored path in the
+# checkout or its submodules refuses the crossing, named, before anything is
+# written, and again when the copy lists them a second time: data belongs
+# outside the checkout (/var/lib/dtk by default).
+#
+# Immediately before the exchange step the crossing stops the service, only
+# so that the running backend cannot import code from the new tree once it
+# is at the root (its module paths name <root>/backend); the copy does not
+# depend on that stop. A stop that fails means no exchange. After the
+# exchange the service stays down, kept there by the flag.
+#
+# Before the exchange the crossing sets the unresolved-deployment flag
+# (set_unresolved_flag: /etc/dtk/unresolved-deployment and the dtk.service
+# drop-in that makes it a start condition), so that neither a restart nor a
+# reboot starts the exchanged checkout before its install has run. A
+# completed crossing leaves the flag set and its record at crossed; the
+# install clears both. When the
+# exchange did not happen, the discard clears the flag the crossing set (the
+# record says so); a refusal or discard before the exchange step never
+# touches it.
+#
+# The new checkout is built beside the old one, in <root>.new: a local clone
+# of the target commit from the old checkout's own .git (objects hardlinked,
+# no network), with the old checkout's origin and branch configuration. The
+# carried files (.env, backend/.pixi; the list above) are copied into it. Then the two
+# directories are exchanged in one rename(2), and the old checkout, now at
+# <root>.new, is renamed <root>.pre-merge, where it is kept for rolling back.
+# Nothing writes into the old checkout: git only reads it, and the copies
+# share no file with it.
+#
+# The state is one record, CROSS_RECORD, outside both checkouts: /etc/dtk
+# must be a real directory owned by the user this script runs as (root on a
+# unit) with mode 0700, and the record a regular file of that owner with
+# mode 0600; anything else is refused, and no symlink is followed. Nothing
+# inside either checkout says anything about the crossing. The record names
+# the checkout root by its physical path and by the identity it had when
+# the crossing began, <root>.new by its path and by the identity its mkdir
+# gave it (an identity is the filesystem's UUID and the inode number,
+# crossing_id), <root>.pre-merge, the old HEAD, the target and the step.
+# A directory is removed or moved only when it is a real directory (lstat)
+# at the recorded path with the recorded identity; anything else at the path
+# is left alone and the run refuses. The record is written before each step
+# begins (a fresh temporary file in /etc/dtk, fsynced, renamed over the
+# record, then the directory fsynced), and each step names what may exist:
+#   building    <root>.new may exist: this procedure's once the record holds
+#               its identity (written right after the mkdir), a clone in
+#               progress. Without an identity, only a missing <root>.new is
+#               a state this script resolves.
+#   copying     <root>.new is the verified clone; the ignored and untracked
+#               files are being copied into it.
+#   exchanging  <root>.new is complete and on disk; the exchange may or may
+#               not have happened. The identities and HEADs decide: <root>
+#               with <root>.new's identity at the target, and <root>.new with
+#               the old root's identity at the old commit, is exchanged; the
+#               two at their own identities is not.
+#   renaming    exchanged and on disk; the old checkout is being renamed
+#               <root>.pre-merge.
+#   crossed     done: the new checkout at the root, the old one at
+#               <root>.pre-merge, the start flag the crossing set in place.
+#               The record stays until the install (the new code's
+#               update.sh) clears the flag and removes it; this script,
+#               meeting it, says the install is due and changes nothing
+#               (exit 3).
+#   discarding  <root>.new, this procedure's, is being removed.
+#   discarded   <root>.new is removed and the flag cleared, and the service
+#               the crossing stopped could not be started again: the next
+#               run tries again, and removes the record once it is active.
+# The record's `service stopped` line, written just before the crossing
+# stops a running service, makes any discard (in that run or a later one)
+# start the service again, on the conditions crossing_restart_if_stopped
+# checks, before the record is removed.
+# crossing_settle, at the start of every run, validates the whole state the
+# record names before it renames or removes anything, then finishes or
+# undoes it: building, copying and an exchange that did not happen are
+# discarded; an exchange that happened is finished, to crossed; a discard
+# resumes; crossed stops the run (the install is due). With no record there
+# is no crossing state, whatever directories exist: a
+# <root>.new with no record is not this procedure's, is never touched, and a
+# crossing refuses while it is there.
+# ---------------------------------------------------------------------------
+CROSS_RECORD="$UNRESOLVED_FLAG_DIR/crossing"
+
+# crossing_physical <dir>: <dir>'s path with every symlink resolved.
+crossing_physical() {
+    ( cd "$1" 2>/dev/null && pwd -P ) || true
+}
+
+# crossing_id <path>: "<filesystem UUID>:<st_ino>:<generation>" when <path>
+# is a real
+# directory (lstat: a symlink is not one) on a filesystem with a UUID; empty
+# otherwise, with a non-zero status (and nothing printed) for one mounted on its own (findmnt's mount point is
+# not its parent's), or one whose inode generation cannot be read. The
+# generation (FS_IOC_GETVERSION, which ext4 keeps per inode and changes when
+# an inode number is used again) tells a directory from another that was
+# later given the same inode number. (Test only: CROSS_GEN_READER=fake, set
+# by the suite, reads generations from FAKE_GENERATIONS, and fails for the
+# path FAKE_GEN_FAIL names.) Not st_dev: a device's number can change across a
+# reboot (a USB disk found as sdb instead of sda); its filesystem's UUID and
+# an inode's number do not.
+CROSS_GEN_READER="ioctl"
+crossing_id() {
+    local ino uuid
+    ino="$(CROSS_GEN_READER="$CROSS_GEN_READER" python3 -c 'import ctypes, fcntl, os, stat, struct, sys
+path = sys.argv[1]
+try:
+    st = os.lstat(path)
+except OSError:
+    sys.exit(0)
+if not stat.S_ISDIR(st.st_mode):
+    sys.exit(0)
+if os.environ.get("CROSS_GEN_READER") == "fake":
+    # Test only: the suite gives generations by path.
+    gen = 1
+    if os.environ.get("FAKE_GEN_FAIL") and os.path.realpath(os.environ["FAKE_GEN_FAIL"]) == os.path.realpath(path):
+        sys.exit(0)
+    for pair in os.environ.get("FAKE_GENERATIONS", "").split(";"):
+        p, _, g = pair.rpartition("=")
+        if p and p == os.path.realpath(path):
+            gen = int(g)
+else:
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        sys.exit(0)
+    try:
+        size = ctypes.sizeof(ctypes.c_long)
+        FS_IOC_GETVERSION = (2 << 30) | (size << 16) | (ord("v") << 8) | 1
+        buf = fcntl.ioctl(fd, FS_IOC_GETVERSION, bytes(size))
+        st2 = os.fstat(fd)
+    except OSError:
+        sys.exit(0)
+    finally:
+        os.close(fd)
+    if st2.st_ino != st.st_ino:
+        sys.exit(0)
+    gen = struct.unpack("I", buf[:4])[0]
+print("%d:%d" % (st.st_ino, gen))' "$1")"
+    [ -n "$ino" ] || return 1
+    uuid="$(findmnt -n -o UUID -T "$1" 2>/dev/null || true)"
+    [ -n "$uuid" ] || return 1
+    # And on the filesystem mounted where its parent is, now: a copy of the
+    # filesystem (the same UUID and inodes) mounted at the path is not it.
+    [ "$(findmnt -n -o TARGET -T "$1" 2>/dev/null)" = "$(findmnt -n -o TARGET -T "$(dirname "$1")" 2>/dev/null)" ] || return 1
+    crossing_id_wellformed "$uuid:$ino" || return 1
+    echo "$uuid:$ino"
+}
+
+# crossing_id_wellformed <id>: <id> has the three parts of an identity, a
+# UUID, an inode number and a generation; empty is not one.
+crossing_id_wellformed() {
+    printf '%s\n' "$1" | grep -Eqx '[^:[:space:]]+:[0-9]+:[0-9]+'
+}
+
+# crossing_id_is <path> <id>: <path> has exactly identity <id>. Both sides
+# must be read and well formed: an identity that cannot be read, or an empty
+# recorded one, never matches, not even another empty one.
+crossing_id_is() {
+    local id
+    crossing_id_wellformed "$2" || return 1
+    id="$(crossing_id "$1")" || return 1
+    [ "$id" = "$2" ]
+}
+
+# crossing_absent <path>: nothing at all is at <path>, not even a symlink.
+crossing_absent() {
+    [ ! -e "$1" ] && [ ! -L "$1" ]
+}
+
+# crossing_head <dir>: the HEAD of the repository whose .git is <dir>/.git
+# (never one found further up); empty when there is none.
+crossing_head() {
+    [ -d "$1/.git" ] && [ ! -L "$1/.git" ] || return 0
+    run_as_repo_owner git --git-dir="$1/.git" rev-parse --verify --quiet HEAD 2>/dev/null || true
+}
+
+# crossing_sync: flush the filesystems to disk (`sync -f` is GNU-only), so
+# that nothing the record goes on to say has happened is lost to a power
+# cut. Its status is checked at every call.
+crossing_sync() {
+    python3 -c 'import os; os.sync()' || { echo "✗ Could not flush the filesystems to disk."; return 1; }
+}
+
+# The record's directory and file, checked with lstat: a real directory
+# owned by the user this script runs as, mode 0700; a regular file of that
+# owner, mode 0600. crossing_record_dir_ok makes the directory, 0700, when
+# it is missing.
+CROSS_PY_CHECK='
+import os, stat, sys
+def dir_ok(d, make):
+    if make and not os.path.lexists(d):
+        os.mkdir(d, 0o700)
+        os.chmod(d, 0o700)
+    st = os.lstat(d)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o700:
+        sys.exit("%s must be a directory (not a symlink) owned by uid %d with mode 0700" % (d, os.geteuid()))
+def file_ok(f):
+    st = os.lstat(f)
+    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or stat.S_IMODE(st.st_mode) != 0o600:
+        sys.exit("%s must be a regular file (not a symlink) owned by uid %d with mode 0600" % (f, os.geteuid()))
+'
+crossing_record_ok() {
+    python3 -c "$CROSS_PY_CHECK"'
+dir_ok(os.path.dirname(sys.argv[1]), False)
+file_ok(sys.argv[1])' "$CROSS_RECORD"
+}
+
+# crossing_record <step>: write the record at <step> from the CROSS_*
+# variables, durably: a fresh temporary file in the record's directory
+# (created exclusively, 0600), fsynced, renamed over the record, then the
+# directory fsynced. crossing_record_remove removes it the same way.
+crossing_record() {
+    python3 -c "$CROSS_PY_CHECK"'
+path, body = sys.argv[1], sys.argv[2]
+d = os.path.dirname(path)
+dir_ok(d, True)
+if os.path.lexists(path):
+    file_ok(path)
+tmp = path + ".tmp"
+if os.path.lexists(tmp):
+    os.unlink(tmp)
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+try:
+    os.fchmod(fd, 0o600)
+    os.write(fd, body.encode())
+    os.fsync(fd)
+finally:
+    os.close(fd)
+os.rename(tmp, path)
+dfd = os.open(d, os.O_RDONLY)
+os.fsync(dfd)
+os.close(dfd)
+' "$CROSS_RECORD" "$(printf 'captua-crossing 6\nstep %s\nroot %s\nrootid %s\nnew %s\nnewid %s\npre %s\nold %s\ntarget %s\nflag %s\nservice %s\n' \
+        "$1" "$CROSS_ROOT" "$CROSS_ROOT_ID" "$CROSS_NEW" "$CROSS_NEW_ID" "$CROSS_PRE_DIR" "$CROSS_OLD" "$CROSS_TARGET" "${CROSS_FLAG:-none}" "${CROSS_SERVICE:-untouched}")"
+}
+crossing_record_remove() {
+    python3 -c "$CROSS_PY_CHECK"'
+path = sys.argv[1]
+dir_ok(os.path.dirname(path), False)
+if os.path.lexists(path):
+    file_ok(path)
+    os.unlink(path)
+dfd = os.open(os.path.dirname(path), os.O_RDONLY)
+os.fsync(dfd)
+os.close(dfd)
+' "$CROSS_RECORD"
+}
+
+# crossing_field <field>: the value of a record line.
+crossing_field() {
+    sed -n "s/^$1 //p" "$CROSS_RECORD" 2>/dev/null | head -n 1
+}
+
+# crossing_discard: remove <root>.new, as a step of its own, so that a stop
+# in the middle of the removal resumes at the next run; make the removal
+# durable; then remove the record. Only a real directory at the recorded
+# path with the recorded identity is removed; rm does not follow symlinks
+# below it. 1, with the record kept, when something else is at the path.
+crossing_discard() {
+    local id
+    # A crossing stopped before its mkdir has no newid and no .new. Its record
+    # (at building, the one step with an empty newid) is removed directly,
+    # without discarding: neither the start guard nor the service has been
+    # touched before the stop, so neither has anything to undo.
+    if [ -z "$CROSS_NEW_ID" ] && crossing_absent "$CROSS_NEW" \
+            && crossing_id_is "$CROSS_ROOT" "$CROSS_ROOT_ID" && [ "$(crossing_head "$CROSS_ROOT")" = "$CROSS_OLD" ] \
+            && [ "${CROSS_FLAG:-none}" = none ] && [ "${CROSS_SERVICE:-untouched}" = untouched ]; then
+        crossing_sync || return 1
+        kill_point cross-discard-synced
+        crossing_record_remove
+        return
+    fi
+    # Every other discard has a .new this script made and recorded: with no
+    # newid, a .new present is refused below as not this script's, and with
+    # none present the record is refused here.
+    if ! crossing_id_wellformed "$CROSS_NEW_ID" && crossing_absent "$CROSS_NEW"; then
+        echo "✗ The crossing record ($CROSS_RECORD) names no identity for $CROSS_NEW,"
+        echo "  and $CROSS_ROOT or the record is not as a crossing stopped before its"
+        echo "  mkdir leaves them. Nothing has been changed; the record is kept."
+        echo "  See:"
+        echo "      sudo cat $CROSS_RECORD"
+        return 1
+    fi
+    if ! crossing_absent "$CROSS_NEW"; then
+        id="$(crossing_id "$CROSS_NEW" || true)"
+        if ! crossing_id_is "$CROSS_NEW" "$CROSS_NEW_ID"; then
+            echo "✗ $CROSS_NEW is not the directory this script made (it is ${id:+another directory}${id:-not a directory}),"
+            echo "  so it is left as it is. The crossing record ($CROSS_RECORD) is kept."
+            echo "  Look at $CROSS_NEW, move it away, then remove the record:"
+            echo "      sudo rm $CROSS_RECORD"
+            return 1
+        fi
+    fi
+    crossing_record discarding || return 1
+    if ! crossing_absent "$CROSS_NEW"; then
+        rm -rf -- "${CROSS_NEW:?}/.git"
+        kill_point cross-discarding
+        rm -rf -- "${CROSS_NEW:?}"
+    fi
+    if ! crossing_absent "$CROSS_NEW"; then
+        echo "✗ Could not remove $CROSS_NEW; the next run of this script tries again."
+        return 1
+    fi
+    crossing_sync || return 1
+    kill_point cross-discard-synced
+    # Only reached with <root> the previous checkout: a flag this crossing
+    # set goes before the record that says so.
+    if [ "$CROSS_FLAG" = crossing ]; then
+        rm -f "$UNRESOLVED_FLAG" || return 1
+        crossing_sync || return 1
+    fi
+    # A service the crossing stopped (the record says so) is started again,
+    # on the conditions crossing_restart_if_stopped checks; the record, at
+    # discarded, stays until the service is confirmed active, so that the
+    # next run tries again.
+    if [ "$CROSS_SERVICE" = stopped ]; then
+        crossing_record discarded || return 1
+        CROSS_WAS_ACTIVE=1
+        if ! crossing_restart_if_stopped; then
+            echo "✗ The service, stopped by the crossing, could not be started again. See:"
+            echo "      systemctl status dtk;  journalctl -u dtk -n 50"
+            echo "  Once whatever stops it is fixed, start it with:"
+            echo "      sudo systemctl start dtk"
+            echo "  The crossing record ($CROSS_RECORD) is kept, at discarded, until the"
+            echo "  service runs; the next run of update.sh starts it again and removes it."
+            return 1
+        fi
+    fi
+    crossing_record_remove
+}
+
+# crossing_finish: the exchange has happened. The whole state is checked
+# first: <root> is the new checkout (its identity, the target), and the old
+# checkout (the old root's identity, the old commit) is at <root>.new with
+# nothing at <root>.pre-merge, or already at <root>.pre-merge with nothing
+# at <root>.new. Only then is it renamed and the record set to crossed. 1, with
+# nothing moved and the record kept, for any other state.
+crossing_finish() {
+    local ok_root=0
+    crossing_id_is "$CROSS_ROOT" "$CROSS_NEW_ID" && [ "$(crossing_head "$CROSS_ROOT")" = "$CROSS_TARGET" ] && ok_root=1
+    if [ "$ok_root" -eq 1 ] && crossing_id_is "$CROSS_NEW" "$CROSS_ROOT_ID" \
+            && [ "$(crossing_head "$CROSS_NEW")" = "$CROSS_OLD" ] && crossing_absent "$CROSS_PRE_DIR"; then
+        run_as_repo_owner mv -- "$CROSS_NEW" "$CROSS_PRE_DIR" || return 1
+        kill_point cross-renamed
+    fi
+    if [ "$ok_root" -eq 1 ] && crossing_absent "$CROSS_NEW" \
+            && crossing_id_is "$CROSS_PRE_DIR" "$CROSS_ROOT_ID" \
+            && [ "$(crossing_head "$CROSS_PRE_DIR")" = "$CROSS_OLD" ]; then
+        crossing_sync || return 1
+        crossing_record crossed || return 1
+        kill_point cross-crossed
+        echo "  ✓ The crossing to the merged layout is complete: $CROSS_ROOT is $CROSS_TARGET,"
+        echo "    and the previous checkout ($CROSS_OLD) is kept at $CROSS_PRE_DIR."
+        return 0
+    fi
+    echo "✗ The crossing record says the checkouts were exchanged, but $CROSS_ROOT,"
+    echo "  $CROSS_NEW and $CROSS_PRE_DIR are not as it says (the new checkout at"
+    echo "  $CROSS_TARGET at the root, the previous one at $CROSS_OLD beside it). Nothing"
+    echo "  has been moved, and the record ($CROSS_RECORD) is kept. See:"
+    echo "      ls -la $(dirname "$CROSS_ROOT")"
+    return 1
+}
+
+# crossing_after_exchange: decide from the identities and HEADs whether the
+# exchange happened, whatever the exchange helper's exit status said. Sets
+# CROSS_RESULT to finished, discarded or unknown; 0 only for finished.
+crossing_after_exchange() {
+    local r n
+    r="$(crossing_head "$CROSS_ROOT")"
+    n="$(crossing_head "$CROSS_NEW")"
+    if crossing_id_is "$CROSS_ROOT" "$CROSS_NEW_ID" && [ "$r" = "$CROSS_TARGET" ] \
+            && crossing_id_is "$CROSS_NEW" "$CROSS_ROOT_ID" && [ "$n" = "$CROSS_OLD" ]; then
+        crossing_sync && crossing_record renaming || { CROSS_RESULT=unknown; return 1; }
+        if crossing_finish; then
+            CROSS_RESULT=finished
+            return 0
+        fi
+        CROSS_RESULT=unknown
+        return 1
+    fi
+    if crossing_id_is "$CROSS_ROOT" "$CROSS_ROOT_ID" && [ "$r" = "$CROSS_OLD" ] \
+            && { crossing_absent "$CROSS_NEW" || { crossing_id_is "$CROSS_NEW" "$CROSS_NEW_ID" && [ "$n" = "$CROSS_TARGET" ]; }; }; then
+        CROSS_RESULT=discarded
+        crossing_discard || CROSS_RESULT=unknown
+        return 1
+    fi
+    CROSS_RESULT=unknown
+    echo "✗ After the exchange, $CROSS_ROOT and $CROSS_NEW are neither as they were nor"
+    echo "  exchanged ($CROSS_ROOT at ${r:-nothing}, $CROSS_NEW at ${n:-nothing}). Nothing"
+    echo "  has been removed, and the record ($CROSS_RECORD) is kept."
+    return 1
+}
+
+# crossing_crossed: the record says crossed. With the whole state as it
+# says (the new checkout at the root, the previous one at .pre-merge, no
+# .new, the flag the crossing set in place), the install is due, which is
+# the new code's update.sh's to do: say so, change nothing, and return 3;
+# otherwise 1.
+crossing_crossed() {
+    if crossing_id_is "$CROSS_ROOT" "$CROSS_NEW_ID" && [ "$(crossing_head "$CROSS_ROOT")" = "$CROSS_TARGET" ] \
+            && crossing_absent "$CROSS_NEW" \
+            && crossing_id_is "$CROSS_PRE_DIR" "$CROSS_ROOT_ID" && [ "$(crossing_head "$CROSS_PRE_DIR")" = "$CROSS_OLD" ] \
+            && [ "$CROSS_FLAG" = crossing ] && [ -e "$UNRESOLVED_FLAG" ]; then
+        echo "→ $CROSS_ROOT has crossed to the merged layout ($CROSS_TARGET); its install"
+        echo "  is due, and is the new code's to do: this script, from before the"
+        echo "  crossing, changes nothing. Run the new code's update.sh, which installs"
+        echo "  the new version, clears $UNRESOLVED_FLAG and the record:"
+        echo "      sudo $CROSS_ROOT/scripts/update.sh"
+        return 3
+    fi
+    echo "✗ The crossing record says $CROSS_ROOT crossed to $CROSS_TARGET, but the"
+    echo "  checkouts or the start flag are not as it says. Nothing has been"
+    echo "  changed; the record ($CROSS_RECORD) is kept."
+    return 1
+}
+
+# crossing_settle: finish or undo the crossing the record names; see the
+# steps above. 0 when there is no record, or the crossing was undone; 3 when
+# it is (or has just been made) crossed, and the install is due; 1 when the
+# record, its directory, or the directories it names are not as it says,
+# which this script does not resolve (the record is kept).
+crossing_settle_record() {
+    local step out
+    crossing_absent "$CROSS_RECORD" && return 0
+    if ! out="$(crossing_record_ok 2>&1)"; then
+        echo "✗ The crossing record cannot be used: $out"
+        echo "  Nothing has been changed."
+        return 1
+    fi
+    CROSS_ROOT="$(crossing_field root)"
+    CROSS_ROOT_ID="$(crossing_field rootid)"
+    CROSS_NEW="$(crossing_field new)"
+    CROSS_NEW_ID="$(crossing_field newid)"
+    CROSS_PRE_DIR="$(crossing_field pre)"
+    CROSS_OLD="$(crossing_field old)"
+    CROSS_TARGET="$(crossing_field target)"
+    step="$(crossing_field step)"
+    CROSS_FLAG="$(crossing_field flag)"
+    CROSS_SERVICE="$(crossing_field service)"
+    if [ "$(head -n 1 "$CROSS_RECORD" 2>/dev/null)" != "captua-crossing 6" ] \
+            || [ -z "$CROSS_ROOT" ] || [ "$CROSS_ROOT" != "$(crossing_physical "$PROJECT_ROOT")" ] \
+            || [ -L "$PROJECT_ROOT" ] || [ -z "$CROSS_ROOT_ID" ] \
+            || [ "$CROSS_NEW" != "$CROSS_ROOT.new" ] || [ "$CROSS_PRE_DIR" != "$CROSS_ROOT.pre-merge" ] \
+            || [ -z "$CROSS_OLD" ] || [ -z "$CROSS_TARGET" ] \
+            || ! crossing_id_wellformed "$CROSS_ROOT_ID" \
+            || { [ "$step" != building ] && ! crossing_id_wellformed "$CROSS_NEW_ID"; }; then
+        echo "✗ $CROSS_RECORD is a crossing record this script cannot use for"
+        echo "  $PROJECT_ROOT. Nothing has been changed; the record is kept. See:"
+        echo "      sudo cat $CROSS_RECORD"
+        if ! crossing_id_wellformed "$CROSS_ROOT_ID" \
+                || { [ "$step" != building ] && ! crossing_id_wellformed "$CROSS_NEW_ID"; }; then
+            echo "  Its rootid or newid is empty or not a UUID:inode:generation, so"
+            echo "  neither directory can be told apart from any other."
+        fi
+        return 1
+    fi
+    case "$step" in
+        building|copying|discarding)
+            # Before the exchange the root is the old checkout.
+            if ! crossing_id_is "$CROSS_ROOT" "$CROSS_ROOT_ID" || [ "$(crossing_head "$CROSS_ROOT")" != "$CROSS_OLD" ]; then
+                echo "✗ The crossing record says $CROSS_ROOT is the checkout at $CROSS_OLD, and it is"
+                echo "  not. Nothing has been changed; the record ($CROSS_RECORD) is kept."
+                return 1
+            fi
+            echo "→ An earlier update stopped while building the new checkout at $CROSS_NEW"
+            echo "  (step: $step). $CROSS_ROOT was not changed by it. Removing $CROSS_NEW..."
+            crossing_discard || return 1
+            echo "  ✓ Removed."
+            echo "" ;;
+        exchanging)
+            echo "→ An earlier update stopped at the exchange of $CROSS_ROOT and $CROSS_NEW."
+            # CROSS_RESULT, not the status, says what happened.
+            crossing_after_exchange || true
+            case "$CROSS_RESULT" in
+                finished) crossing_crossed; return $? ;;
+                discarded) echo "  The exchange had not happened; $CROSS_NEW was removed and"
+                           echo "  $CROSS_ROOT is the checkout it was." ;;
+                *) return 1 ;;
+            esac
+            echo "" ;;
+        renaming)
+            echo "→ An earlier update stopped after the exchange of $CROSS_ROOT and $CROSS_NEW."
+            crossing_finish || return 1
+            crossing_crossed
+            return $? ;;
+        crossed)
+            crossing_crossed
+            return $? ;;
+        discarded)
+            # .new is gone and the flag cleared; the service the crossing
+            # stopped may still be down.
+            if ! crossing_absent "$CROSS_NEW" || ! crossing_id_is "$CROSS_ROOT" "$CROSS_ROOT_ID" \
+                    || [ "$(crossing_head "$CROSS_ROOT")" != "$CROSS_OLD" ]; then
+                echo "✗ The crossing record says $CROSS_NEW was removed and $CROSS_ROOT is the"
+                echo "  checkout at $CROSS_OLD, and it is not so. Nothing has been changed; the"
+                echo "  record ($CROSS_RECORD) is kept."
+                return 1
+            fi
+            echo "→ An earlier update discarded its new checkout but could not start the"
+            echo "  service again; trying again..."
+            CROSS_WAS_ACTIVE=0
+            [ "$CROSS_SERVICE" != stopped ] || CROSS_WAS_ACTIVE=1
+            if ! crossing_restart_if_stopped; then
+                echo "✗ The service could not be started again: systemctl status dtk;"
+                echo "  journalctl -u dtk -n 50. The record ($CROSS_RECORD) is kept."
+                return 1
+            fi
+            crossing_record_remove || return 1
+            echo "  ✓ The service is running again, and the record is removed."
+            echo "" ;;
+        *)
+            echo "✗ $CROSS_RECORD names a step this script does not know ('$step')."
+            echo "  Nothing has been changed; the record is kept."
+            return 1 ;;
+    esac
+    return 0
+}
+
+# crossing_settle: crossing_settle_record, then, when the record is gone,
+# crossing_clear_attempt, so that a crossing started later in the run begins
+# from crossing_begin_attempt alone.
+crossing_settle() {
+    local rc=0
+    crossing_settle_record || rc=$?
+    if crossing_absent "$CROSS_RECORD"; then
+        crossing_clear_attempt
+    fi
+    return "$rc"
+}
+
+# crossing_begin_attempt <root> <rootid> <old> <target>: gives a fresh
+# crossing its initial values, just before its first record (building) is
+# written, so that nothing from an attempt settled earlier in the run is
+# carried into it. Every variable that describes one attempt is set here:
+# CROSS_STAGE (building), CROSS_ROOT, CROSS_ROOT_ID, CROSS_NEW (<root>.new),
+# CROSS_NEW_ID (empty until the mkdir), CROSS_PRE_DIR (<root>.pre-merge),
+# CROSS_OLD, CROSS_TARGET, CROSS_FLAG (empty: the start guard not set),
+# CROSS_SERVICE (empty: untouched), CROSS_SERVICE_STOPPED (0),
+# CROSS_WAS_ACTIVE (0) and CROSS_RESULT (empty). crossing_clear_attempt
+# empties the same list.
+crossing_begin_attempt() {
+    CROSS_STAGE=building
+    CROSS_ROOT="$1"
+    CROSS_ROOT_ID="$2"
+    CROSS_NEW="$1.new"
+    CROSS_NEW_ID=""
+    CROSS_PRE_DIR="$1.pre-merge"
+    CROSS_OLD="$3"
+    CROSS_TARGET="$4"
+    CROSS_FLAG=""
+    CROSS_SERVICE=""
+    CROSS_SERVICE_STOPPED=0
+    CROSS_WAS_ACTIVE=0
+    CROSS_RESULT=""
+}
+
+# crossing_clear_attempt: empties every variable crossing_begin_attempt sets
+# (CROSS_STAGE, CROSS_ROOT, CROSS_ROOT_ID, CROSS_NEW, CROSS_NEW_ID,
+# CROSS_PRE_DIR, CROSS_OLD, CROSS_TARGET, CROSS_FLAG, CROSS_SERVICE,
+# CROSS_SERVICE_STOPPED, CROSS_WAS_ACTIVE, CROSS_RESULT), once a settle has
+# removed the record those values were read from.
+crossing_clear_attempt() {
+    CROSS_STAGE=""
+    CROSS_ROOT=""
+    CROSS_ROOT_ID=""
+    CROSS_NEW=""
+    CROSS_NEW_ID=""
+    CROSS_PRE_DIR=""
+    CROSS_OLD=""
+    CROSS_TARGET=""
+    CROSS_FLAG=""
+    CROSS_SERVICE=""
+    CROSS_SERVICE_STOPPED=0
+    CROSS_WAS_ACTIVE=0
+    CROSS_RESULT=""
+}
+
+# crossing_list_others <root>: every untracked and ignored path git lists in
+# the checkout at <root> and in each submodule of CROSS_PATHS (a directory with nothing
+# tracked in it is listed once, as the directory), relative to the root,
+# NUL-separated.
+# Every git command's status is checked on its own (no pipeline hides one):
+# a listing that fails refuses the crossing rather than reading as empty.
+crossing_list_others() {
+    local root="$1" sub part rc=0
+    run_as_repo_owner git -C "$root" ls-files -z --others --directory || return 1
+    part="$(mktemp)" || return 1
+    for sub in "${CROSS_PATHS[@]}"; do
+        if ! run_as_repo_owner git -C "$root/$sub" ls-files -z --others --directory > "$part"; then
+            rc=1
+            break
+        fi
+        if ! sub="$sub" python3 -c 'import os, sys; p = os.fsencode(os.environ["sub"]) + b"/"; sys.stdout.buffer.write(b"".join(p + e + b"\0" for e in sys.stdin.buffer.read().split(b"\0") if e))' < "$part"; then
+            rc=1
+            break
+        fi
+    done
+    rm -f "$part"
+    return "$rc"
+}
+
+# The closed list (see the comment over the crossing) and the caches it
+# leaves out, as Python for crossing_others_check and crossing_copy_others.
+CROSS_PY_CARRIED='
+CARRIED = (b".env", b"backend/.pixi")
+def is_cache(rel):
+    parts = rel.split(b"/")
+    return b"__pycache__" in parts or parts[-1].endswith(b".pyc")
+def carried(rel):
+    return any(rel == c or rel.startswith(c + b"/") for c in CARRIED)
+'
+
+# crossing_others_check <root>: read a NUL-separated list of the checkout's
+# untracked and ignored paths on stdin and print every one, or every path
+# under one that is a directory, that is neither carried nor a cache; 1 when
+# there is one. Read-only.
+crossing_others_check() {
+    python3 -c "$CROSS_PY_CARRIED"'
+import os, stat, sys
+root = os.fsencode(sys.argv[1])
+outside = []
+def walk(rel):
+    if carried(rel) or is_cache(rel):
+        return
+    p = os.path.join(root, rel)
+    st = os.lstat(p)
+    if stat.S_ISDIR(st.st_mode):
+        names = sorted(os.listdir(p))
+        if not names:
+            outside.append(rel + b"/")
+        for c in names:
+            walk(os.path.join(rel, c))
+    else:
+        outside.append(rel)
+for e in sys.stdin.buffer.read().split(b"\0"):
+    if e:
+        walk(e.rstrip(b"/"))
+for o in outside:
+    sys.stdout.buffer.write(o + b"\n")
+sys.exit(1 if outside else 0)
+' "$1"
+}
+
+# crossing_copy_others <src> <dst>: copy into <dst> the carried paths (and
+# everything under them but caches) among those a NUL-separated list on
+# stdin names, relative to <src>. No file is shared between the checkouts: a regular file is copied
+# (content and times, as shutil.copy2 does), a symlink is recreated with the
+# same target and not followed, a fifo is recreated, a directory, empty or
+# not, is created. Everything is created under umask 077, so no file is ever
+# readable by others before its mode is set; then each gets its source's
+# owner and then its mode (after the chown, which may clear setuid bits). A
+# socket is a running program's, not data, and is left out (listed). Run as
+# root, so a file the checkout's owner cannot read is copied all the same.
+# Everything is checked before anything is written, and checked again
+# before each write: every path written must resolve inside <dst>, so each
+# of its ancestors under <dst> that exists must be a real directory (not a
+# symlink), and the path itself must not exist. Anything else is a
+# collision: the colliding paths are printed, nothing is written, and it
+# exits 3. A directory <dst> already has as a real directory is entered,
+# not replaced.
+crossing_copy_others() {
+    python3 -c "$CROSS_PY_CARRIED"'
+import os, shutil, stat, sys
+os.umask(0o077)
+src, dst = os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2])
+entries = [e.rstrip(b"/") for e in sys.stdin.buffer.read().split(b"\0") if e]
+entries = [e for e in entries if carried(e) and not is_cache(e)]
+plan, collisions, skipped = [], [], []
+def blocked(rel):
+    """The first ancestor of rel under dst that exists and is not a real directory."""
+    parts = rel.split(b"/")
+    for i in range(1, len(parts)):
+        a = os.path.join(dst, *parts[:i])
+        if not os.path.lexists(a):
+            return None
+        if os.path.islink(a) or not os.path.isdir(a):
+            return b"/".join(parts[:i])
+    return None
+def walk(rel):
+    if is_cache(rel):
+        return
+    b = blocked(rel)
+    if b is not None:
+        collisions.append(b)
+        return
+    s, d = os.path.join(src, rel), os.path.join(dst, rel)
+    st = os.lstat(s)
+    if stat.S_ISDIR(st.st_mode):
+        if not os.path.lexists(d):
+            plan.append(("dir", rel, st))
+        elif os.path.islink(d) or not os.path.isdir(d):
+            collisions.append(rel)
+            return
+        for c in sorted(os.listdir(s)):
+            walk(os.path.join(rel, c))
+    elif os.path.lexists(d):
+        collisions.append(rel)
+    elif stat.S_ISSOCK(st.st_mode):
+        skipped.append(rel)
+    elif stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode) or stat.S_ISFIFO(st.st_mode):
+        plan.append(("node", rel, st))
+    else:
+        collisions.append(rel)
+for e in entries:
+    walk(e)
+if collisions:
+    for c in sorted(set(collisions)):
+        sys.stdout.buffer.write(c + b"\n")
+    sys.exit(3)
+made = []
+def check(rel):
+    b = blocked(rel)
+    d = os.path.join(dst, rel)
+    if b is not None or os.path.lexists(d):
+        sys.stdout.buffer.write((b or rel) + b"\n")
+        sys.exit(3)
+def parents(rel):
+    parent = os.path.dirname(rel)
+    if parent and not os.path.lexists(os.path.join(dst, parent)):
+        parents(parent)
+        check(parent)
+        os.mkdir(os.path.join(dst, parent), 0o700)
+        made.append((parent, os.lstat(os.path.join(src, parent))))
+for kind, rel, st in plan:
+    parents(rel)
+    check(rel)
+    s, d = os.path.join(src, rel), os.path.join(dst, rel)
+    if kind == "dir":
+        os.mkdir(d, 0o700)
+        made.append((rel, st))
+    elif stat.S_ISLNK(st.st_mode):
+        os.symlink(os.readlink(s), d)
+        os.chown(d, st.st_uid, st.st_gid, follow_symlinks=False)
+    else:
+        if stat.S_ISFIFO(st.st_mode):
+            os.mkfifo(d, 0o600)
+        else:
+            shutil.copy2(s, d, follow_symlinks=False)
+        os.chown(d, st.st_uid, st.st_gid, follow_symlinks=False)
+        os.chmod(d, stat.S_IMODE(st.st_mode))
+for rel, st in reversed(made):
+    d = os.path.join(dst, rel)
+    os.chown(d, st.st_uid, st.st_gid, follow_symlinks=False)
+    os.chmod(d, stat.S_IMODE(st.st_mode))
+for s in skipped:
+    sys.stderr.buffer.write(b"skipped (a socket): " + s + b"\n")
+' "$1" "$2"
+}
+
+# crossing_config_check <old .git/config>: the old repository's own
+# configuration may hold only keys this crossing knows how to carry, by a
+# closed list. The clone sets for itself: core.repositoryformatversion,
+# core.filemode, core.bare, core.logallrefupdates, and the ones git sets by
+# probing the filesystem (core.ignorecase, core.precomposeunicode,
+# core.symlinks), which the clone probes the same way. Carried:
+# remote.origin.url and remote.origin.fetch, branch.<name>.remote and
+# branch.<name>.merge. Dropped: submodule.* (the submodules the new tree no
+# longer has). Any other key could depend on the old layout or on a file the
+# clone does not have (include.*, url.*, core.worktree, core.sshCommand
+# naming a file in .git, ...): its names are printed, and 1.
+crossing_config_check() {
+    run_as_repo_owner python3 -c '
+import re, subprocess, sys
+out = subprocess.run(["git", "config", "--file", sys.argv[1], "--null", "--list"], check=True, capture_output=True).stdout
+allowed = re.compile(r"^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks)"
+                     r"|remote\.origin\.(url|fetch)|branch\..+\.(remote|merge)|submodule\..+)$")
+bad = sorted({e.split(b"\n", 1)[0].decode("utf-8", "replace") for e in out.split(b"\0") if e} - {""})
+bad = [k for k in bad if not allowed.match(k.lower()) and not allowed.match(k)]
+for k in bad:
+    print(k)
+sys.exit(1 if bad else 0)
+' "$1"
+}
+
+# crossing_carry_config <old .git/config> <new .git/config>: carry the keys
+# crossing_config_check lists as carried, each with all its values as
+# configured (git config --get-all: the raw URL, never `remote get-url`,
+# which applies url.*.insteadOf).
+crossing_carry_config() {
+    run_as_repo_owner python3 -c '
+import re, subprocess, sys
+old, new = sys.argv[1], sys.argv[2]
+out = subprocess.run(["git", "config", "--file", old, "--null", "--name-only", "--list"], check=True, capture_output=True).stdout
+carried = re.compile(r"^(remote\.origin\.(url|fetch)|branch\..+\.(remote|merge))$", re.I)
+keys = []
+for k in out.split(b"\0"):
+    if k and carried.match(k.decode("utf-8", "replace")) and k not in keys:
+        keys.append(k)
+for k in keys:
+    vals = subprocess.run(["git", "config", "--file", old, "--null", "--get-all", k], check=True, capture_output=True).stdout
+    subprocess.run(["git", "config", "--file", new, "--unset-all", k], capture_output=True)
+    for v in vals.split(b"\0")[:-1]:
+        subprocess.run(["git", "config", "--file", new, "--add", k, v], check=True)
+' "$1" "$2"
+}
+
+# crossing_exchange <a> <b>: exchange two directories in one rename(2), so
+# that at every instant each path names a complete directory: Linux
+# renameat2(RENAME_EXCHANGE) through libc (or the raw system call where libc
+# has no wrapper); renamex_np(RENAME_SWAP) on macOS, for the test suite. Its
+# exit status is not evidence either way: crossing_after_exchange reads the
+# directories. (Test only: KILL_AT=cross-exchange-helper kills it with
+# SIGKILL just after a successful exchange.)
+crossing_exchange() {
+    KILL_AT="$KILL_AT" python3 -c '
+import ctypes, os, signal, sys
+a, b = os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2])
+libc = ctypes.CDLL(None, use_errno=True)
+if sys.platform.startswith("linux"):
+    AT_FDCWD, RENAME_EXCHANGE = -100, 2
+    if hasattr(libc, "renameat2"):
+        f = libc.renameat2
+        f.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        r = f(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE)
+    else:
+        nr = {"aarch64": 276, "x86_64": 316, "armv7l": 382, "armv6l": 382}.get(os.uname().machine)
+        if nr is None:
+            sys.exit("renameat2: no system call number for " + os.uname().machine)
+        f = libc.syscall
+        f.argtypes = [ctypes.c_long, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        r = f(nr, AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE)
+elif sys.platform == "darwin":
+    f = libc.renamex_np
+    f.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+    r = f(a, b, 2)
+else:
+    sys.exit("no atomic exchange of directories on " + sys.platform)
+if r != 0:
+    sys.exit("exchange failed: " + os.strerror(ctypes.get_errno()))
+if os.environ.get("KILL_AT") == "cross-exchange-helper":
+    os.kill(os.getpid(), signal.SIGKILL)
+' "$1" "$2"
+}
+
+# crossing_cross: build the new checkout for CROSS_PATHS at the upstream
+# commit beside the old one, copy the carried files (.env, backend/.pixi)
+# into it, set the start guard, exchange the two and finish. Before the exchange a failure
+# discards <root>.new (a step of the record) and returns 1 with <root> as it
+# was; a stop leaves the record for the next run. After the exchange the
+# identities and HEADs decide (crossing_after_exchange).
+crossing_cross() {
+    local need avail sub rc list out gf w ref fstype gd wt want name modules
+    local root root_id new pre old target
+    # <root> is used by its physical path, and must itself be a directory:
+    # a symlink there would be exchanged as a symlink.
+    if [ -L "$PROJECT_ROOT" ] || [ ! -d "$PROJECT_ROOT" ]; then
+        echo "✗ $PROJECT_ROOT is a symlink (or not a directory). The crossing"
+        echo "  exchanges the checkout directory itself, so it stops here."
+        echo "  Nothing has been changed. Run this from the checkout's real path:"
+        echo "      $(crossing_physical "$PROJECT_ROOT")"
+        return 1
+    fi
+    # The checks below read this attempt's paths and commits from locals;
+    # crossing_begin_attempt gives them to the CROSS_* variables just before
+    # the record is written.
+    root="$(crossing_physical "$PROJECT_ROOT")"
+    # An empty identity here is refused with the UUID check below.
+    root_id="$(crossing_id "$root" || true)"
+    new="$root.new"
+    pre="$root.pre-merge"
+    old="$(crossing_head "$root")"
+    target="$(run_as_repo_owner git -C "$root" rev-parse --verify "$PULL_UPSTREAM^{commit}")" || return 1
+
+    # Preconditions, read-only.
+    if ! out="$(python3 -c "$CROSS_PY_CHECK"'
+d = sys.argv[1]
+if os.path.lexists(d):
+    dir_ok(d, False)
+if os.path.lexists(sys.argv[2]):
+    sys.exit("%s exists" % sys.argv[2])' "$UNRESOLVED_FLAG_DIR" "$CROSS_RECORD" 2>&1)"; then
+        echo "✗ The crossing keeps its record in $UNRESOLVED_FLAG_DIR, and: $out."
+        echo "  Nothing has been changed."
+        return 1
+    fi
+    if ! crossing_absent "$new"; then
+        echo "✗ $new exists, and there is no record of this script having made it."
+        echo "  The new checkout is built there, so the crossing stops here. Nothing has"
+        echo "  been changed, and $new is left as it is. Look at it, move it away,"
+        echo "  then run this again."
+        return 1
+    fi
+    if ! crossing_absent "$pre"; then
+        echo "✗ $pre exists. The previous checkout is kept there after the"
+        echo "  crossing, so the crossing stops here. Nothing has been changed. Move it"
+        echo "  away, then run this again."
+        return 1
+    fi
+    # The new checkout must not depend on anything inside the old one, which
+    # moves to <root>.pre-merge: objects borrowed through alternates, a
+    # submodule's repository named by an absolute path into <root>, or a
+    # configuration key outside the closed list.
+    if [ -e "$root/.git/objects/info/alternates" ]; then
+        echo "✗ $root/.git/objects/info/alternates exists: this repository borrows"
+        echo "  objects from another, which the new checkout would depend on. Nothing"
+        echo "  has been changed. To copy the objects in and drop it:"
+        echo "      sudo -u $REPO_USER git -C $root repack -a -d"
+        echo "      sudo -u $REPO_USER rm $root/.git/objects/info/alternates"
+        return 1
+    fi
+    # The identities in the record are the filesystem's UUID and inode
+    # numbers (crossing_id); ext4, the units' filesystem, keeps both across a
+    # reboot, and a filesystem without a UUID cannot be recognised after one.
+    fstype="$(findmnt -n -o FSTYPE -T "$(dirname "$root")" 2>/dev/null || true)"
+    if [ "$fstype" != ext4 ]; then
+        echo "✗ $(dirname "$root") is on ${fstype:-a filesystem findmnt could not name}, not ext4. The crossing"
+        echo "  records the checkouts' filesystem and inode numbers, which it relies on"
+        echo "  ext4 to keep across a reboot, so it stops. Nothing has been changed."
+        return 1
+    fi
+    if [ -z "$(findmnt -n -o UUID -T "$root" 2>/dev/null || true)" ] || [ -z "$root_id" ]; then
+        echo "✗ The filesystem holding $root has no UUID, or the inode generation"
+        echo "  of $root cannot be read: by these the crossing recognises its"
+        echo "  directories after a reboot, so it stops. Nothing has been changed."
+        return 1
+    fi
+    for sub in "${CROSS_PATHS[@]}"; do
+        # The submodule's repository must be the one under the old checkout's
+        # .git (<root>/.git/modules/<name>, the name from .gitmodules), so that
+        # it moves with the old checkout to <root>.pre-merge; and its
+        # core.worktree, if set, must name <root>/<path> from there, so that
+        # it names the previous checkout's folder afterwards.
+        # The name: exactly one .gitmodules entry claims the path, and its name
+        # is a relative path whose components are none of empty, . or ..
+        modules="$(run_as_repo_owner git config --file "$root/.gitmodules" --get-regexp '^submodule\..*\.path$' 2>/dev/null || true)"
+        if ! name="$(printf '%s\n' "$modules" | python3 -c 'import sys
+want = sys.argv[1]
+names = []
+for line in sys.stdin.read().splitlines():
+    key, _, path = line.partition(" ")
+    if path == want and key.startswith("submodule.") and key.endswith(".path"):
+        names.append(key[len("submodule."):-len(".path")])
+if len(names) != 1:
+    sys.exit("%d entries in .gitmodules claim the path %s" % (len(names), want))
+n = names[0]
+if "\0" in n or n.startswith("/") or any(c in ("", ".", "..") for c in n.split("/")):
+    sys.exit("the submodule name %r is not a plain relative path" % n)
+print(n)' "$sub" 2>&1)"; then
+            echo "✗ $root/.gitmodules: $name. Nothing has been changed."
+            return 1
+        fi
+        gd="$(run_as_repo_owner git -C "$root/$sub" rev-parse --absolute-git-dir 2>/dev/null || true)"
+        # Every step from <root>/.git to .git/modules/<name> a real directory:
+        # a symlink there would resolve both sides of the comparison below to
+        # a repository that stays put.
+        if [ -n "$name" ] && ! python3 -c 'import os, stat, sys
+p = sys.argv[1]
+for part in ["", ".git", "modules"] + sys.argv[2].split("/"):
+    p = os.path.join(p, part) if part else p
+    try:
+        st = os.lstat(p)
+    except OSError:
+        sys.exit(1)
+    if not stat.S_ISDIR(st.st_mode):
+        sys.exit(1)' "$root" "$name"; then
+            echo "✗ $root/.git/modules/$name is not a directory inside $root/.git (a"
+            echo "  symlink, or missing): the repository of $sub would not move with the"
+            echo "  previous checkout. Nothing has been changed."
+            return 1
+        fi
+        # Independently of the name: the gitfile's target, resolved, lies
+        # under <root>/.git/modules and is exactly <root>/.git/modules/<name>.
+        if ! python3 -c 'import os, sys
+root, sub, name = sys.argv[1:4]
+with open(os.path.join(root, sub, ".git")) as f:
+    line = f.read().strip()
+if not line.startswith("gitdir: "):
+    sys.exit(1)
+t = os.path.realpath(os.path.join(root, sub, line[len("gitdir: "):]))
+m = os.path.realpath(os.path.join(root, ".git", "modules"))
+sys.exit(0 if os.path.commonpath([t, m]) == m and t == os.path.realpath(os.path.join(m, name)) else 1)' "$root" "$sub" "$name" 2>/dev/null; then
+            echo "✗ $root/$sub/.git names a repository that is not"
+            echo "  $root/.git/modules/$name: it would not move with the previous"
+            echo "  checkout. Nothing has been changed."
+            return 1
+        fi
+        if [ -z "$name" ] || [ -z "$gd" ] \
+                || [ "$(crossing_physical "$gd")" != "$(crossing_physical "$root/.git/modules/$name")" ]; then
+            echo "✗ $root/$sub/.git names the repository ${gd:-(none)}, not"
+            echo "  $root/.git/modules/${name:-<the name .gitmodules gives $sub>}: it would not move with"
+            echo "  the previous checkout. Nothing has been changed."
+            return 1
+        fi
+        # The relative path must be git's own (the way up from the repository
+        # to the folder, ../../../<path> for a top-level submodule): another
+        # spelling that names the same folder now, through the root's name,
+        # would name the new checkout's folder once the old one is renamed.
+        wt="$(run_as_repo_owner git config --file "$gd/config" --get core.worktree 2>/dev/null || true)"
+        if [ -n "$wt" ]; then
+            want="$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' \
+                "$(crossing_physical "$root/$sub")" "$(crossing_physical "$gd")")"
+            if [ "$wt" != "$want" ]; then
+                echo "✗ $gd/config sets core.worktree to '$wt', not git's own"
+                echo "  relative path '$want' to $root/$sub: after the crossing it would"
+                echo "  not name the previous checkout's $sub. Nothing has been changed. To"
+                echo "  set it to git's own:"
+                echo "      sudo -u $REPO_USER git config --file $gd/config core.worktree $want"
+                return 1
+            fi
+        fi
+        gf="$(cat "$root/$sub/.git" 2>/dev/null || true)"
+        case "$gf" in
+            "gitdir: /"*)
+                echo "✗ $root/$sub/.git names its repository by an absolute path"
+                echo "  (${gf#gitdir: }), which after the crossing would name the new"
+                echo "  checkout's .git, not the previous checkout's. Nothing has been"
+                echo "  changed. To make it relative:"
+                echo "      sudo -u $REPO_USER git -C $root submodule absorbgitdirs"
+                return 1 ;;
+        esac
+    done
+    if ! out="$(crossing_config_check "$root/.git/config" 2>&1)"; then
+        echo "✗ $root/.git/config sets keys the crossing does not carry over:"
+        printf '%s\n' "$out" | sed 's/^/      /'
+        echo "  The new checkout is made with origin, its fetch settings and the"
+        echo "  branches' upstreams only, and a key like these may depend on the old"
+        echo "  layout or on a file in the old .git. Nothing has been changed. Move"
+        echo "  them to the repository owner's global configuration, or remove them:"
+        echo "      sudo -u $REPO_USER git -C $root config --unset-all <key>"
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "✗ python3 is needed to exchange the two checkouts and was not found."
+        echo "  Nothing has been changed."
+        return 1
+    fi
+    if ! python3 -c 'import os, sys; sys.exit(os.stat(sys.argv[1]).st_dev != os.stat(os.path.dirname(sys.argv[1])).st_dev)' "$root"; then
+        echo "✗ $root is a mount point (or on another filesystem than the"
+        echo "  directory it is in), so it cannot be exchanged for a directory beside"
+        echo "  it. Nothing has been changed."
+        return 1
+    fi
+    # The new checkout's tracked files, about the size of the old ones, plus
+    # copies of the carried files: together at most the old working tree
+    # outside .git. A tenth more, and 256 MiB.
+    w=$(( $(du -sk "$root" | cut -f1) - $(du -sk "$root/.git" | cut -f1) ))
+    need=$(( w + w / 10 + 262144 ))
+    avail="$(df -Pk "$(dirname "$root")" | awk 'NR == 2 { print $4 }')"
+    if [ -z "$avail" ] || [ "$avail" -lt "$need" ]; then
+        echo "✗ Building the new checkout beside the old one needs about $(( need / 1024 )) MiB"
+        echo "  free on the filesystem of $(dirname "$root"); ${avail:+$(( avail / 1024 )) MiB is free}."
+        echo "  Nothing has been changed."
+        return 1
+    fi
+
+    # The closed list (see the comment over the crossing): every other
+    # untracked or ignored path refuses, before anything is written.
+    list="$(mktemp)" || return 1
+    if ! crossing_list_others "$root" > "$list"; then
+        rm -f "$list"
+        echo "✗ git could not list the checkout's untracked and ignored files (it says why"
+        echo "  above), so what the crossing would carry is not known. Nothing has been"
+        echo "  changed."
+        return 1
+    fi
+    out="$(crossing_others_check "$root" < "$list" 2>&1)"; rc=$?
+    rm -f "$list"
+    if [ "$rc" -ne 0 ]; then
+        echo "✗ These untracked or ignored paths are in the checkout, and the crossing"
+        echo "  carries only .env and backend/.pixi (and leaves Python's caches out):"
+        printf '%s\n' "$out" | sed 's/^/      /'
+        echo "  Data belongs outside the checkout (/var/lib/dtk by default). Nothing has"
+        echo "  been changed. Move these out of $root, or remove them, then run"
+        echo "  this again."
+        return 1
+    fi
+
+    echo "→ Building the new checkout at $new, from the objects already fetched..."
+    crossing_begin_attempt "$root" "$root_id" "$old" "$target"
+    crossing_record building || { CROSS_STAGE=""; echo "✗ Could not write $CROSS_RECORD. Nothing has been changed."; return 1; }
+    kill_point cross-recorded
+    if ! run_as_repo_owner mkdir -- "$CROSS_NEW"; then
+        # Not made here, so not removed here.
+        crossing_record_remove || true
+        CROSS_STAGE=""
+        echo "✗ Could not create $CROSS_NEW. Nothing has been changed."
+        return 1
+    fi
+    if ! CROSS_NEW_ID="$(crossing_id "$CROSS_NEW")"; then
+        # Just made by this mkdir and still empty: rmdir removes nothing else.
+        CROSS_NEW_ID=""
+        echo "✗ The identity (filesystem, inode and generation) of"
+        echo "      $CROSS_NEW"
+        echo "  could not be read, so the crossing stops. Nothing has been changed."
+        run_as_repo_owner rmdir -- "$CROSS_NEW" 2>/dev/null || echo "  ⚠ Could not remove the empty $CROSS_NEW; remove it by hand."
+        crossing_record_remove || true
+        CROSS_STAGE=""
+        return 1
+    fi
+    rc=0
+    crossing_record building || rc=1
+    [ "$rc" -ne 0 ] || run_as_repo_owner python3 -c 'import os, stat, sys; os.chmod(sys.argv[2], stat.S_IMODE(os.stat(sys.argv[1]).st_mode))' "$CROSS_ROOT" "$CROSS_NEW" || rc=1
+    [ "$rc" -ne 0 ] || run_as_repo_owner git clone -q --local --no-checkout -- "$CROSS_ROOT" "$CROSS_NEW/.captua-clone" || rc=1
+    [ "$rc" -ne 0 ] || run_as_repo_owner mv -- "$CROSS_NEW/.captua-clone/.git" "$CROSS_NEW/.git" || rc=1
+    [ "$rc" -ne 0 ] || run_as_repo_owner rmdir -- "$CROSS_NEW/.captua-clone" || rc=1
+    # The old checkout's remote-tracking branches, in place of the ones the
+    # clone made from its local branches; then origin and the branches'
+    # upstreams as the old checkout configures them.
+    if [ "$rc" -eq 0 ]; then
+        for ref in $(run_as_repo_owner git -C "$CROSS_NEW" for-each-ref --format='%(refname)' refs/remotes/origin); do
+            run_as_repo_owner git -C "$CROSS_NEW" update-ref -d "$ref" || rc=1
+        done
+    fi
+    [ "$rc" -ne 0 ] || run_as_repo_owner git -C "$CROSS_NEW" fetch -q --no-tags "$CROSS_ROOT" '+refs/remotes/origin/*:refs/remotes/origin/*' || rc=1
+    [ "$rc" -ne 0 ] || crossing_carry_config "$CROSS_ROOT/.git/config" "$CROSS_NEW/.git/config" || rc=1
+    [ "$rc" -ne 0 ] || run_as_repo_owner git -C "$CROSS_NEW" checkout -q --force -B "$PULL_BRANCH" "$CROSS_TARGET" || rc=1
+    if [ "$rc" -eq 0 ]; then
+        out="$(run_as_repo_owner git -C "$CROSS_NEW" status --porcelain 2>&1)" || rc=1
+        [ -z "$out" ] || rc=1
+        [ "$(crossing_head "$CROSS_NEW")" = "$CROSS_TARGET" ] || rc=1
+        [ "$(run_as_repo_owner git -C "$CROSS_NEW" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" = "$PULL_UPSTREAM" ] || rc=1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "✗ The new checkout could not be built and verified at $CROSS_NEW (git says"
+        echo "  why above). Removing it; $CROSS_ROOT has not been changed."
+        crossing_discard || true
+        CROSS_STAGE=""
+        return 1
+    fi
+    kill_point cross-built
+
+    echo "→ Copying .env and backend/.pixi into it..."
+    crossing_record copying || rc=1
+    list="$(mktemp)" || rc=1
+    if [ "$rc" -eq 0 ] && ! crossing_list_others "$CROSS_ROOT" > "$list"; then
+        echo "✗ git could not list the checkout's untracked and ignored files again (it"
+        echo "  says why above)."
+        rc=1
+    fi
+    # The same closed list, again: a path that appeared since the first scan
+    # refuses the crossing too.
+    if [ "$rc" -eq 0 ] && ! out="$(crossing_others_check "$CROSS_ROOT" < "$list" 2>&1)"; then
+        echo "✗ These untracked or ignored paths appeared in the checkout while the new"
+        echo "  one was being built, and the crossing carries only .env and backend/.pixi:"
+        printf '%s\n' "$out" | sed 's/^/      /'
+        echo "  Data belongs outside the checkout (/var/lib/dtk by default). Removing"
+        echo "  $CROSS_NEW; $CROSS_ROOT has not been changed."
+        rm -f "$list"
+        crossing_discard || true
+        CROSS_STAGE=""
+        return 1
+    fi
+    if [ "$rc" -eq 0 ]; then
+        out="$(crossing_copy_others "$CROSS_ROOT" "$CROSS_NEW" < "$list" 2>&1)" || rc=$?
+    fi
+    rm -f "$list"
+    if [ "$rc" -ne 0 ]; then
+        if [ "$rc" -eq 3 ]; then
+            echo "✗ These paths of the files the crossing carries are taken in the new"
+            echo "  code, by a tracked file or a symlink, so they cannot be carried over:"
+            printf '%s\n' "$out" | sed 's/^/      /'
+            echo "  Move the files aside by hand; this script will not delete or overwrite a"
+            echo "  file it did not put there."
+        else
+            echo "✗ .env and backend/.pixi could not be copied into $CROSS_NEW:"
+            printf '%s\n' "$out" | sed 's/^/      /'
+        fi
+        echo "  Removing $CROSS_NEW; $CROSS_ROOT has not been changed."
+        crossing_discard || true
+        CROSS_STAGE=""
+        return 1
+    fi
+    [ -z "$out" ] || printf '%s\n' "$out" | sed 's/^/  /'
+    kill_point cross-copied
+
+    # The service is stopped here, immediately before the exchange step, so
+    # that the running backend cannot import code from the new tree once it
+    # is at the root: its module paths name <root>/backend. The copy does not
+    # depend on this stop (it carries only files nothing writes). Each
+    # command's status is checked here, since this runs inside `if !`, where
+    # set -e does not act. A stop that fails means no exchange: the new
+    # checkout is discarded, and the service started again if it was running
+    # and the stop left it down. After the exchange it stays down: the flag
+    # set next keeps it from starting until the install.
+    CROSS_WAS_ACTIVE=0
+    systemctl is-active --quiet dtk 2>/dev/null && CROSS_WAS_ACTIVE=1
+    # The record says the crossing stopped a running service before it does,
+    # so that a discard, in this run or the next, starts it again.
+    if [ "$CROSS_WAS_ACTIVE" -eq 1 ]; then
+        CROSS_SERVICE=stopped
+        if ! crossing_record copying; then
+            echo "✗ Could not write $CROSS_RECORD. Removing $CROSS_NEW; $CROSS_ROOT has not been"
+            echo "  changed."
+            CROSS_SERVICE=""
+            crossing_discard || true
+            CROSS_STAGE=""
+            return 1
+        fi
+    fi
+    echo "→ Stopping the service, so that it cannot load the new code once it is in place..."
+    rc=0
+    systemctl stop dtk || rc=1
+    if [ "$rc" -eq 0 ] && ! wait_backend_stopped; then
+        rc=1
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "✗ The service did not stop (systemctl status dtk; pgrep -af uvicorn), so the"
+        echo "  crossing stops before the exchange. Removing $CROSS_NEW; $CROSS_ROOT has"
+        echo "  not been changed."
+        crossing_discard || true
+        crossing_restart_if_stopped
+        CROSS_STAGE=""
+        return 1
+    fi
+    CROSS_SERVICE_STOPPED=1
+    kill_point cross-stopped
+
+    # The closed list a third time, with the service stopped: anything the
+    # backend wrote into the checkout while the files were copied is here
+    # now.
+    list="$(mktemp)" || list=""
+    rc=0
+    if [ -z "$list" ] || ! crossing_list_others "$CROSS_ROOT" > "$list"; then
+        echo "✗ git could not list the checkout's untracked and ignored files a third"
+        echo "  time (it says why above)."
+        rc=1
+    elif ! out="$(crossing_others_check "$CROSS_ROOT" < "$list" 2>&1)"; then
+        echo "✗ These untracked or ignored paths appeared in the checkout while .env"
+        echo "  and backend/.pixi were copied, and the crossing carries only those:"
+        printf '%s\n' "$out" | sed 's/^/      /'
+        echo "  Data belongs outside the checkout (/var/lib/dtk by default)."
+        rc=1
+    fi
+    [ -z "$list" ] || rm -f "$list"
+    if [ "$rc" -ne 0 ]; then
+        echo "  Removing $CROSS_NEW; $CROSS_ROOT has not been changed."
+        crossing_discard || true
+        CROSS_STAGE=""
+        return 1
+    fi
+
+    # Before the exchange: the record says exchanging and that the crossing
+    # sets the flag; then the flag, so that the exchanged checkout is not
+    # started before its install; then the new checkout and the flag, on disk.
+    # From here a stop is settled by the EXIT trap from the record.
+    CROSS_STAGE=exchanging
+    CROSS_FLAG=crossing
+    if ! crossing_sync || ! crossing_record exchanging || ! set_unresolved_flag || ! crossing_sync; then
+        echo "✗ The start guard could not be set before the exchange. Removing $CROSS_NEW;"
+        echo "  $CROSS_ROOT has not been changed."
+        crossing_discard || true
+        crossing_restart_if_stopped
+        CROSS_STAGE=""
+        return 1
+    fi
+    kill_point cross-synced
+    echo "→ Exchanging $CROSS_ROOT and $CROSS_NEW..."
+    out="$(crossing_exchange "$CROSS_ROOT" "$CROSS_NEW" 2>&1)" || echo "  The exchange reported: ${out:-a failure (exit status $?)}. Reading the directories to see whether it happened."
+    kill_point cross-exchanged
+    crossing_after_exchange || true
+    case "$CROSS_RESULT" in
+        finished) CROSS_STAGE=""; return 0 ;;
+        discarded)
+            echo "✗ The exchange did not happen ($out). $CROSS_NEW was removed and"
+            echo "  $CROSS_ROOT is the checkout it was."
+            crossing_restart_if_stopped
+            CROSS_STAGE=""
+            return 1 ;;
+        *) return 1 ;;
+    esac
+}
+
+# crossing_restart_if_stopped: after a crossing that did not exchange, start
+# the service again when it was running before the crossing stopped it and
+# is down now, with the root the previous checkout (its identity and HEAD)
+# and no record at the exchange or after it. 0 when there is nothing to do
+# or the service is active afterwards; 1 when it was not started (the start
+# failed, it is not active after it, or the root is not the previous
+# checkout).
+crossing_restart_if_stopped() {
+    [ "$CROSS_WAS_ACTIVE" -eq 1 ] || return 0
+    systemctl is-active --quiet dtk 2>/dev/null && return 0
+    case "$(sed -n 's/^step //p' "$CROSS_RECORD" 2>/dev/null | head -n 1)" in
+        exchanging|renaming|crossed) return 1 ;;
+    esac
+    crossing_id_is "$CROSS_ROOT" "$CROSS_ROOT_ID" && [ "$(crossing_head "$CROSS_ROOT")" = "$CROSS_OLD" ] || return 1
+    echo "→ Starting the service again, on the previous version..."
+    # As before every start of dtk: the update page gives port 80 back.
+    end_update_page
+    systemctl start dtk 2>/dev/null || return 1
+    systemctl is-active --quiet dtk 2>/dev/null
 }
 
 # Return the checkout to RESTORE_SHA with its submodules on that commit's
@@ -952,9 +2343,11 @@ show_update_page_if_unresolved() {
 # Returns non-zero unless all three are in place, so a caller about to
 # migrate or DROP refuses to without the start guard. The record is written
 # even when the flag or the drop-in fails: it is what update.sh refuses on.
-write_unresolved_marker() {
-    local kind="${1:-started-failed}" head guard_ok=1
-    head="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+# set_unresolved_flag: the start guard alone, the flag and the drop-in that
+# makes it a start condition of dtk.service (write_unresolved_marker, and a
+# crossing before its exchange). 1 unless both are in place.
+set_unresolved_flag() {
+    local guard_ok=1
     if ! ( mkdir -p "$UNRESOLVED_FLAG_DIR" && chmod 0700 "$UNRESOLVED_FLAG_DIR" \
             && ( umask 077; : > "$UNRESOLVED_FLAG" ) ) 2>/dev/null; then
         echo "  ⚠ Could not create $UNRESOLVED_FLAG: dtk is NOT kept from starting."
@@ -964,6 +2357,13 @@ write_unresolved_marker() {
         echo "  ⚠ Could not install $UNRESOLVED_DROPIN: dtk is NOT kept from starting."
         guard_ok=0
     fi
+    [ "$guard_ok" -eq 1 ]
+}
+
+write_unresolved_marker() {
+    local kind="${1:-started-failed}" head guard_ok=1
+    head="$(run_as_repo_owner git -C "$PROJECT_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    set_unresolved_flag || guard_ok=0
     if ( umask 077
          {
              echo "kind: $kind"
@@ -1346,6 +2746,33 @@ on_exit() {
     if [ "$SERVICE_STOPPED" -eq 1 ] || [ "$RESTORE_ARMED" -eq 1 ] || [ "$STACK_TOUCHED" -eq 1 ]; then
         start_trap_log
     fi
+    # A crossing this run had begun (step 0b). From the exchange on, the
+    # record and the HEADs settle it here. Before that the old checkout is
+    # unchanged, and <root>.new is left for the next run's start to remove,
+    # since a child of this run (the clone, the copy) may still be writing
+    # into it.
+    if [ "$CROSS_STAGE" = exchanging ]; then
+        echo ""
+        crossing_settle || true
+    elif [ "$CROSS_STAGE" = building ]; then
+        echo ""
+        echo "  The new checkout being built at $CROSS_NEW is left as it is; the next"
+        echo "  run of this script removes it. $CROSS_ROOT was not changed by it."
+    fi
+    # While a crossing record is at the exchange or after it, the root may be
+    # the new checkout: nothing is restored, no restore_code, no start; the
+    # flag keeps the service down until the install.
+    case "$(sed -n 's/^step //p' "$CROSS_RECORD" 2>/dev/null | head -n 1)" in
+        exchanging|renaming|crossed)
+            echo ""
+            echo "  The crossing record ($CROSS_RECORD) is kept: nothing is restored,"
+            echo "  and the service stays down. The next run of update.sh goes on from it."
+            end_trap "$rc" ;;
+    esac
+    # A crossing that stopped the service and did not exchange starts it again.
+    if [ "$CROSS_SERVICE_STOPPED" -eq 1 ]; then
+        crossing_restart_if_stopped
+    fi
     if [ "$SERVICE_STOPPED" -eq 1 ]; then
         restore_after_stop
         show_update_page_if_unresolved
@@ -1539,6 +2966,17 @@ resolve_forward() {
     echo "    can be run again once the cause is found: journalctl -u dtk -n 50"
     return 1
 }
+# A crossing that an earlier run left part-way (a stop, SIGKILL, a power
+# cut) is finished or undone before anything else, since everything below
+# reads the checkout.
+CROSS_SETTLED=0
+crossing_settle || CROSS_SETTLED=$?
+case "$CROSS_SETTLED" in
+    0) ;;
+    3) exit 3 ;;
+    *) exit 1 ;;
+esac
+
 if [ "$RESOLVE_FORWARD" -eq 1 ]; then
     if resolve_forward; then exit 0; else exit 1; fi
 fi
@@ -1772,10 +3210,10 @@ echo ""
 #     Local modifications are COPIED ASIDE, never discarded unseen: every
 #     modified tracked file, in the superproject and in each submodule, is
 #     saved under /var/lib/dtk/local-mods-<timestamp>/ with a patch per level
-#     that reproduces the whole set. Untracked files are left where they are.
-#     On an appliance an unknown file may be the only copy of something, so
-#     this script never deletes one — a pull that an untracked file would
-#     block is reported, not forced.
+#     that reproduces the whole set. Untracked and ignored files are left
+#     where they are. On an appliance an unknown file may be the only copy of
+#     something, so this script never deletes or overwrites one — a pull
+#     that an untracked or ignored file would block is reported, not forced.
 #
 #     Runs before anything is built or stopped, so any failure here leaves
 #     the unit serving the current version (the EXIT trap's "nothing
@@ -1821,6 +3259,103 @@ if [ "$DO_PULL" -eq 1 ]; then
         echo "  decide what to keep — this script will not merge or discard"
         echo "  committed work. Nothing has been changed."
         exit 1
+    fi
+
+    # Submodules that the upstream commit holds as folders: a gitlink at HEAD
+    # (mode 160000) whose path is a tree (040000) upstream. A fast-forward
+    # cannot make that change in place: every file such a submodule tracks is
+    # untracked from the superproject's side. Such an update is a crossing,
+    # built beside this checkout and exchanged for it (crossing_cross, and the
+    # rule over the crossing functions). Every check it depends on is made
+    # here, before anything changes.
+    CROSSING=""
+    CROSS_PATHS=()
+    CROSS_HEAD_TREE="$(run_as_repo_owner git -C "$PROJECT_ROOT" ls-tree -r HEAD)"
+    while IFS= read -r line; do
+        [ "${line%% *}" = 160000 ] || continue
+        path="${line#*$'\t'}"
+        up_entry="$(run_as_repo_owner git -C "$PROJECT_ROOT" ls-tree "$PULL_UPSTREAM" -- "$path")"
+        [ "${up_entry%% *}" = 040000 ] || continue
+        CROSSING="${CROSSING:+$CROSSING }$path"
+        CROSS_PATHS+=("$path")
+    done <<< "$CROSS_HEAD_TREE"
+
+    if [ -n "$CROSSING" ]; then
+        echo "  The new code will hold $CROSSING as folders instead of submodules."
+        CROSS_RC=0
+        gitlinks_match_head "$PROJECT_ROOT" checked-out || CROSS_RC=$?
+        if [ "$CROSS_RC" -ne 0 ]; then
+            echo ""
+            echo "✗ A submodule is not on the commit HEAD records (or its staged pointer"
+            echo "  differs from it, or it is not checked out, or this could not be read),"
+            echo "  and its files can become this repository's own only from that commit."
+            echo "  Nothing has been changed. To see which:"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule status --recursive"
+            echo "  To put every submodule on HEAD's pins (a staged pointer is dropped; the"
+            echo "  commit it named stays in the submodule):"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT reset -q -- <submodule path>"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule update --init --recursive"
+            echo "  then run this again."
+            exit 1
+        fi
+        # git does not report a change to such a file, so the save below
+        # cannot keep it, and the new checkout is built without it.
+        CROSS_RC=0
+        CROSS_FLAGGED="$(flagged_index_entries)" || CROSS_RC=$?
+        CROSS_FLAGGED_HERE="$(printf '%s\n' "$CROSS_FLAGGED" | awk -v paths="$CROSSING" '
+            BEGIN { n = split(paths, p, " ") }
+            { for (i = 1; i <= n; i++) if (index(substr($0, 3), p[i] "/") == 1) { print; next } }')"
+        if [ "$CROSS_RC" -ne 0 ] || [ -n "$CROSS_FLAGGED_HERE" ]; then
+            echo ""
+            echo "✗ Files in $CROSSING are marked assume-unchanged or skip-worktree (or"
+            echo "  the index could not be read), so git does not report changes to"
+            echo "  them, and a change to one would be left behind unsaved."
+            echo "  Nothing has been changed."
+            if [ -n "$CROSS_FLAGGED_HERE" ]; then
+                echo "  The files (a lowercase tag is assume-unchanged, S is skip-worktree):"
+                printf '%s\n' "$CROSS_FLAGGED_HERE" | sed 's/^/      /'
+            fi
+            echo "  Clear the flag in the submodule (giving the path inside it), look at"
+            echo "  what git then reports, and run this again:"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT/<submodule> update-index --no-assume-unchanged --no-skip-worktree <file>"
+            echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT/<submodule> status --short"
+            exit 1
+        fi
+        for path in "${CROSS_PATHS[@]}"; do
+            # The gitfile must be a file naming a repository outside the
+            # submodule's folder; a .git directory there is the repository
+            # itself, and its untracked files would be carried into the new
+            # checkout.
+            gitdir="$(run_as_repo_owner git -C "$PROJECT_ROOT/$path" rev-parse --absolute-git-dir 2>/dev/null || true)"
+            subdir="$(cd "$PROJECT_ROOT/$path" 2>/dev/null && pwd -P || true)"
+            if [ -L "$PROJECT_ROOT/$path/.git" ] || [ ! -f "$PROJECT_ROOT/$path/.git" ] \
+                    || [ -z "$gitdir" ] || [ -z "$subdir" ] || [ "${gitdir#"$subdir"/}" != "$gitdir" ]; then
+                echo ""
+                echo "✗ $path keeps its repository inside its own folder ($path/.git is not"
+                echo "  a gitfile naming one elsewhere), which this script does not carry"
+                echo "  over to the new checkout. Nothing has been changed. To move the"
+                echo "  repository into .git/modules:"
+                echo "      sudo -u $REPO_USER git -C $PROJECT_ROOT submodule absorbgitdirs"
+                echo "  then run this again."
+                exit 1
+            fi
+            # A submodule inside it is not part of the new tree.
+            nested="$(run_as_repo_owner git -C "$PROJECT_ROOT/$path" ls-files --stage)"
+            if printf '%s\n' "$nested" | grep -q '^160000 '; then
+                echo ""
+                echo "✗ $path holds submodules of its own, which this script cannot turn"
+                echo "  into folders. Nothing has been changed."
+                exit 1
+            fi
+        done
+        # The new checkout is cloned without submodules, so every gitlink at
+        # HEAD has to become a folder.
+        if [ "$(printf '%s\n' "$CROSS_HEAD_TREE" | grep -c '^160000 ')" -ne "${#CROSS_PATHS[@]}" ]; then
+            echo ""
+            echo "✗ The new code holds $CROSSING as folders but keeps other submodules,"
+            echo "  which this script cannot carry over. Nothing has been changed."
+            exit 1
+        fi
     fi
 
     # Modified tracked files, superproject and submodules.
@@ -1936,22 +3471,57 @@ if [ "$DO_PULL" -eq 1 ]; then
         # fails (a stale index.lock will do it) leaves the flag at zero, and
         # the trap prints "nothing changed" after modifications were
         # discarded, which NEH-215 exists to prevent.
-        TREE_TOUCHED=1
-        run_as_repo_owner git -C "$PROJECT_ROOT" reset --hard HEAD >/dev/null
-        run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git reset --hard HEAD' >/dev/null
-        echo "  ✓ Saved and reset. To see what was set aside:"
-        echo "      ls -R $MODS_DIR"
+        # A crossing builds the new checkout from the target commit, without
+        # them, and leaves this checkout, kept as <root>.pre-merge, with them.
+        if [ -n "$CROSSING" ]; then
+            echo "  ✓ Saved. The new checkout is built without them; this checkout keeps"
+            echo "    them. To see what was set aside:"
+            echo "      ls -R $MODS_DIR"
+        else
+            TREE_TOUCHED=1
+            run_as_repo_owner git -C "$PROJECT_ROOT" reset --hard HEAD >/dev/null
+            run_as_repo_owner git -C "$PROJECT_ROOT" submodule foreach --quiet --recursive 'git reset --hard HEAD' >/dev/null
+            echo "  ✓ Saved and reset. To see what was set aside:"
+            echo "      ls -R $MODS_DIR"
+        fi
     fi
 
     echo ""
+    if [ -n "$CROSSING" ]; then
+        if ! crossing_cross; then
+            exit 1
+        fi
+        # The crossing ends this run. The checkout is now the new code; the
+        # steps below (the dependency check, the build, the migration, the
+        # record of what is deployed) are this script's, written for the
+        # submodule layout, and the new code's update.sh does them for its own
+        # layout. The service was stopped before the exchange; the
+        # unresolved-deployment flag keeps it from starting the new checkout,
+        # and the crossing record stays at crossed, until that run installs
+        # it and clears both.
+        echo ""
+        echo "✓ $CROSS_ROOT now holds the new code ($CROSS_TARGET), with"
+        echo "  $CROSSING as folders. The previous checkout is kept at $CROSS_PRE_DIR."
+        echo "  The new version is not installed yet: nothing was rebuilt or migrated."
+        echo "  The service is stopped, and the flag $UNRESOLVED_FLAG"
+        echo "  keeps it from starting again before the install. The next run of"
+        echo "  update.sh installs the new version and clears the flag; run it now:"
+        echo "      sudo $SCRIPT_DIR/update.sh"
+        UPDATE_OK=1
+        exit 3
+    fi
     # From here the checkout may stop matching what is running: a failure
     # anywhere below puts it back (0a, and the EXIT trap).
     RESTORE_ARMED=1
-    if ! run_as_repo_owner git -C "$PROJECT_ROOT" merge --ff-only "$PULL_UPSTREAM"; then
+    # --no-overwrite-ignore: git's default replaces an ignored file at a path
+    # the new commit tracks, with no copy anywhere. On an appliance an ignored
+    # file (a database, an environment file, build output) may be the only
+    # copy of something, so the fast-forward refuses instead and git names it.
+    if ! run_as_repo_owner git -C "$PROJECT_ROOT" merge --ff-only --no-overwrite-ignore "$PULL_UPSTREAM"; then
         echo ""
         echo "✗ Fast-forward to $PULL_UPSTREAM failed. The usual cause left at this"
-        echo "  point is an untracked file on the unit that the update would"
-        echo "  overwrite — git names it above. Move it aside by hand; this"
+        echo "  point is an untracked or ignored file on the unit that the update"
+        echo "  would overwrite — git names it above. Move it aside by hand; this"
         echo "  script will not delete a file it did not put there."
         exit 1
     fi

@@ -528,7 +528,7 @@ done
 
 case_ "update.sh reinstalls the helper before it stops the service"
 CALL_LINE="$(grep -nE "$CALL_RE" "$SCRIPTS/update.sh" | head -n 1 | cut -d: -f1)"
-STOP_LINE="$(grep -nE '^[[:space:]]*SERVICE_STOPPED=1' "$SCRIPTS/update.sh" | head -n 1 | cut -d: -f1)"
+STOP_LINE="$(grep -nE '^SERVICE_STOPPED=1' "$SCRIPTS/update.sh" | head -n 1 | cut -d: -f1)"
 if [ -n "$CALL_LINE" ] && [ -n "$STOP_LINE" ] && [ "$CALL_LINE" -lt "$STOP_LINE" ]; then
   ok
 else

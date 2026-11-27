@@ -83,6 +83,17 @@ if [ "$1" = "env" ]; then
 fi
 cmd="$1"; shift
 [ "$(basename "$cmd")" = pixi ] && cmd="$FAKEBIN/pixi"
+# FAKE_ON_CLONE: shell run as a git clone starts. FAKE_FAIL_LSFILES=<name>:
+# git ls-files --others in the folder of that name fails.
+if [ "$cmd" = git ] && [ "${1:-}" = clone ] && [ -n "${FAKE_ON_CLONE:-}" ]; then
+    sh -c "$FAKE_ON_CLONE"
+fi
+if [ "$cmd" = git ] && [ -n "${FAKE_FAIL_LSFILES:-}" ] && [ "${1:-}" = -C ] \
+        && [ "${2##*/}" = "$FAKE_FAIL_LSFILES" ] && [ "${3:-}" = ls-files ] \
+        && case " $* " in *" --others "*) true ;; *) false ;; esac; then
+    echo "fatal: index file corrupt" >&2
+    exit 128
+fi
 exec env "${vars[@]}" "$cmd" "$@"
 EOF
 
@@ -120,6 +131,11 @@ case "$1" in
         esac
         exit 0 ;;
     stop)
+        echo "stop at step $(sed -n 's/^step //p' "$DTK_TEST_STATE/etc-dtk/crossing" 2>/dev/null)" >> "$CASE_DIR/log"
+        # FAKE_STOP_FAIL: the stop fails and leaves the unit running.
+        # FAKE_ON_STOP: shell run as the stop happens.
+        [ -z "${FAKE_STOP_FAIL:-}" ] || exit 1
+        [ -z "${FAKE_ON_STOP:-}" ] || sh -c "$FAKE_ON_STOP"
         # The old version serves until here: a write it accepted after the
         # trial dump must survive a restore.
         if [ -f "$S/active" ] && [ -n "${FAKE_WRITE_BEFORE_STOP:-}" ] && [ ! -f "$S/wrote" ]; then
@@ -131,6 +147,8 @@ case "$1" in
         fi
         rm -f "$S/active"; exit 0 ;;
     start)
+        # FAKE_START_FAIL: the start fails, the unit stays down.
+        [ -z "${FAKE_START_FAIL:-}" ] || exit 1
         # The drop-in's ConditionPathExists=!<flag>: systemd skips the start.
         if [ -f "$DTK_TEST_STATE/systemd/dtk.service.d/unresolved.conf" ] \
            && [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then
@@ -357,6 +375,45 @@ cat > "$FAKEBIN/kill-update" <<'EOF2'
 #!/bin/sh
 kill "-$1" "$2" 2>/dev/null
 EOF2
+# tree-snapshot <dir>: every path under <dir> but <dir>/.git, with its type,
+# mode and content digest (or link target), then the index of the checkout
+# and of each submodule as `git ls-files -s` lists it. Two snapshots are
+# equal when nothing in the working trees or the indexes has changed.
+cat > "$FAKEBIN/tree-snapshot" <<'EOF2'
+#!/usr/bin/env python3
+import hashlib, os, stat, subprocess, sys
+root = sys.argv[1]
+lines = []
+for dp, dns, fns in os.walk(root):
+    rel = os.path.relpath(dp, root)
+    if rel == ".":
+        dns[:] = [d for d in dns if d != ".git"]
+    for name in dns + fns:
+        p = os.path.join(dp, name)
+        r = os.path.normpath(os.path.join(rel, name))
+        st = os.lstat(p)
+        mode = oct(stat.S_IMODE(st.st_mode))
+        if stat.S_ISLNK(st.st_mode):
+            lines.append("L %s -> %s" % (r, os.readlink(p)))
+        elif stat.S_ISDIR(st.st_mode):
+            lines.append("D %s %s" % (mode, r))
+        elif not stat.S_ISREG(st.st_mode):
+            lines.append("N %s %s %s" % (oct(stat.S_IFMT(st.st_mode)), mode, r))
+        else:
+            try:
+                with open(p, "rb") as f:
+                    h = hashlib.sha256(f.read()).hexdigest()
+            except PermissionError:
+                h = "unreadable"
+            lines.append("F %s %d %s %s" % (mode, st.st_size, h, r))
+for line in sorted(lines):
+    print(line)
+for sub in ("", "backend", "frontend"):
+    d = os.path.join(root, sub)
+    if os.path.exists(os.path.join(d, ".git")):
+        print("index of", sub or ".")
+        sys.stdout.write(subprocess.run(["git", "-C", d, "ls-files", "-s"], capture_output=True, text=True).stdout)
+EOF2
 cat > "$FAKEBIN/pgrep" <<'EOF2'
 #!/bin/sh
 # FAKE_PGREP_STUCK: a backend survives every stop. FAKE_PGREP_STUCK_AFTER_B:
@@ -371,6 +428,24 @@ if [ -n "${FAKE_PGREP_STUCK_AFTER_B:-}" ] && grep -qx B "$CASE_DIR/sys/started" 
 fi
 exit 1
 EOF2
+# findmnt: for -o UUID the UUID FAKE_FSUUID names (test-uuid when unset);
+# for -o TARGET the mount point, / unless the path is at or under
+# FAKE_MOUNTPOINT; otherwise the filesystem type FAKE_FSTYPE names (ext4
+# when unset).
+cat > "$FAKEBIN/findmnt" <<'EOF2'
+#!/bin/sh
+eval "path=\${$#}"
+case " $* " in
+    *" UUID "*) echo "${FAKE_FSUUID:-test-uuid}" ;;
+    *" TARGET "*)
+        # FAKE_MOUNTPOINT: a filesystem mounted at that path.
+        case "$path" in
+            "${FAKE_MOUNTPOINT:-//none}"|"${FAKE_MOUNTPOINT:-//none}"/*) echo "$FAKE_MOUNTPOINT" ;;
+            *) echo / ;;
+        esac ;;
+    *) echo "${FAKE_FSTYPE:-ext4}" ;;
+esac
+EOF2
 chmod +x "$FAKEBIN"/*
 export FAKEBIN OLD_IMG NEW_IMG
 
@@ -380,6 +455,9 @@ mkdir -p "$UP"
 for sub in backend frontend; do
     git init -q "$UP/$sub"
 done
+# Each submodule ignores its own build output, as the real ones do.
+printf '.pixi/\n' > "$UP/backend/.gitignore"
+printf 'node_modules/\n' > "$UP/frontend/.gitignore"
 echo "lock-A" > "$UP/backend/pixi.lock"; g -C "$UP/backend" add -A; g -C "$UP/backend" commit -m A
 echo "fe-A" > "$UP/frontend/app";        g -C "$UP/frontend" add -A; g -C "$UP/frontend" commit -m A
 
@@ -391,6 +469,9 @@ mkdir -p "$UP/super/scripts"
 TESTPATHS='s#/var/lib/dtk#$DTK_TEST_STATE#g; s#/etc/dtk#$DTK_TEST_STATE/etc-dtk#g; s#/etc/systemd/system#$DTK_TEST_STATE/systemd#g; s#/run/dtk-update.lock#$DTK_TEST_STATE/dtk-update.lock#g; s#/run/dtk-update-page.wanted#$DTK_TEST_STATE/dtk-update-page.wanted#g'
 # The update page's helper: a fake that records each call.
 TESTPATHS="$TESTPATHS; s#/usr/local/bin/dtk-system-helper#$FAKEBIN/dtk-system-helper#g"
+# Inode generations from FAKE_GENERATIONS ("<path>=<n>;..."; 1 otherwise):
+# macOS has no FS_IOC_GETVERSION.
+TESTPATHS="$TESTPATHS; s#^CROSS_GEN_READER=\"ioctl\"#CROSS_GEN_READER=\"fake\"#"
 printf '#!/bin/sh\necho "helper $*" >> "$CASE_DIR/log"\nexit 0\n' > "$FAKEBIN/dtk-system-helper"
 chmod +x "$FAKEBIN/dtk-system-helper"
 sed "$TESTPATHS" "$SCRIPTS/update.sh" > "$UP/super/scripts/update.sh"
@@ -424,6 +505,10 @@ chmod +x "$UP/super/scripts/"*.sh
 echo "services: {}" > "$UP/super/docker-compose.yml"
 echo "services: {}" > "$UP/super/docker-compose.pi.yml"
 echo "readme" > "$UP/super/README"
+mkdir -p "$UP/super/docs"; echo base > "$UP/super/docs/base"
+# What the superproject ignores, as the real .gitignore does: paths inside the
+# submodules, which only matter once they are folders, and one of its own.
+printf 'backend/data/\nfrontend/node_modules/\n_data/\n' > "$UP/super/.gitignore"
 echo "A" > "$UP/super/VERSION"
 g -C "$UP/super" submodule add "$UP/backend" backend
 g -C "$UP/super" submodule add "$UP/frontend" frontend
@@ -447,6 +532,58 @@ printf '#!/bin/bash\necho "an update.sh from before the record"\n' > "$UP/super/
 g -C "$UP/super" commit -qam "A with an old update.sh"
 SHA_A_OLD="$(git -C "$UP/super" rev-parse HEAD)"
 g -C "$UP/super" checkout -q dev
+
+# The merged layout, C, on the remote's branch `merged`: B with the backend
+# and frontend gitlinks replaced by directories holding the files each
+# submodule pins at B, and no .gitmodules. It also adds one file under
+# backend/ that the backend submodule does not track.
+MK="$WORK/make-merged"
+git clone -q "$UP/super" "$MK" 2>/dev/null
+g -C "$MK" checkout -q -b merged "$SHA_B"
+g -C "$MK" rm -q --cached backend frontend
+g -C "$MK" rm -q .gitmodules
+for sub in backend frontend; do
+    rm -rf "${MK:?}/$sub"; mkdir -p "$MK/$sub"
+    git -C "$UP/$sub" archive HEAD | tar -x -C "$MK/$sub"
+done
+echo "added in the merged layout" > "$MK/backend/merged-only.txt"
+echo "C" > "$MK/VERSION"
+g -C "$MK" add -A; g -C "$MK" commit -m C
+g -C "$MK" push -q origin merged
+SHA_C="$(git -C "$MK" rev-parse HEAD)"
+if [ "$(git -C "$UP/super" ls-tree "$SHA_C" -- backend | awk '{print $1}')" != 040000 ]; then
+    echo "fixture: could not build the merged commit"; exit 1
+fi
+# Two commits that track a file at a path the superproject ignores: C with
+# backend/data/seed.txt (branch merged-tracks-ignored), and B with
+# _data/seed.txt (branch tracks-ignored).
+g -C "$MK" checkout -q -b merged-tracks-ignored merged
+mkdir -p "$MK/backend/data"; echo theirs > "$MK/backend/data/seed.txt"
+g -C "$MK" add -f backend/data/seed.txt; g -C "$MK" commit -m "C tracks an ignored path"
+g -C "$MK" push -q origin merged-tracks-ignored
+g -C "$MK" checkout -q -b tracks-ignored "$SHA_B"
+mkdir -p "$MK/_data"; echo theirs > "$MK/_data/seed.txt"
+g -C "$MK" add -f _data/seed.txt; g -C "$MK" commit -m "B tracks an ignored path"
+g -C "$MK" push -q origin tracks-ignored
+# C with backend/.pixi, which the crossing carries, tracked as a symlink to
+# a directory outside the checkout (branch merged-pixi-link); and C with .env
+# tracked (branch merged-tracks-env).
+mkdir -p "$WORK/outside"
+g -C "$MK" checkout -q -b merged-pixi-link merged
+ln -s "$WORK/outside" "$MK/backend/.pixi"
+g -C "$MK" add -f backend/.pixi; g -C "$MK" commit -m "C with backend/.pixi a symlink"
+g -C "$MK" push -q origin merged-pixi-link
+g -C "$MK" checkout -q -b merged-tracks-env merged
+echo "TRACKED=1" > "$MK/.env"
+g -C "$MK" add -f .env; g -C "$MK" commit -m "C with .env tracked"
+g -C "$MK" push -q origin merged-tracks-env
+for b in merged-tracks-ignored tracks-ignored merged-pixi-link merged-tracks-env; do
+    git -C "$UP/super" rev-parse -q --verify "$b" >/dev/null || { echo "fixture: no branch $b"; exit 1; }
+done
+
+# An alias the global configuration rewrites to the fixture's remote, for a
+# unit whose origin is configured through it.
+printf '[url "%s/"]\n    insteadOf = upstream-alias:\n' "$UP" >> "$GIT_CONFIG_GLOBAL"
 
 # The unit: a clone on dev at A, tracking the remote's dev (at B).
 TEMPLATE="$WORK/template"
@@ -479,6 +616,10 @@ run_case() {
     export PROJECT_ROOT
     cp -R "$TEMPLATE" "$PROJECT_ROOT"
     [ -z "${FAKE_BREAK_ORIGIN:-}" ] || g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
+    # FAKE_UPSTREAM: the remote branch the unit's dev tracks instead of dev.
+    [ -z "${FAKE_UPSTREAM:-}" ] || g -C "$PROJECT_ROOT" branch --set-upstream-to="origin/$FAKE_UPSTREAM" dev
+    # FAKE_UNIT_SETUP: shell run in the unit's checkout before the update.
+    [ -z "${FAKE_UNIT_SETUP:-}" ] || ( cd "$PROJECT_ROOT" && eval "$FAKE_UNIT_SETUP" )
     [ -z "${FAKE_STAGE_BACKEND_PIN:-}" ] || stage_backend_pin "$FAKE_STAGE_BACKEND_PIN"
     [ -z "${FAKE_DOTENV:-}" ] || printf '%s\n' "$FAKE_DOTENV" > "$PROJECT_ROOT/.env"
     export DTK_TEST_STATE="$CASE_DIR/state"
@@ -2077,6 +2218,883 @@ OUT="$(PATH="$FAKEBIN:$PATH" SUDO_USER="$(whoami)" bash "$PROJECT_ROOT/scripts/u
 eq "$RC" 2 "exit status"
 has "--offline goes with --no-pull only"
 eq "$(cat "$CASE_DIR/log")" "" "nothing run"
+
+# ── Crossing to the merged layout: built beside, then exchanged ─────────────
+# The unit has what the crossing carries, .env and backend/.pixi (with a
+# read-only file, a symlink and a fifo in it), and Python's caches, in the
+# backend, in the environment and at the root. CROSS_SNAP then records the
+# checkout as the run finds it.
+CROSS_EXTRAS='mkdir -p backend/.pixi/envs/lib/__pycache__ backend/app/__pycache__
+echo "CAPTUA_UNIT=bench" > .env
+echo env > backend/.pixi/envs/marker
+ln -s ../pixi.lock backend/.pixi/lock-link
+echo secret > backend/.pixi/locked; chmod 400 backend/.pixi/locked
+mkfifo backend/.pixi/pipe; chmod 660 backend/.pixi/pipe
+echo cache > backend/.pixi/envs/lib/__pycache__/n.cpython-311.pyc
+echo cache > backend/app/__pycache__/m.cpython-311.pyc
+echo cache > stray.pyc'
+CROSS_SNAP='"$FAKEBIN/tree-snapshot" "$PWD" > "$CASE_DIR/before"'
+CROSS_FILES="backend/.pixi/envs/marker backend/.pixi/locked .env"
+ORIGIN_URL="$(git -C "$TEMPLATE" remote get-url origin)"
+FRONTEND_A="$(git -C "$TEMPLATE/frontend" rev-parse HEAD)"
+GITFILE_BACKEND="$(cat "$TEMPLATE/backend/.git")"
+GITFILE_FRONTEND="$(cat "$TEMPLATE/frontend/.git")"
+inode() { ls -di "$1" 2>/dev/null | awk '{ print $1 }'; }
+fmode() { python3 -c 'import os, stat, sys; print(oct(stat.S_IMODE(os.lstat(sys.argv[1]).st_mode)))' "$1" 2>/dev/null; }
+# same_as_before <dir> <what>: <dir>'s snapshot equals the one CROSS_SNAP took.
+same_as_before() {
+    "$FAKEBIN/tree-snapshot" "$1" > "$CASE_DIR/now" 2>&1
+    if [ -s "$CASE_DIR/before" ] && cmp -s "$CASE_DIR/before" "$CASE_DIR/now"; then ok "$2 is unchanged"
+    else fail "$2 changed (diff $CASE_DIR/before $CASE_DIR/now)"; fi
+}
+no_new()      { if [ -e "$PROJECT_ROOT.new" ]; then fail "$PROJECT_ROOT.new exists"; else ok "no .new"; fi; }
+no_premerge() { if [ -e "$PROJECT_ROOT.pre-merge" ]; then fail "$PROJECT_ROOT.pre-merge exists"; else ok "no .pre-merge"; fi; }
+CROSS_REC_REL="etc-dtk/crossing"
+rec_step()  { sed -n 's/^step //p' "$DTK_TEST_STATE/$CROSS_REC_REL" 2>/dev/null; }
+no_record() { if [ -e "$DTK_TEST_STATE/$CROSS_REC_REL" ]; then fail "a crossing record exists (step $(rec_step))"; else ok "no crossing record"; fi; }
+# crossed_ok: the crossing is complete. The checkout is C on dev tracking
+# origin/merged with the old origin URL, the old checkout is at .pre-merge
+# (A, unchanged), the record says crossed, the start guard is set, the carried
+# files have copies of their own in the new checkout, with their content and
+# mode, and the caches are not there.
+crossed_ok() {
+    local P="$PROJECT_ROOT.pre-merge" f
+    head_is "$SHA_C" C
+    eq "$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD 2>&1)" dev "on branch dev"
+    eq "$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>&1)" origin/merged "tracking origin/merged"
+    eq "$(git -C "$PROJECT_ROOT" remote get-url origin 2>&1)" "$ORIGIN_URL" "origin's URL is the old checkout's"
+    eq "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=no 2>&1)" "" "no tracked change in the new checkout"
+    eq "$(git -C "$PROJECT_ROOT" config --get-regexp '^submodule\.' 2>&1)" "" "no submodule configuration carried over"
+    if [ -e "$PROJECT_ROOT/backend/.git" ]; then fail "backend/.git is in the new checkout"; else ok "backend is a folder"; fi
+    if [ -e "$PROJECT_ROOT/.captua-crossing" ]; then fail "a marker is in the checkout"; else ok "no marker in the checkout"; fi
+    no_new
+    eq "$(rec_step)" crossed "the record says crossed"
+    eq "$(sed -n 's/^flag //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" crossing "the record says the crossing set the flag"
+    if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the start flag is set"; else fail "the start flag is not set"; fi
+    eq "$(git --git-dir="$P/.git" rev-parse HEAD 2>&1)" "$SHA_A" "the previous checkout, at .pre-merge, is A"
+    same_as_before "$P" "the previous checkout"
+    for f in $CROSS_FILES; do
+        if [ -f "$PROJECT_ROOT/$f" ] && cmp -s "$PROJECT_ROOT/$f" "$P/$f" 2>/dev/null \
+                && [ "$(inode "$PROJECT_ROOT/$f")" != "$(inode "$P/$f")" ] \
+                && [ "$(fmode "$PROJECT_ROOT/$f")" = "$(fmode "$P/$f")" ]; then ok "$f is copied, with its content and mode"
+        elif [ "$f" = backend/.pixi/locked ]; then
+            # Readable by its owner only after chmod back; compare by mode and inode.
+            if [ "$(fmode "$PROJECT_ROOT/$f")" = "$(fmode "$P/$f")" ] && [ "$(inode "$PROJECT_ROOT/$f")" != "$(inode "$P/$f")" ]; then ok "$f is copied, with its mode"; else fail "$f is not a copy with its mode"; fi
+        else fail "$f is not a copy of its own with the same content and mode"; fi
+    done
+    eq "$(readlink "$PROJECT_ROOT/backend/.pixi/lock-link" 2>&1)" ../pixi.lock "the symlink is carried over, not followed"
+    for f in backend/.pixi/envs/lib/__pycache__ backend/app stray.pyc; do
+        if [ -e "$PROJECT_ROOT/$f" ]; then fail "$f is carried"; else ok "$f is left out (a cache)"; fi
+    done
+    if [ -p "$PROJECT_ROOT/backend/.pixi/pipe" ]; then ok "the fifo is recreated"; else fail "the fifo is missing"; fi
+    eq "$(fmode "$PROJECT_ROOT/backend/.pixi/pipe")" 0o660 "the fifo keeps its mode 0660"
+}
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+git remote set-url origin upstream-alias:super
+$CROSS_SNAP" run_case "crossing" --yes
+eq "$RC" 3 "exit status (crossed, not installed)"
+has "hold backend frontend as folders instead of submodules"
+has "now holds the new code"
+has "installs the new version and clears the flag"
+crossed_ok
+eq "$(git -C "$PROJECT_ROOT" config --get remote.origin.url 2>&1)" upstream-alias:super "origin's URL is carried as configured, not as rewritten"
+# The start guard is set and holds: a start of dtk is skipped.
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the unresolved-deployment flag is set"; else fail "the flag is not set"; fi
+has "keeps it from starting again"
+# Stopped once, after the copy, immediately before the exchange step.
+logged "stop at step copying"
+eq "$(grep -c '^systemctl stop dtk' "$CASE_DIR/log")" 1 "one stop"
+inactive
+started "A "
+PATH="$FAKEBIN:$PATH" systemctl start dtk
+logged "condition failed: start skipped"
+# A later run of this script meets the crossed record: the install is due,
+# and nothing changes.
+"$FAKEBIN/tree-snapshot" "$PROJECT_ROOT" > "$CASE_DIR/before"
+cp "$DTK_TEST_STATE/$CROSS_REC_REL" "$CASE_DIR/record-before"
+CASE="crossing: a later run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 3 "exit status (the install is due)"
+has "its install"
+has "is due"
+hasnt "exists without its record"
+same_as_before "$PROJECT_ROOT" "the new checkout"
+if cmp -s "$CASE_DIR/record-before" "$DTK_TEST_STATE/$CROSS_REC_REL"; then ok "the record is unchanged"; else fail "the record changed"; fi
+unlogged "git"
+CASE="crossing"
+# An environment tool rewrites a file in place in the new checkout: the
+# previous checkout's copy does not change.
+echo "rewritten" > "$PROJECT_ROOT/backend/.pixi/envs/marker"
+eq "$(cat "$PROJECT_ROOT.pre-merge/backend/.pixi/envs/marker" 2>&1)" env "a file rewritten in place in the new checkout leaves the previous one's"
+unlogged "build frontend"
+unlogged "pixi install"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+echo 'hand edit' >> frontend/app
+$CROSS_SNAP" run_case "crossing with a modified submodule file" --yes
+eq "$RC" 3 "exit status"
+has "locally modified files"
+crossed_ok
+eq "$(cat "$PROJECT_ROOT/frontend/app" 2>&1)" fe-B "the new checkout has C's file"
+if grep -q 'hand edit' "$PROJECT_ROOT.pre-merge/frontend/app" 2>/dev/null; then ok "the previous checkout keeps the edit"; else fail "the previous checkout lost the edit"; fi
+if grep -q 'hand edit' "$DTK_TEST_STATE"/local-mods-*/frontend/files/app 2>/dev/null; then
+    ok "the modified file is saved"; else fail "the modified file is not saved"; fi
+
+# Untracked or ignored paths outside the closed list (a file in a submodule,
+# an ignored build folder, a directory with nothing in it, data): refused
+# before anything is written, each named; the flag untouched.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+echo note > backend/operator-note.txt
+mkdir -p frontend/node_modules/x backend/scratch/empty; echo m > frontend/node_modules/x/index.js
+echo mine > backend/merged-only.txt
+$CROSS_SNAP" run_case "crossing over files outside the list" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+has "carries only .env and backend/.pixi"
+has "      backend/operator-note.txt"
+has "      frontend/node_modules/x/index.js"
+has "      backend/scratch/empty/"
+has "      backend/merged-only.txt"
+hasnt "stray.pyc"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_premerge
+no_record
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "the flag is untouched"; fi
+unlogged "systemctl stop"
+
+# A carried path the new tree tracks (.env): the copy refuses, the new
+# checkout is discarded, the flag untouched.
+FAKE_UPSTREAM=merged-tracks-env FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing over a carried path the new tree tracks" --yes
+eq "$RC" 1 "exit status"
+has "      .env"
+has "cannot be carried over"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "the flag is untouched"; fi
+
+FAKE_UPSTREAM=merged-tracks-ignored FAKE_UNIT_SETUP="$CROSS_EXTRAS
+mkdir -p backend/data; echo mine > backend/data/seed.txt
+$CROSS_SNAP" run_case "crossing over an ignored file" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+has "backend/data/seed.txt"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+FAKE_UPSTREAM=merged-pixi-link FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing where a directory becomes a symlink" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+has "      backend/.pixi"
+eq "$(ls -A "$WORK/outside")" "" "nothing is written outside the new checkout"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# A <root>.new with no record is not this procedure's: never touched. Here it
+# holds only a directory named as the old marker's temporary file, with data.
+FOREIGN_NEW='mkdir -p ../dtk.new/.captua-crossing.tmp; echo foreign > ../dtk.new/.captua-crossing.tmp/keep'
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$FOREIGN_NEW
+$CROSS_SNAP" run_case "crossing beside a foreign .new" --yes
+eq "$RC" 1 "exit status"
+has "there is no record of this script having made it"
+eq "$(cat "$PROJECT_ROOT.new/.captua-crossing.tmp/keep" 2>&1)" foreign "the foreign directory is left as it was"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_premerge
+no_record
+
+FAKE_UNIT_SETUP="$FOREIGN_NEW" run_case "update beside a foreign .new" --yes
+eq "$RC" 0 "exit status"
+head_is "$SHA_B" B
+has "Update complete!"
+hasnt "An earlier update"
+eq "$(cat "$PROJECT_ROOT.new/.captua-crossing.tmp/keep" 2>&1)" foreign "the foreign directory is left as it was"
+
+# Refused before anything is written: a symlinked checkout root, an absolute
+# gitfile, borrowed objects.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP='cd .. && mv dtk dtk-real && ln -s dtk-real dtk' \
+    run_case "crossing from a symlinked root" --yes
+eq "$RC" 1 "exit status"
+has "is a symlink"
+has "Nothing has been changed"
+if [ -L "$PROJECT_ROOT" ] && [ -d "$CASE_DIR/dtk-real/.git" ]; then ok "the symlink and the checkout are as they were"; else fail "the root was changed"; fi
+eq "$(git -C "$CASE_DIR/dtk-real" rev-parse HEAD 2>&1)" "$SHA_A" "the checkout is A"
+if [ -e "$PROJECT_ROOT.new" ] || [ -e "$CASE_DIR/dtk-real.new" ]; then fail "a .new was made"; else ok "no .new"; fi
+no_record
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+printf 'gitdir: %s\n' \"\$PWD/.git/modules/backend\" > backend/.git
+$CROSS_SNAP" run_case "crossing with an absolute gitfile" --yes
+eq "$RC" 1 "exit status"
+has "backend/.git names its repository by an absolute path"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+mkdir -p .git/objects/info; echo \"\$PWD/.git/modules/backend/objects\" > .git/objects/info/alternates
+$CROSS_SNAP" run_case "crossing with alternates" --yes
+eq "$RC" 1 "exit status"
+has ".git/objects/info/alternates exists"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# A stop (SIGKILL, which no trap sees) after each step, then a fresh run.
+for point in cross-recorded cross-built cross-copied cross-stopped cross-synced cross-exchanged cross-renamed cross-crossed; do
+    DTK_UPDATE_KILL_AT="$point" FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing killed at $point" --yes
+    eq "$RC" 137 "exit status"
+    case "$point" in
+        cross-recorded)
+            eq "$(rec_step)" building "the record says building"
+            no_new ;;
+        cross-built)
+            eq "$(rec_step)" building "the record says building"
+            eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_C" ".new is the clone" ;;
+        cross-copied)
+            eq "$(rec_step)" copying "the record says copying" ;;
+        cross-stopped)
+            eq "$(rec_step)" copying "the record says copying"
+            inactive ;;
+        cross-crossed)
+            eq "$(rec_step)" crossed "the record says crossed"
+            head_is "$SHA_C" "C (crossed)" ;;
+        cross-synced)
+            eq "$(rec_step)" exchanging "the record says exchanging"
+            eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_C" ".new is the new checkout, not exchanged" ;;
+        cross-exchanged)
+            eq "$(rec_step)" exchanging "the record says exchanging"
+            head_is "$SHA_C" "C (exchanged)"
+            eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_A" ".new holds the previous checkout" ;;
+        cross-renamed)
+            eq "$(rec_step)" renaming "the record says renaming"
+            head_is "$SHA_C" "C (exchanged)"
+            no_new
+            eq "$(git --git-dir="$PROJECT_ROOT.pre-merge/.git" rev-parse HEAD 2>&1)" "$SHA_A" ".pre-merge holds the previous checkout" ;;
+    esac
+    case "$point" in
+        cross-recorded|cross-built|cross-copied|cross-stopped|cross-synced)
+            head_is "$SHA_A" A
+            same_as_before "$PROJECT_ROOT" "the checkout"
+            no_premerge ;;
+    esac
+    CASE="crossing killed at $point: the next run"
+    FAKE_HEALTHY_VERSIONS="A B C" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+    case "$point" in
+        cross-recorded|cross-built|cross-copied|cross-stopped)
+            has "An earlier update stopped while building the new checkout"
+            eq "$RC" 3 "exit status (crossed again)" ;;
+        cross-crossed)
+            has "is due"
+            eq "$RC" 3 "exit status (the install is due)" ;;
+        cross-synced)
+            has "An earlier update stopped at the exchange"
+            has "The exchange had not happened"
+            eq "$RC" 3 "exit status (crossed again)" ;;
+        *)
+            has "The crossing to the merged layout is complete"
+            has "is due"
+            eq "$RC" 3 "exit status (the install is due)"
+            hasnt "An earlier update stopped while building" ;;
+    esac
+    crossed_ok
+done
+
+# A stop after the record and before the mkdir (no .new, no newid), then a
+# run killed during the discard that settles it, then a run that settles
+# it. A discard of a .new never made never writes discarding: the record
+# stays at building, the one step an empty newid is valid at.
+DTK_UPDATE_KILL_AT=cross-recorded FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a discard of a .new never made" --yes
+eq "$RC" 137 "exit status"
+eq "$(rec_step)" building "the record says building"
+eq "$(sed -n 's/^newid //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" "" "the record has no newid"
+CASE="a discard of a .new never made: killed during the discard"
+DTK_UPDATE_KILL_AT=cross-discard-synced run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 137 "exit status"
+has "(step: building)"
+case "$(rec_step)" in
+    building|"") ok "the record is at building or removed" ;;
+    *) fail "the record says $(rec_step)" ;;
+esac
+no_new
+head_is "$SHA_A" A
+CASE="a discard of a .new never made: the next run"
+FAKE_HEALTHY_VERSIONS="A B C" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+hasnt "a crossing record this script cannot use"
+eq "$RC" 3 "exit status (crossed)"
+crossed_ok
+
+# crossing_begin_attempt and crossing_clear_attempt set the same variables.
+CASE="the attempt's variables"
+fn_vars() { awk -v f="$1" '$0 ~ "^"f"\\(\\) \\{" { p = 1; next } p && /^}/ { exit } p { sub(/^ +/, ""); sub(/=.*/, ""); print }' "$SCRIPTS/update.sh" | sort; }
+BEGIN_VARS="$(fn_vars crossing_begin_attempt | tr '\n' ' ')"
+eq "$(fn_vars crossing_clear_attempt | tr '\n' ' ')" "$BEGIN_VARS" "crossing_clear_attempt empties what crossing_begin_attempt sets"
+case "$BEGIN_VARS" in
+    *CROSS_FLAG*CROSS_SERVICE*) ok "the attempt's variables include CROSS_FLAG and CROSS_SERVICE" ;;
+    *) fail "crossing_begin_attempt does not set CROSS_FLAG and CROSS_SERVICE ($BEGIN_VARS)" ;;
+esac
+
+# A crossing killed at cross-synced (its record says flag crossing, service
+# stopped); the next run settles it and starts a fresh crossing, killed at
+# cross-recorded; the run after that settles the fresh one and crosses. The
+# fresh attempt's record carries its own initial values, not the settled
+# attempt's.
+DTK_UPDATE_KILL_AT=cross-synced FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a fresh attempt after a settled one" --yes
+eq "$RC" 137 "exit status"
+eq "$(rec_step)" exchanging "the record says exchanging"
+eq "$(sed -n 's/^flag //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" crossing "the record says flag crossing"
+eq "$(sed -n 's/^service //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" stopped "the record says service stopped"
+CASE="a fresh attempt after a settled one: settled, then a fresh crossing killed"
+DTK_UPDATE_KILL_AT=cross-recorded FAKE_HEALTHY_VERSIONS="A B C" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 137 "exit status"
+has "The exchange had not happened"
+eq "$(rec_step)" building "the fresh record says building"
+eq "$(sed -n 's/^flag //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" none "the fresh record says flag none"
+eq "$(sed -n 's/^service //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" untouched "the fresh record says service untouched"
+eq "$(sed -n 's/^newid //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" "" "the fresh record has no newid"
+no_new
+head_is "$SHA_A" A
+CASE="a fresh attempt after a settled one: the next run"
+FAKE_HEALTHY_VERSIONS="A B C" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+hasnt "a crossing record this script cannot use"
+hasnt "names no identity"
+eq "$RC" 3 "exit status (crossed)"
+crossed_ok
+
+# The exchange helper dies just after a successful exchange, the script
+# alive: the directories show the exchange happened, so it is finished and
+# nothing is removed.
+DTK_UPDATE_KILL_AT=cross-exchange-helper FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing whose exchange helper dies" --yes
+eq "$RC" 3 "exit status (crossed)"
+has "Reading the directories to see whether it happened"
+crossed_ok
+
+# A stop in the middle of a discard (the record says discarding, part of
+# .new is gone), then a fresh run, which resumes it.
+DTK_UPDATE_KILL_AT=cross-discarding FAKE_UPSTREAM=merged-tracks-env FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing killed during the discard" --yes
+eq "$RC" 137 "exit status"
+eq "$(rec_step)" discarding "the record says discarding"
+if [ -d "$PROJECT_ROOT.new" ] && [ ! -e "$PROJECT_ROOT.new/.git" ]; then ok ".new is part-removed"; else fail ".new is not part-removed"; fi
+g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
+CASE="crossing killed during the discard: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status (then the fetch fails)"
+has "(step: discarding)"
+has "Could not reach the remote"
+no_new
+no_record
+head_is "$SHA_A" A
+
+# Something else at <root>.new when the record names it: a symlink to the
+# checkout itself (the record has no identity for .new yet), and a directory
+# that is not the one the mkdir made. Both are left alone, and the run
+# refuses with the record kept.
+DTK_UPDATE_KILL_AT=cross-recorded FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a symlink to the root at .new" --yes
+eq "$RC" 137 "exit status"
+ln -s dtk "$PROJECT_ROOT.new"
+CASE="a symlink to the root at .new: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "is not the directory this script made"
+same_as_before "$PROJECT_ROOT" "the live checkout"
+head_is "$SHA_A" A
+if [ -L "$PROJECT_ROOT.new" ]; then ok "the symlink is left as it is"; else fail "the symlink was removed"; fi
+eq "$(rec_step)" building "the record is kept"
+
+DTK_UPDATE_KILL_AT=cross-built FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "another directory at .new" --yes
+eq "$RC" 137 "exit status"
+mv "$PROJECT_ROOT.new" "$PROJECT_ROOT.new-moved"; mkdir "$PROJECT_ROOT.new"; echo keep > "$PROJECT_ROOT.new/keep"
+CASE="another directory at .new: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "is not the directory this script made"
+eq "$(cat "$PROJECT_ROOT.new/keep" 2>&1)" keep "the other directory is left as it is"
+same_as_before "$PROJECT_ROOT" "the live checkout"
+eq "$(rec_step)" building "the record is kept"
+
+# The record's directory must be root's alone: a symlink, or mode 0755, is
+# refused before anything is written.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+mkdir -p \"\$CASE_DIR/state\" \"\$CASE_DIR/elsewhere\"; chmod 700 \"\$CASE_DIR/elsewhere\"
+ln -s \"\$CASE_DIR/elsewhere\" \"\$CASE_DIR/state/etc-dtk\"
+$CROSS_SNAP" run_case "the record's directory is a symlink" --yes
+eq "$RC" 1 "exit status"
+has "must be a directory (not a symlink)"
+eq "$(ls -A "$CASE_DIR/elsewhere")" "" "nothing is written where the symlink points"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+mkdir -p \"\$CASE_DIR/state/etc-dtk\"; chmod 755 \"\$CASE_DIR/state/etc-dtk\"
+$CROSS_SNAP" run_case "the record's directory is 0755" --yes
+eq "$RC" 1 "exit status"
+has "with mode 0700"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# Configuration outside the closed list is refused, by name.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+git config include.path unit-auth.conf
+git config url.https://mirror.invalid/.insteadOf https://
+git config core.sshCommand 'ssh -i /home/pi/dtk/.git/unit-key'
+$CROSS_SNAP" run_case "crossing with configuration it does not carry" --yes
+eq "$RC" 1 "exit status"
+has "sets keys the crossing does not carry over"
+has "include.path"
+has "url.https://mirror.invalid/.insteadof"
+has "core.sshcommand"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# The start guard: set at the exchange step (a stop there leaves it set),
+# not before (a stop at the copy leaves it unset); when the exchange had not
+# happened the next run's discard clears it. No crossing stops the service.
+DTK_UPDATE_KILL_AT=cross-copied FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "the flag is not set before the exchange step" --yes
+eq "$RC" 137 "exit status"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag is set"; else ok "the flag is not set"; fi
+unlogged "systemctl stop"
+
+DTK_UPDATE_KILL_AT=cross-synced FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "the flag is set at the exchange step" --yes
+eq "$RC" 137 "exit status"
+eq "$(rec_step)" exchanging "the record says exchanging"
+eq "$(sed -n 's/^flag //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" crossing "the record says the crossing set the flag"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the flag is set"; else fail "the flag is not set"; fi
+if [ -f "$DTK_TEST_STATE/systemd/dtk.service.d/unresolved.conf" ]; then ok "the start condition is installed"; else fail "the start condition is not installed"; fi
+logged "stop at step copying"
+g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
+CASE="the flag is set at the exchange step: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status (then the fetch fails)"
+has "The exchange had not happened"
+hasnt "exists without its record"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag is still set"; else ok "the flag the crossing set is cleared"; fi
+no_record
+no_new
+head_is "$SHA_A" A
+
+# Identities are the filesystem's UUID and the inode number: the record holds
+# them; a next run on the same filesystem (same UUID, whatever its device
+# number) finishes the crossing; one on a filesystem with another UUID is not
+# recognised, and nothing is moved.
+DTK_UPDATE_KILL_AT=cross-exchanged FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "identity is the filesystem UUID and the inode" --yes
+eq "$RC" 137 "exit status"
+case "$(sed -n 's/^rootid //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" in
+    test-uuid:[0-9]*) ok "the record names the root by UUID and inode" ;;
+    *) fail "the record's root identity is not UUID:inode" ;;
+esac
+CASE="identity is the filesystem UUID and the inode: another UUID"
+FAKE_FSUUID=other-uuid run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "Nothing"
+eq "$(rec_step)" exchanging "the record is kept"
+eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_A" ".new still holds the previous checkout"
+CASE="identity is the filesystem UUID and the inode: the same UUID"
+FAKE_HEALTHY_VERSIONS="A B C" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+has "The crossing to the merged layout is complete"
+crossed_ok
+
+# A submodule whose repository is not under the checkout's .git/modules (here
+# beside the checkout, with a worktree that names the checkout's folder):
+# refused, naming the gitfile.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+cp -R .git/modules/backend ../backend-repo
+printf 'gitdir: ../../backend-repo\n' > backend/.git
+git config --file ../backend-repo/config core.worktree ../dtk/backend
+$CROSS_SNAP" run_case "crossing with a submodule repository outside the checkout" --yes
+eq "$RC" 1 "exit status"
+has "backend/.git names a repository that is not"
+has ".git/modules/backend: it would not move with"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# The service is stopped only immediately before the exchange step (after
+# the copy), so that the running backend cannot import the new code; a stop
+# that fails means no exchange.
+FAKE_UPSTREAM=merged FAKE_STOP_FAIL=1 FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing whose stop fails" --yes
+eq "$RC" 1 "exit status"
+has "The service did not stop"
+logged "systemctl stop dtk"
+active
+started "A "
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "the flag is untouched"; fi
+
+FAKE_UPSTREAM=merged FAKE_PGREP_STUCK=1 FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing whose backend survives the stop" --yes
+eq "$RC" 1 "exit status"
+has "The service did not stop"
+has "Starting the service again, on the previous version"
+started "A A "
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# SIGTERM at each step from the stop on. Before the exchange: the new
+# checkout discarded, the service started again, the root the previous
+# checkout. From the exchange on: the crossing finished to crossed, nothing
+# restored, the service left down.
+for point in cross-stopped cross-synced cross-exchanged cross-renamed cross-crossed; do
+    DTK_UPDATE_KILL_AT="term:$point" FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "SIGTERM at $point" --yes
+    eq "$RC" 143 "exit status"
+    hasnt "UPDATE FAILED"
+    hasnt "Putting back what it"
+    case "$point" in
+        cross-stopped|cross-synced)
+            head_is "$SHA_A" A
+            same_as_before "$PROJECT_ROOT" "the checkout"
+            started "A A "
+            active
+            if [ "$point" = cross-stopped ]; then
+                # The record at copying and its .new are the next run's to remove.
+                eq "$(rec_step)" copying "the record says copying"
+            else
+                no_new
+                no_record
+            fi
+            if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag is set"; else ok "no flag"; fi ;;
+        *)
+            head_is "$SHA_C" "C (crossed)"
+            eq "$(rec_step)" crossed "the record says crossed"
+            has "nothing is restored"
+            started "A "
+            inactive
+            eq "$(git --git-dir="$PROJECT_ROOT.pre-merge/.git" rev-parse HEAD 2>&1)" "$SHA_A" ".pre-merge holds the previous checkout"
+            if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then ok "the flag is set"; else fail "no flag"; fi ;;
+    esac
+done
+
+# A path that appears while the new checkout is being built (here during the
+# clone): the second listing refuses it, and the new checkout is discarded
+# before the service is stopped.
+FAKE_UPSTREAM=merged FAKE_ON_CLONE='echo late > "$PROJECT_ROOT/backend/late-export.txt"' FAKE_UNIT_SETUP="$CROSS_EXTRAS" \
+    run_case "a file appears during the crossing" --yes
+eq "$RC" 1 "exit status"
+has "appeared in the checkout while the new"
+has "      backend/late-export.txt"
+unlogged "systemctl stop"
+active
+no_new
+no_record
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "the flag is untouched"; fi
+
+# git failing to list a submodule's untracked files: refused, not read as
+# an empty list.
+FAKE_UPSTREAM=merged FAKE_FAIL_LSFILES=backend FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a submodule's listing fails" --yes
+eq "$RC" 1 "exit status"
+has "git could not list the checkout's untracked and ignored files"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# A stop after the crossing stopped the service and before the exchange:
+# the record says so, and the next run's discard starts the service again
+# (here a next run whose fetch then fails).
+DTK_UPDATE_KILL_AT=cross-stopped FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "killed after the stop, then a next run" --yes
+eq "$RC" 137 "exit status"
+inactive
+eq "$(sed -n 's/^service //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" stopped "the record says the crossing stopped the service"
+g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
+CASE="killed after the stop, then a next run: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status (then the fetch fails)"
+has "Starting the service again, on the previous version"
+has "Could not reach the remote"
+active
+started "A A "
+no_record
+no_new
+head_is "$SHA_A" A
+
+# The service cannot be started again after such a discard: the record is
+# kept at discarded (.new gone, flag clear) and the run fails; the next run
+# tries again and removes the record once the service runs.
+DTK_UPDATE_KILL_AT=cross-stopped FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a restart that fails after a discard" --yes
+eq "$RC" 137 "exit status"
+g -C "$PROJECT_ROOT" remote set-url origin "$WORK/nonexistent"
+CASE="a restart that fails after a discard: the next run"
+FAKE_START_FAIL=1 run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "could not be started again"
+has "sudo systemctl start dtk"
+eq "$(rec_step)" discarded "the record is kept at discarded"
+eq "$(sed -n 's/^service //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" stopped "it still says the crossing stopped the service"
+no_new
+inactive
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag is set"; else ok "no flag"; fi
+CASE="a restart that fails after a discard: the run after"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status (then the fetch fails)"
+has "could not start the"
+has "The service is running again, and the record is removed"
+has "Could not reach the remote"
+active
+no_record
+head_is "$SHA_A" A
+
+# A path the backend creates while .env and backend/.pixi are copied (here
+# as the service stops): the third check, with the service stopped, refuses
+# it; the new checkout is discarded and the service started again.
+FAKE_UPSTREAM=merged FAKE_ON_STOP='echo late > "$PROJECT_ROOT/backend/export-during-copy.json"' FAKE_UNIT_SETUP="$CROSS_EXTRAS" \
+    run_case "a file appears during the copy" --yes
+eq "$RC" 1 "exit status"
+has "appeared in the checkout while .env"
+has "      backend/export-during-copy.json"
+started "A A "
+active
+no_new
+no_record
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "the flag is untouched"; fi
+
+# With the flag set, a crossing record that is a fifo, or a symlink: refused
+# at the start, without reading it (no hang).
+for kind in fifo symlink; do
+    run_case "a $kind at the crossing record" --yes
+    mkdir -p "$DTK_TEST_STATE/etc-dtk"; chmod 700 "$DTK_TEST_STATE/etc-dtk"
+    : > "$DTK_TEST_STATE/etc-dtk/unresolved-deployment"
+    if [ "$kind" = fifo ]; then mkfifo "$DTK_TEST_STATE/etc-dtk/crossing"
+    else mkfifo "$CASE_DIR/elsewhere"; ln -s "$CASE_DIR/elsewhere" "$DTK_TEST_STATE/etc-dtk/crossing"; fi
+    CASE="a $kind at the crossing record: update.sh refuses"
+    # A watchdog: a reader of the fifo is let go after 20 seconds.
+    fifo="$DTK_TEST_STATE/etc-dtk/crossing"; [ "$kind" = fifo ] || fifo="$CASE_DIR/elsewhere"
+    started_at=$(date +%s)
+    perl -e 'sleep 20; alarm 5; open(my $f, ">", $ARGV[0]);' "$fifo" & watchdog=$!
+    run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    if [ $(( $(date +%s) - started_at )) -lt 15 ]; then ok "no wait on the record"; else fail "the run waited on the record"; fi
+    eq "$RC" 1 "exit status"
+    has "is not a crossing"
+    has "record this script can read"
+done
+
+# Another directory at the recorded .new with the same inode number (the old
+# one removed, the number used again): its inode generation differs, so it
+# is not this procedure's, and is left alone.
+DTK_UPDATE_KILL_AT=cross-built FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "an inode number used again at .new" --yes
+eq "$RC" 137 "exit status"
+case "$(sed -n 's/^newid //p' "$DTK_TEST_STATE/$CROSS_REC_REL")" in
+    test-uuid:[0-9]*:1) ok "the record names .new by UUID, inode and generation" ;;
+    *) fail "the record's .new identity is not UUID:inode:generation" ;;
+esac
+CASE="an inode number used again at .new: the next run"
+FAKE_GENERATIONS="$(cd "$CASE_DIR" && pwd -P)/dtk.new=2" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "is not the directory this script made"
+eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_C" ".new is left as it is"
+eq "$(rec_step)" building "the record is kept"
+
+# A .gitmodules entry ahead of the real one that names the backend's
+# repository by a path out of .git/modules ("../../../backend.git"), with
+# that repository beside the checkout: refused.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+cp -R .git/modules/backend ../backend.git
+printf 'gitdir: ../../backend.git\n' > backend/.git
+git config --file ../backend.git/config core.worktree ../dtk/backend
+{ printf '[submodule \"../../../backend.git\"]\n\tpath = backend\n\turl = x\n'; cat .gitmodules; } > gm.tmp && mv gm.tmp .gitmodules
+$CROSS_SNAP" run_case "a .gitmodules name that leaves .git/modules" --yes
+eq "$RC" 1 "exit status"
+has "2 entries in .gitmodules claim the path backend"
+no_new
+no_record
+
+# The identity of .new cannot be read right after its mkdir: the crossing
+# stops there, before the stop of the service, with .new removed and no
+# record left (none past building).
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" FAKE_GEN_FAIL="$WORK/cases/the_identity_of_.new_cannot_be_read/dtk.new" \
+    run_case "the identity of .new cannot be read" --yes
+eq "$RC" 1 "exit status"
+has "could not be read, so the crossing stops"
+unlogged "systemctl stop"
+active
+no_new
+no_record
+same_as_before "$PROJECT_ROOT" "the checkout"
+if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "no flag"; fi
+
+# Empty identities never compare equal: an identity that cannot be read, or
+# an empty recorded one, matches nothing.
+CASE="empty identities"
+CASE_DIR="$WORK/cases/empty-identities"; mkdir -p "$CASE_DIR/d"
+{
+    echo 'run_as_repo_owner() { "$@"; }'
+    echo 'CROSS_GEN_READER=fake'
+    for fn in crossing_id crossing_id_wellformed crossing_id_is; do
+        awk -v f="$fn" '$0 ~ "^"f"\\(\\) \\{" { p = 1 } p { print } p && /^}/ { exit }' "$SCRIPTS/update.sh"
+    done
+    echo 'crossing_id_is "$1/d" "" && echo "empty matches a readable directory"'
+    echo 'crossing_id_is "$1/missing" "" && echo "empty matches a missing directory"'
+    echo 'FAKE_GEN_FAIL="$(cd "$1/d" && pwd -P)" crossing_id_is "$1/d" "" && echo "empty matches an unreadable identity"'
+    echo 'id="$(crossing_id "$1/d")" && crossing_id_is "$1/d" "$id" && echo "a full identity matches itself"'
+    echo 'FAKE_GEN_FAIL="$(cd "$1/d" && pwd -P)" crossing_id "$1/d"; echo "unreadable status: $?"'
+} > "$CASE_DIR/ids.sh"
+OUT="$(PATH="$FAKEBIN:$PATH" bash "$CASE_DIR/ids.sh" "$CASE_DIR" 2>&1)"
+hasnt "empty matches"
+has "a full identity matches itself"
+has "unreadable status: 1"
+
+# A record past building whose newid is empty: refused, nothing touched.
+DTK_UPDATE_KILL_AT=cross-copied FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a record with an empty newid" --yes
+eq "$RC" 137 "exit status"
+rec="$DTK_TEST_STATE/$CROSS_REC_REL"
+body="$(sed 's/^newid .*/newid /' "$rec")"; printf '%s\n' "$body" > "$rec"
+CASE="a record with an empty newid: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "a crossing record this script cannot use"
+has "Its rootid or newid is empty or not a UUID:inode:generation"
+eq "$(rec_step)" copying "the record is kept"
+eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_C" ".new is left as it is"
+
+# A copy of the filesystem mounted at the recorded .new (the same UUID and
+# inode numbers, another mount): not this procedure's directory, left alone.
+DTK_UPDATE_KILL_AT=cross-built FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a filesystem mounted at .new" --yes
+eq "$RC" 137 "exit status"
+CASE="a filesystem mounted at .new: the next run"
+FAKE_MOUNTPOINT="$(cd "$CASE_DIR" && pwd -P)/dtk.new" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "is not the directory this script made"
+eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_C" ".new is left as it is"
+eq "$(rec_step)" building "the record is kept"
+same_as_before "$PROJECT_ROOT" "the checkout"
+
+# A submodule's .git/modules/<name> that is a symlink to a repository
+# elsewhere: refused.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+mv .git/modules/backend ../backend.git
+ln -s \"\$(cd .. && pwd -P)/backend.git\" .git/modules/backend
+git config --file ../backend.git/config core.worktree ../dtk/backend
+$CROSS_SNAP" run_case "crossing with a symlinked module repository" --yes
+eq "$RC" 1 "exit status"
+has ".git/modules/backend is not a directory inside"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# Not ext4: refused (the type read is the fake findmnt).
+FAKE_UPSTREAM=merged FAKE_FSTYPE=btrfs FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "crossing on btrfs" --yes
+eq "$RC" 1 "exit status"
+has "is on btrfs, not ext4"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+# A submodule's repository naming its working tree by an absolute path, or
+# by a relative path other than git's: refused.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+git config --file .git/modules/backend/config core.worktree \"\$PWD/backend\"
+$CROSS_SNAP" run_case "crossing with an absolute core.worktree" --yes
+eq "$RC" 1 "exit status"
+has "sets core.worktree to '"
+has "relative path '../../../backend'"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+git config --file .git/modules/frontend/config core.worktree ../../../../dtk/frontend
+$CROSS_SNAP" run_case "crossing with another relative core.worktree" --yes
+eq "$RC" 1 "exit status"
+has "relative path '../../../frontend'"
+no_new
+
+# A stale renaming record with the root at an unexpected HEAD: the whole
+# state is checked first, so nothing is moved.
+DTK_UPDATE_KILL_AT=cross-exchanged FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$CROSS_SNAP" run_case "a stale renaming record" --yes
+eq "$RC" 137 "exit status"
+rec="$DTK_TEST_STATE/$CROSS_REC_REL"
+body="$(sed 's/^step exchanging$/step renaming/' "$rec")"; printf '%s\n' "$body" > "$rec"
+git -C "$PROJECT_ROOT" update-ref refs/heads/dev "$SHA_B"
+CASE="a stale renaming record: the next run"
+run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 1 "exit status"
+has "Nothing"
+has "has been moved"
+eq "$(git --git-dir="$PROJECT_ROOT.new/.git" rev-parse HEAD 2>&1)" "$SHA_A" ".new still holds the previous checkout"
+no_premerge
+eq "$(rec_step)" renaming "the record is kept"
+
+# A healthy unit with local work, as Codex's third round found it destroyed:
+# a deleted tracked file in a submodule and a staged edit in the
+# superproject. No run has crossed, so there is no crossing state: the start
+# changes nothing, and the fetch fails before anything else.
+FAKE_UPSTREAM=merged FAKE_BREAK_ORIGIN=1 FAKE_UNIT_SETUP="rm frontend/app
+echo 'staged edit' >> README; git add README
+$CROSS_SNAP" run_case "local work is not a crossing state" --yes
+eq "$RC" 1 "exit status"
+has "Could not reach the remote"
+hasnt "An earlier update"
+same_as_before "$PROJECT_ROOT" "the checkout, its deletion and its staged edit"
+eq "$(git -C "$PROJECT_ROOT" diff --cached --name-only 2>&1)" README "the edit is still staged"
+if [ -e "$PROJECT_ROOT/frontend/app" ]; then fail "the deleted file is back"; else ok "the deleted file is still deleted"; fi
+no_new
+no_premerge
+no_record
+
+# The same refusal on an update that does not cross: an ignored file at a
+# path the new commit tracks.
+FAKE_UPSTREAM=tracks-ignored FAKE_UNIT_SETUP='mkdir -p _data; echo mine > _data/seed.txt' \
+    run_case "update over an ignored file" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+eq "$(cat "$PROJECT_ROOT/_data/seed.txt" 2>/dev/null)" mine "the ignored file is unchanged"
+has "_data/seed.txt"
+has "code: still on $SHA_A with submodules on its pins"
+hasnt "hold backend"
+unlogged "build frontend"
+
+# Refused before anything is built: a submodule off its pin, and a file git
+# is told not to report.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP='git -C backend checkout -q "$BACKEND_B"' \
+    run_case "crossing refused: a submodule off its pin" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+eq "$(git -C "$PROJECT_ROOT/backend" rev-parse HEAD 2>/dev/null)" "$BACKEND_B" "backend left where it was"
+eq "$(cat "$PROJECT_ROOT/backend/.git" 2>/dev/null)" "$GITFILE_BACKEND" "backend's gitfile untouched"
+has "A submodule is not on the commit HEAD records"
+has "Nothing has been changed"
+no_new
+unlogged "build frontend"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP='git -C frontend update-index --assume-unchanged app; echo edit >> frontend/app' \
+    run_case "crossing refused: an assume-unchanged file" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+if grep -qx edit "$PROJECT_ROOT/frontend/app" 2>/dev/null; then ok "the edit is kept"; else fail "the edit is lost"; fi
+has "assume-unchanged or skip-worktree"
+has "Nothing has been changed"
+no_new
+unlogged "build frontend"
 
 # ── The test-only switch refuses an unknown point ───────────────────────────
 DTK_UPDATE_FAIL_AT=nowhere run_case "unknown failure point" --yes
