@@ -1,7 +1,7 @@
 #!/bin/bash
 # Tests for scripts/dtk-system-helper: argument handling for the verbs that
 # take no arguments (poweroff, reboot, restart-backend), the update-page verbs
-# (update-page-start, update-page-stop) and the usage text.
+# (update-page-start, update-page-stop), set-timezone and the usage text.
 #
 #   bash scripts/tests/dtk-system-helper.test.sh
 #
@@ -23,6 +23,10 @@
 # small Python stand-in for util-linux flock(1) over the real flock(2), so
 # two helper processes exclude each other as they do on a unit. The lock
 # wait is shortened to 1 s in the copies.
+#
+# For set-timezone the copy's zoneinfo root (ZONEINFO_ROOT) is a directory in
+# the work directory, and a timedatectl stub records its arguments, prints a
+# given list for list-timezones, and can make set-timezone fail.
 
 set -u
 
@@ -112,6 +116,22 @@ while True:
         time.sleep(0.02)
 sys.exit(subprocess.call(args) if args else 0)
 STUB
+cat > "$STUBS/timedatectl" <<'STUB'
+#!/bin/sh
+# Records its arguments. `list-timezones` prints $FAKE_TZ_LIST (a file);
+# FAKE_TIMEDATECTL_STATUS=<n> makes `set-timezone` fail with n and a message.
+printf '%s\n' "$*" >> "$TIMEDATECTL_LOG"
+case "$1" in
+    list-timezones) cat "$FAKE_TZ_LIST"; exit "${FAKE_LIST_STATUS:-0}" ;;
+    set-timezone)
+        if [ "${FAKE_TIMEDATECTL_STATUS:-0}" -ne 0 ]; then
+            echo "Failed to set time zone: Access denied" >&2
+            exit "$FAKE_TIMEDATECTL_STATUS"
+        fi
+        exit 0 ;;
+esac
+exit 0
+STUB
 chmod +x "$STUBS"/*
 
 # The update page's fixed paths, inside the work directory.
@@ -120,6 +140,8 @@ T_FLAG="$WORK/etc/dtk/unresolved-deployment"
 T_SRC="$WORK/share/dtk-update-page"
 T_RUN="$WORK/run/dtk-update-page"
 T_LOCK="$WORK/run/dtk-update-page.lock"
+# set-timezone's zoneinfo root.
+T_ZONEINFO="$WORK/zoneinfo"
 mkdir -p "$WORK/run" "$WORK/etc/dtk" "$T_SRC"
 cp "$(dirname "$HERE")/update-page/index.html" "$(dirname "$HERE")/update-page/serve.py" "$T_SRC/"
 
@@ -133,6 +155,7 @@ make_copy() {   # make_copy <dest> <python3 path> <marker owner uid>
         -e "s#^readonly UPDATE_PAGE_PYTHON=.*#readonly UPDATE_PAGE_PYTHON=\"$2\"#" \
         -e "s#^readonly UPDATE_PAGE_LOCK=.*#readonly UPDATE_PAGE_LOCK=\"$T_LOCK\"#" \
         -e "s#^readonly UPDATE_PAGE_LOCK_WAIT=.*#readonly UPDATE_PAGE_LOCK_WAIT=1#" \
+        -e "s#^readonly ZONEINFO_ROOT=.*#readonly ZONEINFO_ROOT=\"$T_ZONEINFO\"#" \
         "$HELPER" > "$1"
     chmod +x "$1"
 }
@@ -164,12 +187,21 @@ done
 if grep -q "^readonly UPDATE_PAGE_MARKER_UID=\"$ME\"\$" "$COPY"; then ok; else
     setup_bad "the helper has no line 'readonly UPDATE_PAGE_MARKER_UID=...' to redirect"
 fi
+# The set-timezone cases run only when the zoneinfo root was redirected, so
+# that a missed line never has the cases read the real /usr/share/zoneinfo.
+TZ_CASES=1
+if grep -q "^readonly ZONEINFO_ROOT=\"$WORK" "$COPY"; then ok; else
+    FAIL=$((FAIL + 1)); TZ_CASES=0
+    echo "FAIL [setup] the helper has no line 'readonly ZONEINFO_ROOT=...' to redirect"
+fi
 if grep -q "^readonly UPDATE_PAGE_LOCK_WAIT=1\$" "$COPY"; then ok; else
     setup_bad "the helper has no line 'readonly UPDATE_PAGE_LOCK_WAIT=...' to shorten"
 fi
 
 SYSTEMCTL_LOG="$WORK/systemctl.log"
 SYSTEMD_RUN_LOG="$WORK/systemd-run.log"
+TIMEDATECTL_LOG="$WORK/timedatectl.log"
+FAKE_TZ_LIST="$WORK/tz-list"
 FAKE_STATE_DIR="$WORK/states"
 mkdir -p "$FAKE_STATE_DIR"
 OUT=""
@@ -179,8 +211,9 @@ run() {   # run [VAR=value ...] -- [helper args...]
     local -a envs=()
     while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
     [ "${1:-}" = "--" ] && shift
-    rm -f "$SYSTEMCTL_LOG" "$SYSTEMD_RUN_LOG"
+    rm -f "$SYSTEMCTL_LOG" "$SYSTEMD_RUN_LOG" "$TIMEDATECTL_LOG"
     OUT="$(env -i SYSTEMCTL_LOG="$SYSTEMCTL_LOG" SYSTEMD_RUN_LOG="$SYSTEMD_RUN_LOG" FAKE_STATE_DIR="$FAKE_STATE_DIR" \
+        TIMEDATECTL_LOG="$TIMEDATECTL_LOG" FAKE_TZ_LIST="$FAKE_TZ_LIST" \
         ${envs[@]+"${envs[@]}"} /bin/bash "$RUN_COPY" "$@" 2>&1)"
     STATUS=$?
 }
@@ -511,6 +544,117 @@ case_ "--help lists the update-page verbs"
 run -- --help
 expect_out "update-page-start"
 expect_out "update-page-stop"
+
+
+# ── set-timezone ────────────────────────────────────────────────────────────
+# A fake zoneinfo root: two zones that timedatectl lists, a file it does not
+# list, a directory, and a symlink that leaves the root. A symlink inside the
+# root (as Debian's zoneinfo has) is accepted.
+mkdir -p "$T_ZONEINFO/America" "$T_ZONEINFO/Etc" "$WORK/outside"
+: > "$T_ZONEINFO/America/Bogota"
+: > "$T_ZONEINFO/Etc/UTC"
+: > "$T_ZONEINFO/Unlisted"
+# A zone file whose name is only a substring of a listed zone (America/Bogota).
+: > "$T_ZONEINFO/Bogota"
+: > "$WORK/outside/zone"
+ln -s "$WORK/outside/zone" "$T_ZONEINFO/America/Escape"
+ln -s "$T_ZONEINFO/Etc/UTC" "$T_ZONEINFO/UTC"
+printf '%s\n' America/Bogota America/Escape Etc/UTC UTC America > "$FAKE_TZ_LIST"
+expect_tz_calls() {   # expect_tz_calls <exact timedatectl argument lines, or empty for none>
+    local got=""
+    [ -f "$TIMEDATECTL_LOG" ] && got="$(cat "$TIMEDATECTL_LOG")"
+    if [ "$got" = "$1" ]; then ok; else bad "timedatectl called with '$got', wanted '$1'"; fi
+}
+expect_no_set() {
+    if grep -q '^set-timezone' "$TIMEDATECTL_LOG" 2>/dev/null; then
+        bad "timedatectl set-timezone was called: $(cat "$TIMEDATECTL_LOG")"
+    else ok; fi
+}
+
+if [ "$TZ_CASES" -eq 1 ]; then
+
+case_ "set-timezone sets a listed zone"
+run -- set-timezone America/Bogota
+expect_status 0
+expect_tz_calls "list-timezones
+set-timezone America/Bogota"
+
+case_ "set-timezone accepts a zone that is a symlink inside the root"
+run -- set-timezone UTC
+expect_status 0
+expect_tz_calls "list-timezones
+set-timezone UTC"
+
+case_ "set-timezone with no argument is refused"
+run -- set-timezone
+expect_status 1
+expect_out "usage: set-timezone <zone>"
+expect_tz_calls ""
+
+case_ "set-timezone with two arguments is refused"
+run -- set-timezone America/Bogota Etc/UTC
+expect_status 1
+expect_out "usage: set-timezone <zone>"
+expect_tz_calls ""
+
+for z in 'America/Bogota;id' 'America Bogota' '/America/Bogota' 'America/' 'America//Bogota' \
+         'Am$erica' '' "$(printf 'America/Bogota\nEtc/UTC')"; do
+    case_ "set-timezone refuses bad characters: '$z'"
+    run -- set-timezone "$z"
+    expect_status 1
+    expect_no_set
+done
+
+for z in '..' '../etc/passwd' 'America/../Etc/UTC' 'America/..'; do
+    case_ "set-timezone refuses a .. component: '$z'"
+    run -- set-timezone "$z"
+    expect_status 1
+    expect_no_set
+done
+
+case_ "set-timezone refuses a symlink that leaves the zoneinfo root"
+run -- set-timezone America/Escape
+expect_status 1
+expect_out "America/Escape"
+expect_no_set
+
+case_ "set-timezone refuses a directory"
+run -- set-timezone America
+expect_status 1
+expect_no_set
+
+case_ "set-timezone refuses a name that has no file"
+run -- set-timezone Mars/Olympus
+expect_status 1
+expect_no_set
+
+case_ "set-timezone refuses a zone that timedatectl does not list"
+run -- set-timezone Unlisted
+expect_status 1
+expect_out "Unlisted"
+expect_no_set
+
+case_ "set-timezone matches the list exactly, not as a substring"
+run -- set-timezone Bogota
+expect_status 1
+expect_out "Bogota"
+expect_no_set
+
+case_ "set-timezone refuses when list-timezones fails"
+run FAKE_LIST_STATUS=1 -- set-timezone America/Bogota
+expect_status 1
+expect_no_set
+
+case_ "set-timezone passes on timedatectl's failure and its message"
+run FAKE_TIMEDATECTL_STATUS=4 -- set-timezone America/Bogota
+expect_status 4
+expect_out "Failed to set time zone"
+
+fi   # TZ_CASES
+
+case_ "--help lists set-timezone"
+run -- --help
+expect_out "set-timezone <zone>"
 
 # ── Who installs the helper ────────────────────────────────────────────────
 # setup.sh and install-service.sh install it on a new unit. update.sh
