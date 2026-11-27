@@ -52,12 +52,26 @@
 # which leaves port 80 empty until dtk starts: what pi could already do by
 # stopping dtk during an update. Neither verb touches dtk.
 #
+# set-timezone <zone> sets the unit's time zone. Its one argument reaches
+# timedatectl(1) as root, so it is accepted only as the name of a zone the
+# system already has: it must match ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$ (no
+# leading /, no empty component, no whitespace or shell metacharacters),
+# contain no `..` component, resolve (realpath) to a regular file inside
+# /usr/share/zoneinfo, and be a line of `timedatectl list-timezones`. The
+# pattern and the `..` check close path traversal; the realpath check closes a
+# symlink that leads out of the zoneinfo tree, and refuses a directory; the
+# list refuses any file in the tree that is not a zone, and any name that
+# timedatectl would read as an option. Anything else exits 1 with nothing
+# changed. pi may call the verb at any time; the most it can do is choose one
+# of the system's zones. The verb's status is timedatectl set-timezone's.
+#
 # Version: 0.3.0
 
 set -euf
 
 # Fixed, minimal PATH so a poisoned caller environment cannot redirect the
-# tools we call (mount, umount, lsblk, mkdir, chown, realpath, systemctl).
+# tools we call (mount, umount, lsblk, mkdir, chown, realpath, systemctl,
+# timedatectl).
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
@@ -77,6 +91,8 @@ readonly UPDATE_PAGE_UNIT="dtk-update-page"
 # lock, waiting this many seconds at most for it.
 readonly UPDATE_PAGE_LOCK="/run/dtk-update-page.lock"
 readonly UPDATE_PAGE_LOCK_WAIT=20
+# set-timezone accepts only a zone that is a regular file under this root.
+readonly ZONEINFO_ROOT="/usr/share/zoneinfo"
 readonly DEVICE_RE='^/dev/(sd[a-z][0-9]+|mmcblk[0-9]+p[0-9]+|nvme[0-9]+n[0-9]+p[0-9]+)$'
 
 die() {
@@ -217,6 +233,30 @@ cmd_reboot() {
 cmd_restart_backend() {
     [ "$#" -eq 0 ] || die "usage: restart-backend"
     systemctl --no-block restart dtk
+}
+
+# Set the system time zone to <zone>, a zone the system already has (see the
+# header). Refusals exit 1 before timedatectl set-timezone runs.
+cmd_set_timezone() {
+    [ "$#" -eq 1 ] || die "usage: set-timezone <zone>"
+    local zone="$1" root canon
+    reject_newlines "$zone"
+    printf '%s' "$zone" | grep -Eq '^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$' \
+        || die "invalid zone name: $zone"
+    case "/$zone/" in
+        */../*) die "invalid zone name: $zone" ;;
+    esac
+    root="$(realpath -- "$ZONEINFO_ROOT" 2>/dev/null)" || die "cannot resolve $ZONEINFO_ROOT"
+    canon="$(realpath -- "$ZONEINFO_ROOT/$zone" 2>/dev/null)" || die "no such zone: $zone"
+    case "$canon" in
+        "$root"/*) : ;;
+        *) die "zone resolves outside $ZONEINFO_ROOT: $zone" ;;
+    esac
+    [ -f "$canon" ] || die "not a zone file: $zone"
+    local zones
+    zones="$(timedatectl list-timezones 2>/dev/null)" || die "cannot list time zones"
+    printf '%s\n' "$zones" | grep -qxF -- "$zone" || die "not a listed time zone: $zone"
+    timedatectl set-timezone "$zone"
 }
 
 page_log() {
@@ -389,6 +429,9 @@ Verbs:
                                 otherwise nothing. Takes no arguments; exits 0
   update-page-stop              stop the update page and remove its runtime
                                 copy. Takes no arguments; exits 0
+  set-timezone <zone>           set the system time zone to <zone>, which must
+                                be a zone timedatectl lists and a file under
+                                /usr/share/zoneinfo
 Exit status: 0 on success; 1 on a refused or malformed request; otherwise
 the status of the command the verb ran.
 EOF
@@ -407,6 +450,7 @@ main() {
         restart-backend)  cmd_restart_backend "$@" ;;
         update-page-start) cmd_update_page_start "$@" ;;
         update-page-stop)  cmd_update_page_stop "$@" ;;
+        set-timezone)     cmd_set_timezone "$@" ;;
         -h|--help)        usage ;;
         *)                die "unknown verb: $verb" ;;
     esac
