@@ -38,4 +38,9 @@ PIXI="${HOME}/.pixi/bin/pixi"
 if [ ! -x "$PIXI" ]; then
     PIXI="$(command -v pixi 2>/dev/null || echo pixi)"
 fi
+# Python's faulthandler prints a stack trace to stderr (the journal) when the
+# backend dies on a fatal signal (NEH-429). dtk.service sets the same variable,
+# but start.sh comes with every update while the installed unit file does not,
+# so a unit that updates has the trace at once.
+export PYTHONFAULTHANDLER=1
 cd "$PROJECT_ROOT/backend" && "$PIXI" run start
