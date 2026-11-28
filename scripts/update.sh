@@ -756,10 +756,13 @@ tracked_files_modified() {
 # Python's caches (__pycache__ directories, *.pyc files) left out anywhere:
 # Python writes them again. Nothing writes these two while the unit runs (the
 # backend reads them), so no writer has to be stopped and the service keeps
-# running during the copy. Every other untracked or ignored path in the
-# checkout or its submodules refuses the crossing, named, before anything is
-# written, and again when the copy lists them a second time: data belongs
-# outside the checkout (/var/lib/dtk by default).
+# running during the copy. One more untracked path is accepted and not
+# carried: wiki, the retired wiki submodule's checkout, which stays as it is
+# in the previous checkout (crossing_retired_wiki says when, and why that is
+# safe). Every other untracked or ignored path in the checkout or its
+# submodules refuses the crossing, named, before anything is written, and
+# again each time the copy lists them: data belongs outside the checkout
+# (/var/lib/dtk by default).
 #
 # Immediately before the exchange step the crossing stops the service, only
 # so that the running backend cannot import code from the new tree once it
@@ -1367,15 +1370,112 @@ def carried(rel):
     return any(rel == c or rel.startswith(c + b"/") for c in CARRIED)
 '
 
+# crossing_retired_wiki <root>: 0 when <root>/wiki is, by its identity, the
+# checkout of the retired wiki submodule; else 1, with the reason on stdout.
+# The identity, all of it:
+#   - wiki is a real folder (lstat: not a symlink);
+#   - wiki/.git is a regular file whose content is exactly
+#     `gitdir: ../.git/modules/wiki`, with or without a final newline;
+#   - <root>/.git, <root>/.git/modules and <root>/.git/modules/wiki are real
+#     folders;
+#   - HEAD's .gitmodules, read from the superproject's objects, names no
+#     submodule wiki and none at the path wiki: the submodule is retired.
+# It runs no git command in the wiki's repository, reads nothing inside
+# wiki/ but the gitfile, and writes nothing.
+#
+# Identity is enough because nothing is deleted. The folder is not carried
+# and not examined: it stays in the previous checkout, which is moved whole
+# to <root>.pre-merge, and the folder and the repository it names (both
+# inside that checkout, by relative paths) go together, as they are, with
+# any change, untracked or ignored file in them. A discard removes only
+# <root>.new, and <root>.pre-merge is the way back, so a rollback returns
+# wiki/ unchanged. Whether the folder holds anything its repository lacks
+# matters only when <root>.pre-merge is deleted, so that check belongs to
+# the release that deletes it. Like every crossing check, this one does not
+# defend against a writer that replaces a path between the check and the
+# exchange (the threat model over the crossing): the update holds its lock,
+# and the last listing runs with the service stopped.
+crossing_retired_wiki() {
+    local root="$1" out rc
+    if ! out="$(python3 -c 'import os, stat, sys
+root = sys.argv[1]
+def mode(rel):
+    try:
+        return os.lstat(os.path.join(root, rel)).st_mode
+    except FileNotFoundError:
+        return None
+m = mode("wiki")
+if m is None or not stat.S_ISDIR(m):
+    sys.exit("wiki/ is not a folder (it is a symlink or another kind of file)")
+m = mode("wiki/.git")
+if m is None or not stat.S_ISREG(m):
+    sys.exit("wiki/.git is not a regular file (it is a symlink, a folder, or missing)")
+with open(os.path.join(root, "wiki", ".git"), "rb") as f:
+    body = f.read(64)
+if body not in (b"gitdir: ../.git/modules/wiki", b"gitdir: ../.git/modules/wiki\n"):
+    sys.exit("wiki/.git does not say exactly gitdir: ../.git/modules/wiki")
+for rel in (".git", ".git/modules", ".git/modules/wiki"):
+    m = mode(rel)
+    if m is None or not stat.S_ISDIR(m):
+        sys.exit("%s is not a folder (it is a symlink, or missing)" % rel)' "$root" 2>&1)"; then
+        echo "$out"
+        return 1
+    fi
+    if ! out="$(run_as_repo_owner LC_ALL=C git -C "$root" ls-tree HEAD -- .gitmodules 2>&1)"; then
+        echo "git could not read HEAD's tree: $out"
+        return 1
+    fi
+    if [ -n "$out" ]; then
+        rc=0
+        out="$(run_as_repo_owner LC_ALL=C git -C "$root" config --blob HEAD:.gitmodules --get-regexp '^submodule\.' 2>&1)" || rc=$?
+        if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+            echo "git could not read HEAD's .gitmodules: $out"
+            return 1
+        fi
+        if [ "$rc" -eq 0 ] && ! printf '%s\n' "$out" | python3 -c 'import sys
+for line in sys.stdin.read().splitlines():
+    key, _, value = line.partition(" ")
+    name, _, var = key[len("submodule."):].rpartition(".")
+    if name == "wiki" or (var == "path" and value == "wiki"):
+        sys.exit(1)'; then
+            echo "HEAD's .gitmodules still lists wiki, so the submodule is not retired"
+            return 1
+        fi
+    fi
+    return 0
+}
+
 # crossing_others_check <root>: read a NUL-separated list of the checkout's
 # untracked and ignored paths on stdin and print every one, or every path
-# under one that is a directory, that is neither carried nor a cache; 1 when
-# there is one. Read-only.
+# under one that is a directory, that is neither carried nor a cache nor
+# the retired wiki's checkout; 1 when there is one. Read-only.
+#
+# The untracked and ignored paths the crossing accepts are, completely:
+#   .env, backend/.pixi   carried: copied into the new checkout (the
+#                         closed list over the crossing);
+#   Python's caches       left out: Python writes them again;
+#   wiki                  the retired wiki submodule's checkout, only as the
+#                         entry `wiki` at the root (the whole folder
+#                         untracked) and only when crossing_retired_wiki
+#                         recognises it by its identity. It is not carried
+#                         and not examined: it stays, as it is, in the
+#                         previous checkout, which is moved whole to
+#                         <root>.pre-merge and is not deleted (see
+#                         crossing_retired_wiki for why that is enough).
+# Anything else refuses, named; a wiki/ crossing_retired_wiki does not
+# accept is listed as any other path, with its reason.
 crossing_others_check() {
-    python3 -c "$CROSS_PY_CARRIED"'
+    local wiki_ok=0 wiki_why=""
+    if [ -e "$1/wiki" ] || [ -L "$1/wiki" ]; then
+        wiki_why="$(crossing_retired_wiki "$1" </dev/null)" && wiki_ok=1
+    fi
+    CROSS_WIKI_OK="$wiki_ok" CROSS_WIKI_WHY="$wiki_why" python3 -c "$CROSS_PY_CARRIED"'
 import os, stat, sys
 root = os.fsencode(sys.argv[1])
+wiki_ok = os.environ["CROSS_WIKI_OK"] == "1"
+wiki_why = os.fsencode(os.environ["CROSS_WIKI_WHY"])
 outside = []
+wiki_refused = False
 def walk(rel):
     if carried(rel) or is_cache(rel):
         return
@@ -1390,11 +1490,19 @@ def walk(rel):
     else:
         outside.append(rel)
 for e in sys.stdin.buffer.read().split(b"\0"):
-    if e:
-        walk(e.rstrip(b"/"))
+    if not e:
+        continue
+    e = e.rstrip(b"/")
+    if e == b"wiki":
+        if wiki_ok:
+            continue
+        wiki_refused = True
+    walk(e)
 for o in outside:
     sys.stdout.buffer.write(o + b"\n")
-sys.exit(1 if outside else 0)
+if wiki_refused:
+    sys.stdout.buffer.write(b"wiki/ is not the retired wiki\x27s checkout: " + wiki_why + b"\n")
+sys.exit(1 if outside or wiki_refused else 0)
 ' "$1"
 }
 
@@ -1596,7 +1704,7 @@ if os.environ.get("KILL_AT") == "cross-exchange-helper":
 # was; a stop leaves the record for the next run. After the exchange the
 # identities and HEADs decide (crossing_after_exchange).
 crossing_cross() {
-    local need avail sub rc list out gf w ref fstype gd wt want name modules
+    local need avail sub rc list out gf w ref fstype gd wt want name modules wiki
     local root root_id new pre old target
     # <root> is used by its physical path, and must itself be a directory:
     # a symlink there would be exchanged as a symlink.
@@ -1810,6 +1918,10 @@ sys.exit(0 if os.path.commonpath([t, m]) == m and t == os.path.realpath(os.path.
         return 1
     fi
     out="$(crossing_others_check "$root" < "$list" 2>&1)"; rc=$?
+    # Whether the listing holds the root entry wiki, which the check, passing,
+    # has accepted as the retired wiki's checkout.
+    wiki=0
+    python3 -c 'import sys; sys.exit(0 if any(e.rstrip(b"/") == b"wiki" for e in open(sys.argv[1], "rb").read().split(b"\0")) else 1)' "$list" && wiki=1
     rm -f "$list"
     if [ "$rc" -ne 0 ]; then
         echo "✗ These untracked or ignored paths are in the checkout, and the crossing"
@@ -1819,6 +1931,9 @@ sys.exit(0 if os.path.commonpath([t, m]) == m and t == os.path.realpath(os.path.
         echo "  been changed. Move these out of $root, or remove them, then run"
         echo "  this again."
         return 1
+    fi
+    if [ "$wiki" -eq 1 ]; then
+        echo "→ The folder wiki/, an old copy of the retired documentation, stays with the previous version at $pre and is not carried to the new one."
     fi
 
     echo "→ Building the new checkout at $new, from the objects already fetched..."

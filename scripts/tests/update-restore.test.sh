@@ -581,6 +581,19 @@ for b in merged-tracks-ignored tracks-ignored merged-pixi-link merged-tracks-env
     git -C "$UP/super" rev-parse -q --verify "$b" >/dev/null || { echo "fixture: no branch $b"; exit 1; }
 done
 
+# W: A with a wiki entry in .gitmodules, as before the wiki submodule was
+# retired (branch wiki-listed); and C's tree on top of W (branch
+# merged-wiki-listed), so that a unit at W can cross.
+MW="$WORK/make-wiki"
+git clone -q "$UP/super" "$MW" 2>/dev/null
+g -C "$MW" checkout -q -b wiki-listed "$SHA_A"
+printf '[submodule "wiki"]\n\tpath = wiki\n\turl = x\n' >> "$MW/.gitmodules"
+g -C "$MW" commit -qam "A with the wiki listed"
+SHA_W="$(git -C "$MW" rev-parse HEAD)"
+SHA_CW="$(git -C "$MW" commit-tree "$SHA_C^{tree}" -p "$SHA_W" -m "C over W")"
+g -C "$MW" push -q origin wiki-listed "$SHA_CW:refs/heads/merged-wiki-listed"
+git -C "$UP/super" rev-parse -q --verify merged-wiki-listed >/dev/null || { echo "fixture: no branch merged-wiki-listed"; exit 1; }
+
 # An alias the global configuration rewrites to the fixture's remote, for a
 # unit whose origin is configured through it.
 printf '[url "%s/"]\n    insteadOf = upstream-alias:\n' "$UP" >> "$GIT_CONFIG_GLOBAL"
@@ -3095,6 +3108,164 @@ has "assume-unchanged or skip-worktree"
 has "Nothing has been changed"
 no_new
 unlogged "build frontend"
+
+# ── The retired wiki's checkout ─────────────────────────────────────────────
+# A unit whose wiki submodule was checked out before the submodule was
+# retired keeps wiki/ untracked: a checkout whose .git is the gitfile
+# `gitdir: ../.git/modules/wiki`. Recognised by that identity alone, it goes
+# with the previous checkout to .pre-merge, as it is, and is not carried;
+# anything else at wiki refuses.
+WIKI_SETUP='git init -q --separate-git-dir="$PWD/.git/modules/wiki" wiki
+printf "gitdir: ../.git/modules/wiki\n" > wiki/.git
+git --git-dir=.git/modules/wiki config core.worktree ../../../wiki
+echo home > wiki/Home.md; printf "*.tmp\n" > wiki/.gitignore
+mkdir wiki/docs; echo page > wiki/docs/Page.md
+printf "#!/bin/sh\n" > wiki/tool.sh; chmod 755 wiki/tool.sh; ln -s Home.md wiki/link
+git -C wiki add -A; git -C wiki commit -qm wiki'
+# wiki_sum <dir>: every path under <dir>, .git included, with its type, mode
+# and content digest (or link target), as one digest.
+wiki_sum() {
+    python3 -c 'import hashlib, os, stat, sys
+root = sys.argv[1]
+if not os.path.isdir(root):
+    sys.exit("no folder " + root)
+out = hashlib.sha256()
+for dp, dns, fns in os.walk(root):
+    dns.sort()
+    for name in sorted(dns + fns):
+        p = os.path.join(dp, name)
+        st = os.lstat(p)
+        line = "%s %o " % (os.path.relpath(p, root), st.st_mode)
+        if stat.S_ISLNK(st.st_mode):
+            line += os.readlink(p)
+        elif stat.S_ISREG(st.st_mode):
+            with open(p, "rb") as f:
+                line += hashlib.sha256(f.read()).hexdigest()
+        out.update(line.encode() + b"\n")
+print(out.hexdigest())' "$1" 2>&1
+}
+WIKI_SUM='wiki_sum "$PWD/wiki" > "$CASE_DIR/wiki-before"'
+wiki_kept() {  # wiki_kept: the crossing left wiki/ out of the new checkout, byte-identical at .pre-merge
+    if [ -e "$PROJECT_ROOT/wiki" ]; then fail "wiki/ is in the new checkout"; else ok "the new checkout has no wiki/"; fi
+    eq "$(wiki_sum "$PROJECT_ROOT.pre-merge/wiki")" "$(cat "$CASE_DIR/wiki-before" 2>&1)" "wiki/ is byte-identical at .pre-merge"
+    has "→ The folder wiki/, an old copy of the retired documentation, stays with the previous version at $(cd "$CASE_DIR" && pwd -P)/dtk.pre-merge and is not carried to the new one."
+}
+wiki_refused() {  # wiki_refused <reason>: refused, naming wiki/ and why, nothing changed
+    eq "$RC" 1 "exit status"
+    head_is "$SHA_A" A
+    has "wiki/ is not the retired wiki's checkout"
+    has "$1"
+    has "Nothing has"
+    hasnt "an old copy of the retired documentation"
+    same_as_before "$PROJECT_ROOT" "the checkout"
+    no_new
+    no_premerge
+    no_record
+    if [ -e "$DTK_TEST_STATE/etc-dtk/unresolved-deployment" ]; then fail "the flag was set"; else ok "the flag is untouched"; fi
+    unlogged "systemctl stop"
+}
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+$WIKI_SUM
+$CROSS_SNAP" run_case "crossing with the retired wiki's checkout" --yes
+eq "$RC" 3 "exit status (crossed, not installed)"
+crossed_ok
+wiki_kept
+eq "$(git -C "$PROJECT_ROOT.pre-merge/wiki" rev-parse --show-toplevel 2>&1)" "$(cd "$PROJECT_ROOT.pre-merge/wiki" 2>/dev/null && pwd -P)" "the previous checkout's wiki/ is still a checkout of its own repository"
+
+# Whatever the checkout holds goes with it: a modified file, an untracked
+# file, an ignored file and a nested .git.
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+echo edit >> wiki/Home.md; echo draft > wiki/Draft.md; echo scratch > wiki/notes.tmp
+mkdir wiki/docs/.git; echo mine > wiki/docs/.git/keep
+$WIKI_SUM
+$CROSS_SNAP" run_case "crossing with a changed retired wiki" --yes
+eq "$RC" 3 "exit status (crossed, not installed)"
+crossed_ok
+wiki_kept
+eq "$(cat "$PROJECT_ROOT.pre-merge/wiki/docs/.git/keep" 2>&1)" mine "the nested .git's file is kept"
+
+# A crossing killed after the exchange, then finished by the next run: the
+# previous checkout keeps wiki/.
+DTK_UPDATE_KILL_AT=cross-exchanged FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+$WIKI_SUM
+$CROSS_SNAP" run_case "crossing with the retired wiki killed after the exchange" --yes
+eq "$RC" 137 "exit status"
+CASE="crossing with the retired wiki killed after the exchange: the next run"
+FAKE_HEALTHY_VERSIONS="A B C" run_again "$PROJECT_ROOT/scripts/update.sh" --yes
+eq "$RC" 3 "exit status (the install is due)"
+crossed_ok
+if [ -e "$PROJECT_ROOT/wiki" ]; then fail "wiki/ is in the new checkout"; else ok "the new checkout has no wiki/"; fi
+eq "$(wiki_sum "$PROJECT_ROOT.pre-merge/wiki")" "$(cat "$CASE_DIR/wiki-before" 2>&1)" "wiki/ is byte-identical at .pre-merge"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+mkdir wiki; echo mine > wiki/Notes.md
+$CROSS_SNAP" run_case "a folder named wiki without a gitfile" --yes
+wiki_refused "wiki/.git is not a regular file"
+has "      wiki/Notes.md"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+mv wiki/.git .wiki-gitfile; ln -s ../.wiki-gitfile wiki/.git
+$CROSS_SNAP" run_case "retired wiki whose .git is a symlink" --yes
+wiki_refused "wiki/.git is not a regular file"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+rm wiki/.git; mv .git/modules/wiki wiki/.git; git --git-dir=wiki/.git config --unset core.worktree
+$CROSS_SNAP" run_case "retired wiki whose .git is a folder" --yes
+wiki_refused "wiki/.git is not a regular file"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+mv .git/modules/wiki ../wiki.git; printf 'gitdir: ../../wiki.git\n' > wiki/.git
+git --git-dir=../wiki.git config core.worktree ../dtk/wiki
+$CROSS_SNAP" run_case "retired wiki whose gitfile points elsewhere" --yes
+wiki_refused "wiki/.git does not say exactly"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+mv .git/modules/wiki ../wiki.git; ln -s \"\$(cd .. && pwd -P)/wiki.git\" .git/modules/wiki
+git --git-dir=../wiki.git config core.worktree \"\$PWD/wiki\"
+$CROSS_SNAP" run_case "retired wiki whose module repository is a symlink" --yes
+wiki_refused ".git/modules/wiki is not a folder"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+mv wiki .wiki-real; ln -s .wiki-real wiki
+$CROSS_SNAP" run_case "retired wiki that is a symlink" --yes
+wiki_refused "wiki/ is not a folder"
+
+FAKE_UPSTREAM=merged-wiki-listed FAKE_UNIT_SETUP="git reset -q --hard $SHA_W
+$CROSS_EXTRAS
+$WIKI_SETUP
+$CROSS_SNAP" run_case "wiki still listed in HEAD's .gitmodules" --yes
+eq "$RC" 1 "exit status"
+eq "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" "$SHA_W" "checkout is on W"
+has "wiki/ is not the retired wiki's checkout"
+has "HEAD's .gitmodules still lists wiki"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_premerge
+no_record
+unlogged "systemctl stop"
+
+FAKE_UPSTREAM=merged FAKE_UNIT_SETUP="$CROSS_EXTRAS
+$WIKI_SETUP
+echo mine > notes.txt
+$CROSS_SNAP" run_case "another root path beside the retired wiki" --yes
+eq "$RC" 1 "exit status"
+head_is "$SHA_A" A
+has "      notes.txt"
+hasnt "      wiki"
+hasnt "is not the retired wiki's checkout"
+hasnt "an old copy of the retired documentation"
+same_as_before "$PROJECT_ROOT" "the checkout"
+no_new
+no_record
 
 # ── The test-only switch refuses an unknown point ───────────────────────────
 DTK_UPDATE_FAIL_AT=nowhere run_case "unknown failure point" --yes
