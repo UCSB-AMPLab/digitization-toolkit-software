@@ -26,6 +26,13 @@ WorkingDirectory=/home/pi/dtk
 # Ensure pixi and docker are on PATH (systemd uses a stripped environment)
 Environment="PATH=/home/pi/.pixi/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
+# Python's faulthandler writes a stack trace of every thread to stderr when the
+# backend dies on a fatal signal (SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL), as
+# a crash in a camera library does. stderr goes to the journal, so the trace
+# is in `journalctl -u dtk` after the restart (NEH-429). The variable passes
+# through `pixi run` to the backend's Python.
+Environment="PYTHONFAULTHANDLER=1"
+
 ExecStart=/home/pi/dtk/scripts/start.sh
 ExecStop=/home/pi/dtk/scripts/stop.sh
 
